@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=d961386e347e -->
+<!-- i18n: source=docs/design/plan.md source-sha256=ac56735fdb66 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -180,7 +180,7 @@ AsyncDriver (protocol)                       AsyncDbConnection (protocol)
    - 앱 시작 시 서버 버전/정보를 async로 조회해 features/ops 캐시에 미리 주입한다.
    - 결과적으로 SQL 생성이 sync 커넥션 객체에서 완전히 분리된다.
    - 일부 Django 컴파일러(aggregate, update)는 `connections[using]`을 다시 조회한다. 이들이 컴파일 전용
-     wrapper에 닿는 방법은 ADR-0008에서 정한다(Proposed, Phase 1 스파이크 후 결정).
+     wrapper에 닿는 방법은 ADR-0008에서 정한다(Proposed, 스파이크는 compile 호출마다 동기적이고 범위가 한정된 `connections[alias]` 교체를 권고).
 2. **I/O와 로직이 섞인 오케스트레이션을 async로 재작성**
    - `Collector.collect` (cascade 삭제 대상 수집 중 쿼리 실행)
    - `get_or_create`, `update_or_create`
@@ -273,7 +273,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 
 - [ ] `as_sql()` + psycopg `AsyncClientCursor`로 `alist` 동작 확인
 - [ ] `ModelIterable` 로직 이식 (converters → `Model.from_db`)
-- [ ] `as_sql()` 도중 sync 커넥션이 열리는 경로 탐지 (`SynchronousOnlyOperation` 발생 지점 기록)
+- [x] `as_sql()` 도중 sync 커넥션이 열리는 경로 탐지 (`SynchronousOnlyOperation` 발생 지점 기록) - 스파이크 결과는 ADR-0008에 있음 (#29; 메인테이너 결정 대기)
 - [ ] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입
 - [ ] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, 현재 strict xfail)
 - [ ] asyncmy로 같은 흐름 재현

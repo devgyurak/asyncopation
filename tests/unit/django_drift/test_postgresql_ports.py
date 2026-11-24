@@ -1,4 +1,8 @@
-"""Drift tests: the ported PostgreSQL connection logic still matches Django's (ADR-0007)."""
+"""Drift: ported PostgreSQL connection logic still behaves like upstream Django (ADR-0007).
+
+These tests import upstream Django directly (through tests/support); the driver ports are not
+importable ledger entries (see docs/django-api-ledger.toml).
+"""
 
 import pytest
 from psycopg import IsolationLevel
@@ -7,11 +11,12 @@ from tests.support.drivers import (
     TzCase,
     compare_conn_kwargs,
     cursor_base_names,
+    drift_settings,
     leftover_option_keys,
-    pool_kwargs_for,
+    our_error,
     quote_pair,
-    timezone_name_for,
     timezone_pair,
+    upstream_error,
 )
 
 FULL_OPTIONS = {
@@ -23,6 +28,13 @@ FULL_OPTIONS = {
     "client_encoding": "latin1",
     "connect_timeout": 7,
 }
+TZ_CASES = [
+    pytest.param(TzCase(True, None, "UTC"), id="use-tz-utc"),
+    pytest.param(TzCase(True, None, "Asia/Seoul"), id="use-tz-settings-seoul"),
+    pytest.param(TzCase(True, "Asia/Seoul", "UTC"), id="use-tz-db-seoul"),
+    pytest.param(TzCase(False, None, "Asia/Seoul"), id="no-tz-seoul"),
+    pytest.param(TzCase(False, None, "UTC"), id="no-tz-utc"),
+]
 
 
 @pytest.mark.parametrize(
@@ -60,20 +72,20 @@ def test_options_django_consumes_are_not_passed_to_the_connection():
     assert leftovers == []
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
-        pytest.param(TzCase(True, None, "UTC"), id="use-tz-utc"),
-        pytest.param(TzCase(True, "Asia/Seoul", "UTC"), id="use-tz-db-seoul"),
-        pytest.param(TzCase(False, None, "Asia/Seoul"), id="no-tz-seoul"),
-        pytest.param(TzCase(False, None, "UTC"), id="no-tz-utc"),
-    ],
-)
+@pytest.mark.parametrize("case", TZ_CASES)
 def test_resolve_timezone_matches_django_wrapper(case):
     # when
     ours, reference = timezone_pair(case)
     # then
     assert ours == reference
+
+
+@pytest.mark.parametrize("case", TZ_CASES)
+def test_connection_params_context_matches_django_for_every_time_zone_case(case):
+    # when
+    comparison = compare_conn_kwargs("mydb", {}, case)
+    # then
+    assert comparison.differences() == {}
 
 
 @pytest.mark.parametrize("name", ["sp_1", '"already"', "with space", "UPPER"])
@@ -91,29 +103,34 @@ def test_stream_cursor_bases_mirror_djangos_server_side_cursor():
     assert ours == reference
 
 
-def test_health_checks_add_a_pool_check_callback():
+@pytest.mark.parametrize(
+    ("name", "options", "call"),
+    [
+        pytest.param("", {}, "get_connection_params", id="empty-name-without-service"),
+        pytest.param("x" * 64, {}, "get_connection_params", id="name-too-long"),
+        pytest.param(
+            "db",
+            {"isolation_level": 99},
+            "get_new_connection",
+            id="invalid-isolation-level",
+        ),
+    ],
+)
+def test_configuration_errors_match_django(name, options, call):
+    # given
+    settings_dict = drift_settings(name, options)
     # when
-    kwargs = pool_kwargs_for({"CONN_HEALTH_CHECKS": True}, None)
+    ours = our_error(settings_dict)
     # then
-    assert callable(kwargs["check"])
+    assert ours is not None
+    assert ours == upstream_error(call, settings_dict)
 
 
-def test_pool_has_no_check_callback_by_default():
+def test_time_zone_with_use_tz_false_is_rejected_like_django():
+    # given
+    settings_dict = drift_settings("db", None, TIME_ZONE="UTC")
     # when
-    kwargs = pool_kwargs_for({"CONN_HEALTH_CHECKS": False}, None)
+    ours = our_error(settings_dict, use_tz=False)
     # then
-    assert "check" not in kwargs
-
-
-def test_large_min_size_raises_max_size_with_it():
-    # when
-    kwargs = pool_kwargs_for({}, {"min_size": 20})
-    # then
-    assert kwargs["max_size"] >= 20
-
-
-def test_empty_time_zone_leaves_no_timezone_name_to_apply():
-    # when
-    name = timezone_name_for(TzCase(False, None, ""))
-    # then
-    assert not name
+    assert ours is not None
+    assert ours == upstream_error("check_settings", settings_dict, use_tz=False)

@@ -148,3 +148,28 @@ async def test_no_cursor_is_open_on_a_fresh_connection(driver):
         cursors = await open_cursors(conn)
     # then
     assert cursors == []
+
+
+async def test_stream_without_server_side_cursors_declares_no_cursor(no_cursor_driver):
+    # given
+    async with no_cursor_driver.connection() as conn:
+        # when
+        seen = await observe_stream(conn, SERIES, None, 4)
+    # then
+    assert seen.cursors_open == []
+
+
+async def test_stream_without_server_side_cursors_yields_the_same_chunks(no_cursor_driver):
+    # given
+    async with no_cursor_driver.connection() as conn:
+        # when
+        chunks = await stream_chunks(conn, SERIES, None, 4)
+    # then
+    assert sizes(chunks) == [4, 4, 2]
+
+
+async def test_capabilities_report_disabled_server_side_cursors(no_cursor_driver):
+    # when
+    capabilities = no_cursor_driver.capabilities
+    # then
+    assert capabilities.server_side_cursors is False

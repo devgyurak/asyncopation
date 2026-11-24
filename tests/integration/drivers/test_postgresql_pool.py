@@ -1,6 +1,8 @@
-"""Pool lifecycle, capabilities and cancellation safety."""
+"""Pool lifecycle, capabilities and cancellation safety of the pool."""
 
+import psycopg
 import pytest
+from django.db import InterfaceError
 
 from asyncopation.drivers.base import Capabilities, PoolStats
 from tests.support.drivers import (
@@ -11,18 +13,26 @@ from tests.support.drivers import (
     cancel_during_sleep,
     cancel_waiting_borrower,
     concurrent_backend_pids,
+    raw_error_in_stream_body,
+    release_and_cancel_waiter_together,
+    released_connection_error,
     server_version_tuple,
 )
 
 pytestmark = POSTGRES_ONLY
 
-
-def test_capabilities_before_open_raise_runtime_error(django_db_setup):
-    # given
-    driver = build_driver()
-    # when / then
-    with pytest.raises(RuntimeError):
-        _ = driver.capabilities
+RELEASED_OPERATIONS = [
+    "fetch_all",
+    "execute",
+    "execute_many",
+    "stream",
+    "begin",
+    "commit",
+    "rollback",
+    "savepoint",
+    "release_savepoint",
+    "rollback_to_savepoint",
+]
 
 
 async def test_capabilities_report_server_version(driver):
@@ -36,17 +46,56 @@ async def test_capabilities_report_server_version(driver):
     assert capabilities.server_side_cursors is True
 
 
+async def test_connection_before_open_raises_runtime_error(django_db_setup):
+    # given
+    driver = build_driver()
+    # when / then
+    with pytest.raises(RuntimeError):
+        async with driver.connection():
+            pass
+
+
+async def test_second_open_is_a_no_op(counted_driver):
+    # given
+    capabilities = counted_driver.capabilities
+    # when
+    await counted_driver.open()
+    # then
+    assert counted_driver.pool_stats() == PoolStats(in_use=0, idle=2, waiting=0)
+    assert counted_driver.capabilities == capabilities
+
+
+async def test_pool_stats_are_zero_after_close(django_db_setup):
+    # given
+    driver = build_driver(pool={"min_size": 1, "max_size": 1})
+    await driver.open()
+    # when
+    await driver.close()
+    # then
+    assert driver.pool_stats() == PoolStats(in_use=0, idle=0, waiting=0)
+
+
+async def test_connection_after_close_raises_runtime_error(django_db_setup):
+    # given
+    driver = build_driver(pool={"min_size": 1, "max_size": 1})
+    await driver.open()
+    await driver.close()
+    # when / then
+    with pytest.raises(RuntimeError):
+        async with driver.connection():
+            pass
+
+
 async def test_close_terminates_pooled_connections(django_db_setup):
     # given
-    pool = {"min_size": 1, "max_size": 1}
-    driver = build_driver(pool=pool)
+    driver = build_driver(pool={"min_size": 1, "max_size": 1})
     await driver.open()
     async with driver.connection() as conn:
         pid = await backend_pid(conn)
     # when
     await driver.close()
     # then
-    assert await backend_ends(pid)
+    assert await backend_ends(pid) is True
 
 
 async def test_pool_stats_count_idle_connections_after_open(counted_driver):
@@ -87,7 +136,13 @@ async def test_cancelled_query_leaves_pool_stats_unchanged(driver):
     outcome = await cancel_during_sleep(driver)
     # then
     assert outcome.after == outcome.before
-    assert outcome.after.in_use == 0
+
+
+async def test_cancelled_query_keeps_the_same_backend(single_driver):
+    # when
+    outcome = await cancel_during_sleep(single_driver)
+    # then
+    assert outcome.pid_after == outcome.pid_before
 
 
 async def test_cancelled_query_stops_running_on_the_server(driver):
@@ -106,11 +161,19 @@ async def test_connection_borrowed_after_cancellation_is_healthy(driver, transac
     assert outcome.next_in_transaction is False
 
 
+async def test_cancelled_execute_many_stops_and_leaves_a_healthy_connection(single_driver):
+    # when
+    outcome = await cancel_during_sleep(single_driver, operation="execute_many")
+    # then
+    assert outcome.cancelled is True
+    assert outcome.statement_stopped is True
+    assert outcome.next_rows == [(1,)]
+
+
 async def test_cancelled_waiter_on_saturated_pool_is_cancelled(single_driver):
     # when
     outcome = await cancel_waiting_borrower(single_driver)
     # then
-    assert outcome.waiting_seen == 1
     assert outcome.cancelled is True
 
 
@@ -122,8 +185,45 @@ async def test_cancelled_waiter_does_not_leak_the_connection(single_driver):
     assert outcome.reusable_rows == [(1,)]
 
 
+async def test_release_and_waiter_cancellation_in_the_same_tick_leak_nothing(single_driver):
+    # when
+    outcome = await release_and_cancel_waiter_together(single_driver)
+    # then
+    assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
+
+
+async def test_release_and_waiter_cancellation_in_the_same_tick_keep_the_backend(single_driver):
+    # when
+    outcome = await release_and_cancel_waiter_together(single_driver)
+    # then
+    assert outcome.next_pid == outcome.holder_pid
+
+
 async def test_concurrent_borrowers_get_distinct_connections(driver):
     # when
     pids = await concurrent_backend_pids(driver, 2)
     # then
     assert len(set(pids)) == 2
+
+
+@pytest.mark.parametrize("operation", RELEASED_OPERATIONS)
+async def test_released_connection_refuses_every_operation(driver, operation):
+    # when
+    error = await released_connection_error(driver, operation)
+    # then
+    assert type(error) is InterfaceError
+
+
+async def test_raw_driver_exception_from_the_callers_body_propagates_unmapped(single_driver):
+    # when
+    outcome = await raw_error_in_stream_body(single_driver)
+    # then
+    assert type(outcome.error) is psycopg.OperationalError
+
+
+async def test_raw_driver_exception_from_the_callers_body_keeps_the_connection(single_driver):
+    # when
+    outcome = await raw_error_in_stream_body(single_driver)
+    # then
+    assert outcome.pid_after == outcome.pid_before
+    assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)

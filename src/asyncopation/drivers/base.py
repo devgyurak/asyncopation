@@ -47,7 +47,12 @@ class ExecResult:
 
 @dataclass(frozen=True)
 class PoolStats:
-    """Read-only pool counters (ADR-0004 Decision 6): connections in use, idle and waiting."""
+    """Read-only pool counters (ADR-0004 Decision 6): connections in use, idle and waiting.
+
+    ``in_use`` is the pool's size minus its idle connections, so it also counts connections that
+    are still opening or being replaced (a discarded connection is replaced in the background and
+    counts as in use until the replacement is idle). Tests therefore wait for the pool to settle.
+    """
 
     in_use: int
     idle: int

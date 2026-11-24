@@ -1,7 +1,9 @@
 # Architecture
 
-Status: skeleton (Phase 0). Packages exist with their contracts; no behaviour yet. ADR-0001..0007
-are Accepted; ADR-0008 is Accepted (scoped `compile_scope` swap).
+Status: Phase 1 in progress. The driver layer is implemented for PostgreSQL (psycopg3) together with
+the recording driver; the MySQL/asyncmy driver, the registry/lifecycle, executors and transactions
+are still contracts only. ADR-0001..0007 are Accepted (ADR-0001 and ADR-0003/0004 carry
+implementation amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
 ## The split
@@ -76,12 +78,37 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named
   cursors are `scrollable=False` and `withhold` outside transactions. The SQL shape difference
   stays in the compile-only wrapper's `features.uses_server_side_binding`.
+- **Pool options.** The pool reuses `DATABASES[alias]["OPTIONS"]["pool"]` (`psycopg_pool` keyword
+  arguments such as `min_size`, `max_size`, `timeout`, `max_lifetime`; `True` means defaults).
+  Provisional defaults are `min_size=1`, `max_size=10` until the ADR-0004 implementation
+  benchmark fixes them. Django's own sync backend reads the same key, so it would also enable
+  *its* sync pool for that alias (and `CONN_MAX_AGE` must then stay 0, otherwise Django raises
+  `ImproperlyConfigured`). Keys that do not fit an async pool are rejected with
+  `ImproperlyConfigured`: `name`, `reconnect_failed`, `close_returns` (a discarded connection must not return to the pool), `open`, `kwargs`, `conninfo` (set by the driver), any callable value (`check`, `reset`,
+  `configure`, `connection_class`, ...; the driver installs its own) and `OPTIONS["cursor_factory"]`. When `CONN_HEALTH_CHECKS` is true the
+  driver passes `psycopg_pool`'s `check_connection`, which costs one extra round trip per borrow
+  (same meaning as Django's pool).
+- **Open fails fast.** `open()` first connects once directly, so bad credentials or a failing
+  `assume_role` raise the same Django exception as the sync backend and leave no pool behind; only
+  then is the pool opened.
+- **Capabilities** are owned by the driver: the same direct connection provides `server_version`
+  from its startup parameters (no query) and the driver builds the frozen `Capabilities`;
+  `driver.capabilities` is the single owner of runtime facts. The ADR-0004 probe (once per alias)
+  takes `server_version` from the first opened driver's `Capabilities` instead of running a second
+  source of truth, and the registry builds the alias-level server info from it.
 - Connections are in autocommit outside `begin()`; a connection returned mid-transaction is rolled
-  back. A cancelled statement is cancelled and rolled back (or discarded when its state is unknown);
-  a disconnected connection is closed so the pool replaces it.
+  back. Cancellation: a statement cancelled in autocommit is cancelled and rolled back (the
+  connection is discarded when its state is unknown). Inside a transaction (autocommit off) or
+  while a stream is open the connection is **discarded**: a held cursor survives a rollback, and a
+  silent rollback would continue in a new implicit transaction. A disconnected connection is
+  closed so the pool replaces it (`psycopg_pool` always replaces a discarded connection, even with
+  `min_size=0`: `pool_async.py::_return_connection` schedules `AddConnection` without a `min_size`
+  check, so a settled pool shows `PoolStats(in_use=0, idle=1, waiting=0)`). A released connection wrapper raises `InterfaceError` when used
+  afterwards.
 - `connection_created` is **not** sent for driver connections; hstore/citext registration is
   tracked in #43. The recording driver (`asyncopation.testing.RecordingDriver`) implements the same
-  protocol with queued results for unit tests.
+  protocol with queued results and a statement log for unit tests; `Capabilities` and `ExecResult`
+  are re-exported from `asyncopation.testing` so such tests need no import from `drivers`.
 
 ## Connection ownership
 

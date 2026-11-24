@@ -4,6 +4,7 @@ from tests.support.drivers import (
     POSTGRES_ONLY,
     in_transaction,
     insert_named,
+    raw_begin_insert_exit,
     scratch_count,
     scratch_names,
     scratch_rows,
@@ -145,3 +146,21 @@ async def test_returning_connection_inside_transaction_rolls_it_back(single_driv
     assert rows == []
     assert inside is False
     assert await scratch_count(scratch) == 0
+
+
+async def test_raw_begin_released_normally_does_not_leak_rows_to_the_next_borrower(
+    single_driver, scratch
+):
+    # when
+    rows, _ = await raw_begin_insert_exit(single_driver, scratch)
+    # then
+    assert rows == []
+
+
+async def test_raw_begin_released_normally_hands_back_a_connection_outside_a_transaction(
+    single_driver, scratch
+):
+    # when
+    _, inside = await raw_begin_insert_exit(single_driver, scratch)
+    # then
+    assert inside is False

@@ -13,14 +13,16 @@ import asyncio
 import itertools
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, NoReturn
 
 import psycopg
+from django.db import InterfaceError
 from psycopg.client_cursor import ClientCursorMixin
 from psycopg.pq import TransactionStatus
 
 from asyncopation.drivers.base import ExecResult, Params
-from asyncopation.drivers.postgresql.errors import is_disconnect, translate_errors
+from asyncopation.drivers.errors import raise_mapped
+from asyncopation.drivers.postgresql.errors import is_disconnect
 
 type Row = tuple[Any, ...]
 
@@ -35,7 +37,24 @@ class AsyncClientServerCursor(ClientCursorMixin, psycopg.AsyncServerCursor):
     """A named cursor that binds parameters client side (what Django's streams use)."""
 
 
+class _ReleasedConnection:
+    """Stands in for the raw connection once it went back to the pool (ADR-0001 rule 5 spirit)."""
+
+    __slots__ = ()
+
+    def __getattr__(self, name: str) -> NoReturn:
+        raise InterfaceError("the connection was returned to the pool and can no longer be used")
+
+
+_RELEASED: Any = _ReleasedConnection()
+
+
 class PostgresConnection:
+    """One borrowed connection. Errors are translated only around driver I/O (never around the
+    caller's code) and a hot-path statement costs one ``try``/``except``, no context managers."""
+
+    __slots__ = ("_raw", "_server_side_binding", "_server_side_cursors")
+
     def __init__(
         self, raw: psycopg.AsyncConnection, *, server_side_binding: bool, server_side_cursors: bool
     ) -> None:
@@ -45,42 +64,71 @@ class PostgresConnection:
 
     # ------------------------------------------------------------------ statements
     async def fetch_all(self, sql: str, params: Params) -> list[Row]:
-        async with self._statement(), self._raw.cursor() as cursor:
-            await _execute(cursor, sql, params)
-            return await cursor.fetchall() if cursor.description else []
+        try:
+            async with self._raw.cursor() as cursor:
+                await _execute(cursor, sql, params)
+                return await cursor.fetchall() if cursor.description else []
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def execute(self, sql: str, params: Params) -> ExecResult:
-        async with self._statement(), self._raw.cursor() as cursor:
-            await _execute(cursor, sql, params)
-            rows = await cursor.fetchall() if cursor.description else None
-            return ExecResult(rowcount=cursor.rowcount, rows=rows)
+        try:
+            async with self._raw.cursor() as cursor:
+                await _execute(cursor, sql, params)
+                rows = await cursor.fetchall() if cursor.description else None
+                return ExecResult(rowcount=cursor.rowcount, rows=rows)
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def execute_many(self, sql: str, batch: Sequence[Params]) -> ExecResult:
-        async with self._statement(), self._raw.cursor() as cursor:
-            await cursor.executemany(sql, batch)  # ty: ignore[invalid-argument-type]
-            return ExecResult(rowcount=cursor.rowcount)
+        try:
+            async with self._raw.cursor() as cursor:
+                await cursor.executemany(sql, batch)  # ty: ignore[invalid-argument-type]
+                return ExecResult(rowcount=cursor.rowcount)
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     @asynccontextmanager
     async def stream(
         self, sql: str, params: Params, chunk: int
     ) -> AsyncGenerator[AsyncIterator[list[Row]]]:
-        async with self._statement():
-            cursor = self._stream_cursor()
+        cursor = self._stream_cursor()
+        try:
             try:
                 await _execute(cursor, sql, params)
-                yield self._chunks(cursor, chunk)
+            except asyncio.CancelledError:
+                await self._discard()  # state of the cursor/statement is unknown
+                raise
+            except Exception as exc:
+                await self._fail(exc)
+            try:
+                yield self._chunks(cursor, chunk)  # the caller's body is not wrapped
             except asyncio.CancelledError:
                 # A held (autocommit) cursor survives a rollback and the statement state is
                 # unknown: never hand this connection back (ADR-0001 6b).
                 await self._discard()
                 raise
-            finally:
-                await self._close_cursor(cursor)
+        finally:
+            await self._close_cursor(cursor)
 
     async def _chunks(self, cursor: Any, chunk: int) -> AsyncIterator[list[Row]]:
         while True:
-            async with self._statement():
+            try:
                 rows = await cursor.fetchmany(chunk)
+            except asyncio.CancelledError:
+                await self._discard()  # a cancelled FETCH leaves the open cursor in unknown state
+                raise
+            except Exception as exc:
+                await self._fail(exc)
             if not rows:
                 return
             yield rows
@@ -93,35 +141,56 @@ class PostgresConnection:
         # Ported from django/db/backends/postgresql/base.py::create_cursor @ 6.1.3
         # Changes: none in the decision logic (`withhold=connection.autocommit`, scrollable=False);
         # the cursor must survive outside a transaction. Added: DISABLE_SERVER_SIDE_CURSORS falls
-        # back to a client cursor (see above) instead of Django's per-queryset check.
+        # back to a client cursor (see above) instead of Django's per-queryset check. Not ported:
+        # the `register_tzloader` call for a cursor whose connection adapters carry another time
+        # zone - our connections always get the adapters template for their own zone.
         withhold = self._raw.autocommit
         if self._server_side_binding:
             return self._raw.cursor(name, scrollable=False, withhold=withhold)
         return AsyncClientServerCursor(self._raw, name=name, scrollable=False, withhold=withhold)
 
     async def _close_cursor(self, cursor: Any) -> None:
-        # A failed transaction cannot CLOSE; the transaction end drops the cursor anyway.
-        with suppress(psycopg.Error):
+        try:
             await cursor.close()
+        except asyncio.CancelledError:
+            await self._discard()  # CLOSE may not have run: a held cursor must not reach the pool
+            raise
+        except psycopg.Error:
+            pass  # a failed transaction cannot CLOSE; its end drops the cursor anyway
 
     # ------------------------------------------------------------------ transactions
     async def begin(self) -> None:
         # Leave autocommit like Django's set_autocommit(False): psycopg issues BEGIN lazily with
         # the configured isolation level.
-        async with self._statement():
+        try:
             await self._raw.set_autocommit(False)
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def commit(self) -> None:
-        async with self._statement():
+        try:
             await self._raw.commit()
             await self._raw.set_autocommit(True)
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def rollback(self) -> None:
         if self._raw.closed:  # discarded after a cancel or disconnect: the transaction is gone
             return
-        async with self._statement():
+        try:
             await self._raw.rollback()
             await self._raw.set_autocommit(True)
+        except asyncio.CancelledError:
+            await self._recover_from_cancel()
+            raise
+        except Exception as exc:
+            await self._fail(exc)
 
     async def savepoint(self, sid: str) -> None:
         await self.execute(f"SAVEPOINT {_quote(sid)}", None)
@@ -133,19 +202,11 @@ class PostgresConnection:
         await self.execute(f"ROLLBACK TO SAVEPOINT {_quote(sid)}", None)
 
     # ------------------------------------------------------------------ plumbing
-    @asynccontextmanager
-    async def _statement(self) -> AsyncGenerator[None]:
-        """Translate errors, discard dead connections, recover from cancellation (ADR-0001 6b)."""
-        try:
-            with translate_errors():
-                yield
-        except asyncio.CancelledError:
-            await self._recover_from_cancel()
-            raise
-        except Exception as exc:
-            if is_disconnect(exc) or self._raw.broken:
-                await self._discard()
-            raise
+    async def _fail(self, exc: Exception) -> NoReturn:
+        """Discard a dead connection, then re-raise ``exc`` as its ``django.db`` class."""
+        if isinstance(exc, psycopg.Error) and (is_disconnect(exc) or self._raw.broken):
+            await self._discard()
+        raise_mapped(exc, psycopg)
 
     async def _recover_from_cancel(self) -> None:
         """Leave the connection idle or discard it - never hand back an unknown state."""
@@ -168,14 +229,19 @@ class PostgresConnection:
             await self._discard()
 
     async def reset(self) -> None:
-        """Called when the connection goes back to the pool: end any open transaction."""
+        """Called when the connection goes back to the pool: end any open transaction.
+
+        psycopg's own exit path would COMMIT whatever is open, so a transaction started with a
+        raw ``BEGIN`` (autocommit stays on) must be rolled back here, not only ``begin()`` ones.
+        """
         raw = self._raw
-        if raw.closed:
+        if raw.closed or (raw.autocommit and raw.info.transaction_status == TransactionStatus.IDLE):
             return
         try:
-            if not raw.autocommit:
-                async with asyncio.timeout(_RECOVERY_TIMEOUT):
+            async with asyncio.timeout(_RECOVERY_TIMEOUT):
+                if raw.info.transaction_status != TransactionStatus.IDLE:
                     await raw.rollback()
+                if not raw.autocommit:
                     await raw.set_autocommit(True)
         except Exception:
             # The body's outcome (including a CancelledError) must win over a failed cleanup.
@@ -184,8 +250,13 @@ class PostgresConnection:
             await self._discard()
             raise
 
+    def release(self) -> None:
+        """The connection is back in the pool: any further use raises ``InterfaceError``."""
+        self._raw = _RELEASED
+
     async def _discard(self) -> None:
-        with suppress(BaseException):
+        # Errors while closing are irrelevant; a CancelledError must still propagate.
+        with suppress(Exception):
             await self._raw.close()
 
 

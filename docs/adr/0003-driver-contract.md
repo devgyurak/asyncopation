@@ -113,4 +113,5 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 - integration: MySQL `update()` rowcount when rows already hold the value (FOUND_ROWS) equals sync.
 - integration: unique, NOT NULL and CHECK violations raise `IntegrityError` on every backend;
   a killed connection raises `OperationalError` and is not returned to the pool.
+- integration: `server_side_binding=True` statements and streams behave like the sync backend (values, cursors, withhold)
 - integration: `HStoreField` round-trip once `contrib.postgres` is in the harness.

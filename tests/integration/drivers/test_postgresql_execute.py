@@ -1,13 +1,13 @@
 """fetch_all / execute / execute_many semantics (rowcount, RETURNING, atomicity)."""
 
-import pytest
+import psycopg
 from django.db import IntegrityError
 
 from asyncopation.drivers.base import ExecResult
 from tests.support.drivers import (
     POSTGRES_ONLY,
+    failing_batch_error,
     insert_named,
-    observe_failing_batch,
     scratch_count,
     scratch_names,
     scratch_rows,
@@ -116,28 +116,43 @@ async def test_execute_many_with_empty_batch_inserts_nothing(driver, scratch):
     assert await scratch_count(scratch) == 0
 
 
-async def test_execute_many_failing_batch_raises_integrity_error(driver, scratch):
-    # given
-    async with driver.connection() as conn:
-        # when / then
-        with pytest.raises(IntegrityError):
-            await conn.execute_many(
-                f"INSERT INTO {scratch} (name, qty) VALUES (%s, %s)", [("a", 1), ("a", 2)]
-            )
+async def test_failing_execute_many_batch_raises_integrity_error(driver, scratch):
+    # when
+    error, _ = await failing_batch_error(driver, scratch)
+    # then
+    assert isinstance(error, IntegrityError)
 
 
 async def test_failing_execute_many_batch_leaves_no_rows_behind(driver, scratch):
     # when
-    observation = await observe_failing_batch(driver, scratch)
+    _, rows_left = await failing_batch_error(driver, scratch)
     # then
-    assert observation.rows_left == 0
+    assert rows_left == 0
 
 
-async def test_psycopg_driver_declares_atomic_execute_many(driver, scratch):
+async def test_driver_declares_atomic_execute_many_when_pipelines_are_supported(driver):
     # when
-    observation = await observe_failing_batch(driver, scratch)
+    capabilities = driver.capabilities
     # then
-    assert observation.capability is True
+    assert capabilities.atomic_execute_many is psycopg.AsyncPipeline.is_supported()
+
+
+async def test_update_returning_without_match_yields_empty_rows(driver, scratch):
+    # given
+    async with driver.connection() as conn:
+        # when
+        result = await conn.execute(f"UPDATE {scratch} SET qty = 1 WHERE false RETURNING id", None)
+    # then
+    assert result == ExecResult(rowcount=0, rows=[])
+
+
+async def test_delete_returning_without_match_yields_empty_rows(driver, scratch):
+    # given
+    async with driver.connection() as conn:
+        # when
+        result = await conn.execute(f"DELETE FROM {scratch} WHERE false RETURNING id", None)
+    # then
+    assert result == ExecResult(rowcount=0, rows=[])
 
 
 async def test_execute_many_update_reports_the_batch_rowcount(driver, scratch):

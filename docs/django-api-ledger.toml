@@ -62,25 +62,38 @@ reason = "Adapters template (jsonb/inet as text, range dumper, tz-aware timestam
 verified_against = "6.1.3"
 signatures = { get_adapters_template = "(use_tz, timezone)" }
 
-# Ported (not imported at runtime). _django.postgresql.ported_references exposes each upstream
-# object to the drift tests in tests/unit/drivers, which compare behaviour against it.
+# Ported (never imported at runtime, `ported = true`). tests/unit/django_drift checks that each
+# name still exists upstream and tests/unit/django_drift/test_postgresql_ports.py compares behaviour.
 [[internal]]
 module = "django.db.utils"
-names = ["DatabaseErrorWrapper"]
+names = ["DatabaseErrorWrapper.__exit__"]
 used_by = ["src/asyncopation/drivers/errors.py"]
 reason = "Ported: ordered isinstance walk mapping a DB-API module's exceptions to django.db classes (drivers/errors.py::map_exception)"
 verified_against = "6.1.3"
+ported = true
 
 [[internal]]
 module = "django.db.backends.base.base"
-names = ["BaseDatabaseWrapper"]
+names = [
+    "BaseDatabaseWrapper.timezone",
+    "BaseDatabaseWrapper.timezone_name",
+    "BaseDatabaseWrapper.check_settings",
+]
 used_by = ["src/asyncopation/drivers/postgresql/settings.py"]
-reason = "Ported: `timezone` / `timezone_name` (settings.resolve_timezone)"
+reason = "Ported: `timezone` / `timezone_name` (settings.resolve_timezone) and the USE_TZ / TIME_ZONE check (settings.build_config)"
 verified_against = "6.1.3"
+ported = true
 
 [[internal]]
 module = "django.db.backends.postgresql.base"
-names = ["DatabaseWrapper", "ServerSideCursor"]
+names = [
+    "DatabaseWrapper.get_connection_params",
+    "DatabaseWrapper.get_new_connection",
+    "DatabaseWrapper.create_cursor",
+    "DatabaseWrapper._configure_timezone",
+    "DatabaseWrapper._configure_role",
+    "ServerSideCursor",
+]
 used_by = [
     "src/asyncopation/drivers/postgresql/settings.py",
     "src/asyncopation/drivers/postgresql/connection.py",
@@ -88,10 +101,20 @@ used_by = [
 ]
 reason = "Ported: get_connection_params (settings.build_config), _configure_timezone/_configure_role/get_new_connection (driver._configure), create_cursor and ServerSideCursor (connection.py)"
 verified_against = "6.1.3"
+ported = true
 
 [[internal]]
 module = "django.db.backends.postgresql.operations"
-names = ["DatabaseOperations"]
-used_by = ["src/asyncopation/drivers/postgresql/connection.py"]
-reason = "Ported: quote_name for savepoint ids (connection._quote)"
+names = [
+    "DatabaseOperations.quote_name",
+    "DatabaseOperations.max_name_length",
+    "DatabaseOperations.compose_sql",
+]
+used_by = [
+    "src/asyncopation/drivers/postgresql/connection.py",
+    "src/asyncopation/drivers/postgresql/settings.py",
+    "src/asyncopation/drivers/postgresql/driver.py",
+]
+reason = "Ported: quote_name for savepoint ids (connection._quote); max_name_length (the 63-character NAME limit in settings.build_config); compose_sql (SET ROLE literal via AsyncClientCursor.mogrify in driver._configure)"
 verified_against = "6.1.3"
+ported = true

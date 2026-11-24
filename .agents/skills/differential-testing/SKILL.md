@@ -31,6 +31,15 @@ Asyncopation must give identical snapshots on every backend.
   ordering, slicing, select_related, annotations picked by name from `ANNOTATIONS` and usable in
   the ordering) and `build_queryset(spec)`; `annotated_spec()` builds example-based specs.
 
+## Driver-level comparison (no QuerySet)
+Driver tests compare the async driver with Django's sync backend directly:
+`compare_with_sync(sql, params, case=..., options=...)` in `tests/support/drivers/reference.py` runs the
+same SQL through the opened async driver and through a sync Django `DatabaseWrapper` built from
+the same settings and `OPTIONS` (in a worker thread - tests only, never `src/`), normalises both
+result sets to `(type name, repr)` pairs and returns a `RowsComparison`; the test asserts the two
+sides are equal, so value *and* type drift both fail. Use it for type conversion, `TIME_ZONE` /
+`USE_TZ` matrices and `OPTIONS` such as `server_side_binding`.
+
 ## Adding coverage for a new QuerySet feature
 1. Extend `QuerySetSpec` + `queryset_specs()` with the new dimension (keep generation
    deterministic and bounded: small lists, fields from the catalog models only).

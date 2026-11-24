@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
 from typing import Any
 
 import psycopg
 from psycopg_pool import AsyncConnectionPool
 
 from asyncopation.drivers.base import Capabilities, PoolStats
+from asyncopation.drivers.errors import raise_mapped
 from asyncopation.drivers.postgresql.connection import PostgresConnection
 from asyncopation.drivers.postgresql.errors import is_disconnect, translate_errors
 from asyncopation.drivers.postgresql.settings import PostgresConfig, build_config
@@ -27,7 +26,12 @@ class PostgresDriver:
     def from_settings(
         cls, alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
     ) -> PostgresDriver:
-        """Build from a ``DATABASES`` entry plus ``settings.USE_TZ`` / ``settings.TIME_ZONE``."""
+        """Build from a ``DATABASES`` entry plus ``settings.USE_TZ`` / ``settings.TIME_ZONE``.
+
+        Call it from the configure phase (``AppConfig.ready()``, ADR-0004), never from inside the
+        running event loop: resolving a time zone name reads the tz database from disk
+        (``zoneinfo``), which is blocking I/O.
+        """
         return cls(build_config(alias, settings_dict, use_tz=use_tz, time_zone=time_zone))
 
     @property
@@ -37,10 +41,18 @@ class PostgresDriver:
         return self._capabilities
 
     async def open(self) -> None:
-        """Open the pool and read the server version. Callers serialize ``open()`` (ADR-0004)."""
+        """Open the pool. Callers serialize ``open()`` (ADR-0004).
+
+        A first, direct connection (configured like every pooled one) makes bad credentials, an
+        unknown database or an invalid ``assume_role`` fail at once with the same ``django.db``
+        exception Django's sync backend raises - psycopg_pool would only retry in the background
+        and report a ``PoolTimeout`` after its timeout. It also yields the server version without
+        a query. Nothing is left open when this raises.
+        """
         if self._pool is not None:
             return
         config = self._config
+        server_version = await self._probe()
         pool = AsyncConnectionPool(
             "",
             kwargs=config.conn_kwargs,
@@ -52,8 +64,6 @@ class PostgresDriver:
         try:
             with translate_errors():
                 await pool.open(wait=True)
-                async with pool.connection() as raw:
-                    server_version = divmod(raw.info.server_version, 10000)
         except BaseException:
             await pool.close()
             raise
@@ -61,7 +71,9 @@ class PostgresDriver:
         self._capabilities = Capabilities(
             server_version=server_version,
             server_side_cursors=config.server_side_cursors,
-            atomic_execute_many=True,  # executemany runs in one pipeline sync: all or nothing
+            # psycopg runs executemany in one pipeline sync (all or nothing); without pipeline
+            # support it falls back to one statement per parameter set.
+            atomic_execute_many=psycopg.AsyncPipeline.is_supported(),
         )
 
     async def close(self) -> None:
@@ -69,22 +81,12 @@ class PostgresDriver:
         if pool is not None:
             await pool.close()
 
-    @asynccontextmanager
-    async def connection(self) -> AsyncGenerator[PostgresConnection]:
+    def connection(self) -> _Borrow:
+        """Borrow a connection (``async with``); it goes back to the pool on exit."""
         pool = self._pool
         if pool is None:
             raise RuntimeError("PostgresDriver is not open")
-        with translate_errors():  # PoolTimeout -> OperationalError (ADR-0001 Decision 8)
-            async with pool.connection() as raw:
-                connection = PostgresConnection(
-                    raw,
-                    server_side_binding=self._config.server_side_binding,
-                    server_side_cursors=self._config.server_side_cursors,
-                )
-                try:
-                    yield connection
-                finally:
-                    await connection.reset()
+        return _Borrow(pool, self._config)
 
     def is_disconnect(self, exc: BaseException) -> bool:
         return is_disconnect(exc)
@@ -96,6 +98,15 @@ class PostgresDriver:
         stats = self._pool.get_stats()
         size, available = stats["pool_size"], stats["pool_available"]
         return PoolStats(in_use=size - available, idle=available, waiting=stats["requests_waiting"])
+
+    async def _probe(self) -> tuple[int, ...]:
+        with translate_errors():
+            raw = await psycopg.AsyncConnection.connect(**self._config.conn_kwargs)
+            try:
+                await self._configure(raw)
+                return divmod(raw.info.server_version, 10000)
+            finally:
+                await raw.close()
 
     async def _configure(self, raw: psycopg.AsyncConnection) -> None:
         """Per physical connection; port of Django's ``get_new_connection`` + ``_configure_*``."""
@@ -110,3 +121,35 @@ class PostgresDriver:
         if config.assume_role:
             sql = psycopg.AsyncClientCursor(raw).mogrify("SET ROLE %s", [config.assume_role])
             await raw.execute(sql)  # ty: ignore[no-matching-overload]
+
+
+class _Borrow:
+    """``async with driver.connection()``: a class (not a generator context manager) because this
+    is the hot path. Uses ``getconn``/``putconn`` so psycopg's commit-on-exit never runs."""
+
+    __slots__ = ("_config", "_connection", "_pool", "_raw")
+
+    def __init__(self, pool: AsyncConnectionPool, config: PostgresConfig) -> None:
+        self._pool = pool
+        self._config = config
+
+    async def __aenter__(self) -> PostgresConnection:
+        try:
+            raw = await self._pool.getconn()
+        except Exception as exc:  # PoolTimeout -> OperationalError (ADR-0001 Decision 8)
+            raise_mapped(exc, psycopg)
+        self._raw = raw
+        self._connection = PostgresConnection(
+            raw,
+            server_side_binding=self._config.server_side_binding,
+            server_side_cursors=self._config.server_side_cursors,
+        )
+        return self._connection
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        connection = self._connection
+        try:
+            await connection.reset()
+        finally:
+            connection.release()
+            await self._pool.putconn(self._raw)

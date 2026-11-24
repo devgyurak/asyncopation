@@ -4,6 +4,7 @@
 of upper layers.
 """
 
+from asyncopation.drivers.base import Capabilities, ExecResult
 from asyncopation.testing.recording import (
     NoQueuedResult,
     RecordingConnection,
@@ -11,4 +12,11 @@ from asyncopation.testing.recording import (
     Statement,
 )
 
-__all__ = ["NoQueuedResult", "RecordingConnection", "RecordingDriver", "Statement"]
+__all__ = [
+    "Capabilities",
+    "ExecResult",
+    "NoQueuedResult",
+    "RecordingConnection",
+    "RecordingDriver",
+    "Statement",
+]

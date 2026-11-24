@@ -1,20 +1,24 @@
-"""Driver errors are django.db exceptions chained to the psycopg exception."""
+"""Driver errors are django.db exceptions chained to the psycopg exception.
+
+Pool expectations after a discarded (killed / FATAL) connection: psycopg_pool replaces it
+unconditionally, even with `min_size=0` - `AsyncConnectionPool._return_connection` logs
+"discarding closed connection" and calls `self.run_task(AddConnection(self))` without a
+`min_size` check - so the pool settles at one idle connection, not zero.
+"""
 
 import psycopg
-import psycopg_pool
 import pytest
-from django.db import DataError, IntegrityError, OperationalError, ProgrammingError
+from django.db import DataError, IntegrityError, InternalError, OperationalError, ProgrammingError
 
 from asyncopation.drivers.base import PoolStats
 from tests.support.drivers import (
     POSTGRES_ONLY,
     acquire_while_saturated,
-    build_driver,
     consume_failing_stream,
     fail_in_transaction_then_rollback,
+    idle_timeout_then_query,
     is_pool_timeout,
     kill_backend_then_query,
-    mapped_from,
     savepoint_after_integrity_error,
     scratch_names,
 )
@@ -95,7 +99,7 @@ async def test_integrity_error_keeps_connection_in_the_pool(single_driver, scrat
     # when
     stats = single_driver.pool_stats()
     # then
-    assert (stats.in_use, stats.idle) == (0, 1)
+    assert stats == PoolStats(in_use=0, idle=1, waiting=0)
 
 
 async def test_killed_backend_raises_operational_error_with_driver_cause(elastic_driver):
@@ -106,12 +110,11 @@ async def test_killed_backend_raises_operational_error_with_driver_cause(elastic
     assert isinstance(outcome.error.__cause__, psycopg.OperationalError)
 
 
-async def test_killed_connection_is_released_without_leaking_the_pool_slot(elastic_driver):
+async def test_killed_connection_is_not_returned_to_the_pool(elastic_driver):
     # when
     outcome = await kill_backend_then_query(elastic_driver)
     # then
-    assert outcome.after.in_use == 0
-    assert outcome.after.idle + outcome.after.in_use <= 2  # the pool's max_size
+    assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
 
 
 async def test_borrow_after_killed_connection_uses_a_fresh_backend(elastic_driver):
@@ -129,40 +132,43 @@ async def test_killed_backend_error_is_a_disconnect(elastic_driver):
     assert elastic_driver.is_disconnect(outcome.error) is True
 
 
-@pytest.mark.parametrize(
-    ("exc", "expected"),
-    [
-        pytest.param(psycopg.errors.AdminShutdown("x"), True, id="raw-admin-shutdown"),
-        pytest.param(psycopg.errors.UniqueViolation("x"), False, id="raw-unique"),
-        pytest.param(
-            psycopg.OperationalError("consuming input failed"), True, id="raw-no-sqlstate"
-        ),
-        pytest.param(psycopg.errors.QueryCanceled("x"), False, id="raw-query-canceled"),
-        pytest.param(psycopg_pool.PoolTimeout("x"), False, id="raw-pool-timeout"),
-        pytest.param(psycopg.InterfaceError("connection is closed"), False, id="raw-interface"),
-        pytest.param(
-            mapped_from(psycopg.OperationalError("consuming input failed")),
-            True,
-            id="mapped-no-sqlstate",
-        ),
-        pytest.param(
-            mapped_from(psycopg.errors.QueryCanceled("x")), False, id="mapped-query-canceled"
-        ),
-        pytest.param(mapped_from(psycopg_pool.PoolTimeout("x")), False, id="mapped-pool-timeout"),
-        pytest.param(ValueError("x"), False, id="foreign"),
-        pytest.param(
-            mapped_from(psycopg.errors.AdminShutdown("x")), True, id="mapped-admin-shutdown"
-        ),
-        pytest.param(mapped_from(psycopg.errors.UniqueViolation("x")), False, id="mapped-unique"),
-    ],
-)
-def test_is_disconnect_classifies_exceptions(django_db_setup, exc, expected):
-    # given
-    driver = build_driver()
+async def test_backend_killed_during_transaction_raises_operational_error(elastic_driver):
     # when
-    result = driver.is_disconnect(exc)
+    outcome = await kill_backend_then_query(elastic_driver, transactional=True)
     # then
-    assert result is expected
+    assert type(outcome.error) is OperationalError
+
+
+async def test_pool_replaces_connection_killed_during_transaction(elastic_driver):
+    # when
+    outcome = await kill_backend_then_query(elastic_driver, transactional=True)
+    # then
+    assert outcome.fresh_rows == [(1,)]
+    assert outcome.fresh_pid != outcome.killed_pid
+    assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
+
+
+async def test_fatal_idle_timeout_raises_internal_error_like_the_sync_backend(idle_timeout_driver):
+    # when
+    outcome = await idle_timeout_then_query(idle_timeout_driver)
+    # then
+    # SQLSTATE 25P03 is class 25 (invalid transaction state): psycopg InternalError, as in Django.
+    assert type(outcome.error) is InternalError
+
+
+async def test_fatal_idle_timeout_error_is_a_disconnect(idle_timeout_driver):
+    # when
+    outcome = await idle_timeout_then_query(idle_timeout_driver)
+    # then
+    assert idle_timeout_driver.is_disconnect(outcome.error) is True
+
+
+async def test_fatal_idle_timeout_discards_the_connection(idle_timeout_driver):
+    # when
+    outcome = await idle_timeout_then_query(idle_timeout_driver)
+    # then
+    assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
+    assert outcome.fresh_pid != outcome.killed_pid
 
 
 async def test_savepoint_rollback_after_integrity_error_keeps_transaction_usable(driver, scratch):
@@ -186,24 +192,16 @@ async def test_failed_statement_then_rollback_leaves_a_reusable_connection(singl
     assert outcome.still_in_transaction is False
 
 
-async def test_backend_killed_during_transaction_raises_operational_error(elastic_driver):
-    # when
-    outcome = await kill_backend_then_query(elastic_driver, transactional=True)
-    # then
-    assert type(outcome.error) is OperationalError
+STREAM_ROWS_SEEN = [
+    pytest.param(False, 0, id="autocommit-with-hold-fails-at-declare"),
+    pytest.param(True, 4, id="transaction-fails-at-the-third-fetch"),
+]
 
 
-async def test_pool_replaces_connection_killed_during_transaction(elastic_driver):
-    # when
-    outcome = await kill_backend_then_query(elastic_driver, transactional=True)
-    # then
-    assert outcome.fresh_rows == [(1,)]
-    assert outcome.fresh_pid != outcome.killed_pid
-    assert outcome.after.in_use == 0
-
-
-@pytest.mark.parametrize("transactional", [False, True], ids=["autocommit", "transaction"])
-async def test_stream_error_midway_maps_to_data_error_and_leaves_no_cursor(driver, transactional):
+@pytest.mark.parametrize(("transactional", "rows_seen"), STREAM_ROWS_SEEN)
+async def test_stream_error_midway_maps_to_data_error_with_driver_cause(
+    driver, transactional, rows_seen
+):
     # given
     async with driver.connection() as conn:
         # when
@@ -211,6 +209,16 @@ async def test_stream_error_midway_maps_to_data_error_and_leaves_no_cursor(drive
     # then
     assert type(outcome.error) is DataError
     assert isinstance(outcome.error.__cause__, psycopg.errors.DivisionByZero)
+    assert outcome.rows_seen == rows_seen
+
+
+@pytest.mark.parametrize("transactional", [False, True], ids=["autocommit", "transaction"])
+async def test_stream_error_midway_leaves_no_cursor_behind(driver, transactional):
+    # given
+    async with driver.connection() as conn:
+        # when
+        outcome = await consume_failing_stream(conn, transactional=transactional)
+    # then
     assert outcome.cursors_after == []
 
 

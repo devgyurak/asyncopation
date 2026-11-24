@@ -24,6 +24,7 @@ from asyncopation.drivers.errors import map_exception, raise_mapped, wrap_databa
 from tests.support.drivers import (
     custom_subclass,
     django_wrapper_class,
+    error_pairs_twice,
     instance_of,
     our_mapped_class,
     psycopg_error_classes,
@@ -150,3 +151,29 @@ def test_mapping_matches_djangos_database_error_wrapper(exc_class):
     ours = our_mapped_class(exc)
     # then
     assert ours is django_wrapper_class(exc)
+
+
+def test_error_pairs_follow_djangos_order():
+    # when
+    pairs = error_pairs_twice()
+    # then
+    assert pairs.django_names == [
+        "DataError",
+        "OperationalError",
+        "IntegrityError",
+        "InternalError",
+        "ProgrammingError",
+        "NotSupportedError",
+        "DatabaseError",
+        "InterfaceError",
+        "Error",
+    ]
+    assert pairs.dbapi_names == pairs.django_names
+
+
+def test_error_pairs_are_computed_once_per_module():
+    # when
+    pairs = error_pairs_twice()
+    # then
+    assert isinstance(pairs.first, tuple)
+    assert pairs.same_object is True

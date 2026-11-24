@@ -59,5 +59,6 @@ the drift test. See the `port-django-internals` skill.
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `setup()` / `close()`,
 the ASGI lifespan wrapper, `observe()` / `intercept()`, fetch-mode constants and
-`asyncopation.testing`.
+`asyncopation.testing` (`RecordingDriver`, plus `Capabilities` / `ExecResult` re-exported for
+tests that build recording drivers).
 Changing a public signature needs an ADR (`write-adr` skill) and a CHANGELOG entry.

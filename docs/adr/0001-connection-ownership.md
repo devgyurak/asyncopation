@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-24
+- Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]`
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 
@@ -74,6 +75,14 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
 8. **Pools.** Driver pool defaults, configurable per alias in `DATABASES[alias]["OPTIONS"]`; acquire
    timeout raises `django.db.OperationalError`. Sizing defaults are fixed and benchmarked in the
    ADR-0004 implementation issue.
+   *Amended 2026-11-24 (#2, PR #46) - implementation note:* the PostgreSQL driver reuses
+   `DATABASES[alias]["OPTIONS"]["pool"]` (`psycopg_pool` keyword arguments: `min_size`, `max_size`,
+   `timeout`, `max_lifetime`, ...; `True` means defaults). Provisional defaults are `min_size=1`,
+   `max_size=10` until the ADR-0004 implementation benchmark. Side effect: Django's own sync
+   backend reads the same key and would also enable its sync pool for that alias (`CONN_MAX_AGE`
+   must then stay 0, otherwise Django raises `ImproperlyConfigured`). Keys that do not fit an
+   async pool are rejected with `ImproperlyConfigured`: `name`, `reconnect_failed`, `close_returns`, `open`, `kwargs`, `conninfo`, any callable
+   value (`check`, `reset`, `configure`, `connection_class`, ...) and `OPTIONS["cursor_factory"]`.
 9. **Sync code in the same request.** Sync receivers called directly from our coroutines raise
    `SynchronousOnlyOperation`. Code run in a thread (`Signal.asend` sync receivers, user
    `sync_to_async`) uses Django's own sync connection: it is not part of the `async_atomic`

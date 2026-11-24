@@ -22,6 +22,22 @@ from asyncopation._django.postgresql import adapters_template
 # ADR-0004 implementation issue benchmarks pool sizing.
 DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 
+# Pool keys that only make sense for Django's own sync pool or that the driver manages itself.
+# `close_returns` would make a discarded connection go back to the pool (and putconn then runs
+# twice); `open`, `kwargs` and `conninfo` are passed by the driver.
+_REJECTED_POOL_KEYS = (
+    "name",
+    "check",
+    "reset",
+    "configure",
+    "connection_class",
+    "reconnect_failed",
+    "close_returns",
+    "open",
+    "kwargs",
+    "conninfo",
+)
+
 _MAX_NAME_LENGTH = 63  # PostgreSQL identifier limit, Django's ops.max_name_length()
 
 
@@ -55,8 +71,18 @@ def resolve_timezone(
 def build_config(
     alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
 ) -> PostgresConfig:
-    """Port of ``get_connection_params`` with async cursor classes (see module docstring)."""
-    # Changes: OPTIONS is copied instead of mutated; cursor classes are the async psycopg ones.
+    """Resolve a ``DATABASES`` entry (see the module docstring); raises ``ImproperlyConfigured``."""
+    # Ported from django/db/backends/postgresql/base.py::get_connection_params and
+    # django/db/backends/base/base.py::check_settings @ 6.1.3
+    # Changes: OPTIONS is copied, not mutated; cursor classes are the async psycopg ones; the pool
+    # reuses OPTIONS["pool"] for psycopg_pool's AsyncConnectionPool (validated below); autocommit
+    # is always on (the driver leaves it only inside begin()); the isolation level is parsed here
+    # instead of in get_new_connection; Django's CONN_MAX_AGE-vs-pool check is omitted (the
+    # driver pools connections itself and never closes them on request end).
+    if settings_dict.get("TIME_ZONE") is not None and not use_tz:
+        raise ImproperlyConfigured(
+            f"Connection '{alias}' cannot set TIME_ZONE because USE_TZ is False."
+        )
     if settings_dict["NAME"] == "" and not settings_dict.get("OPTIONS", {}).get("service"):
         raise ImproperlyConfigured(
             "settings.DATABASES is improperly configured. Please supply the NAME or "
@@ -69,6 +95,11 @@ def build_config(
             "Supply a shorter NAME in settings.DATABASES."
         )
     options = dict(settings_dict.get("OPTIONS") or {})
+    if "cursor_factory" in options:
+        raise ImproperlyConfigured(
+            "OPTIONS['cursor_factory'] is a sync psycopg cursor class; the async driver chooses "
+            "its cursors itself (use OPTIONS['server_side_binding'] to switch binding)."
+        )
     if settings_dict["NAME"]:
         conn_params: dict[str, Any] = {"dbname": settings_dict["NAME"], **options}
     elif settings_dict["NAME"] is None:
@@ -116,6 +147,15 @@ def build_config(
 
     pool_kwargs = dict(DEFAULT_POOL_OPTIONS)
     if isinstance(pool_option, dict):
+        rejected = sorted(
+            {*pool_option} & {*_REJECTED_POOL_KEYS}
+            | {k for k, v in pool_option.items() if callable(v)}
+        )
+        if rejected:
+            raise ImproperlyConfigured(
+                f"OPTIONS['pool'] keys {rejected} cannot be used with the async pool "
+                "(they are sync callables or managed by the driver)."
+            )
         pool_kwargs.update(pool_option)
     # psycopg_pool: max_size None means "min_size"; never let a custom min_size exceed the default.
     if pool_kwargs.get("max_size") is not None:

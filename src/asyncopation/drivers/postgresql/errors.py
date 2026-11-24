@@ -10,8 +10,10 @@ import psycopg_pool
 
 from asyncopation.drivers.errors import wrap_database_errors
 
-# SQLSTATE class 08 (connection exception) and admin/crash shutdown (57P01-57P03).
-_DISCONNECT_SQLSTATES = frozenset({"57P01", "57P02", "57P03"})
+# SQLSTATE 08xxx (connection exception) is handled by class; these are the server-side session
+# terminations with their own class: admin/crash shutdown, dropped database, idle session timeout
+# and idle-in-transaction timeout. Any error the server flags FATAL ends the session as well.
+_DISCONNECT_SQLSTATES = frozenset({"57P01", "57P02", "57P03", "57P04", "57P05", "25P03"})
 _POOL_ERRORS = (psycopg_pool.PoolTimeout, psycopg_pool.PoolClosed, psycopg_pool.TooManyRequests)
 
 
@@ -25,8 +27,12 @@ def translate_errors() -> Generator[None]:
 def is_disconnect(exc: BaseException) -> bool:
     """True when ``exc`` (raw psycopg, or its mapped Django form) means the connection is gone."""
     raw = exc if isinstance(exc, psycopg.Error) else exc.__cause__
-    if not isinstance(raw, psycopg.OperationalError) or isinstance(raw, _POOL_ERRORS):
+    if not isinstance(raw, psycopg.Error) or isinstance(raw, _POOL_ERRORS):
         return False
     sqlstate = raw.sqlstate
-    # No SQLSTATE: the failure happened client side (connection closed / lost mid-protocol).
-    return sqlstate is None or sqlstate.startswith("08") or sqlstate in _DISCONNECT_SQLSTATES
+    if isinstance(raw, psycopg.OperationalError) and (
+        sqlstate is None or sqlstate.startswith("08")
+    ):
+        # No SQLSTATE: the failure happened client side (connection closed / lost mid-protocol).
+        return True
+    return sqlstate in _DISCONNECT_SQLSTATES or raw.diag.severity_nonlocalized == "FATAL"

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-24
+- Amended: 2026-11-24 (#2, PR #46) - Decision 2: capabilities and `server_version` come from the driver (see Implementation note)
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 
@@ -64,6 +65,20 @@ Prior art:
 - Two open paths (explicit and lazy) must stay identical. - Per-loop entries can leak pools if a
 loop is discarded without `close()`; tests assert the registry is empty after teardown.
 - Users must add `asyncopation` to `INSTALLED_APPS` and wrap their ASGI app.
+
+## Implementation note
+*Amended 2026-11-24 (#2, PR #46).*
+- **Capabilities ownership.** The driver's `open()` connects once directly, reads `server_version`
+  from that connection's startup parameters (no query) and builds the frozen `Capabilities`;
+  `driver.capabilities` is the single owner of runtime facts. The Decision 2 probe (#3, once per
+  alias) takes `server_version` / `pg_version` from `driver.capabilities` only (one source of truth, no
+  second query); the registry builds the
+  alias-level server info from it.
+- **`CONN_HEALTH_CHECKS`.** When true, the PostgreSQL driver passes `psycopg_pool`'s
+  `check_connection`, which costs one extra round trip per borrow; same meaning as Django's pool.
+- **Fail-fast open.** The direct connection in `open()` happens before the pool is created, so bad
+  credentials or `assume_role` errors surface immediately with Django's exception and leave no
+  pool behind.
 
 ## Validation
 - integration: no `SynchronousOnlyOperation` and no sync connection opened during `as_sql()` after

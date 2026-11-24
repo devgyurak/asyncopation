@@ -12,5 +12,10 @@ paths:
   driver behaviour differences, anything that deviates from the plan.
 - ADR status flow: Proposed -> Accepted -> (Superseded by NNNN). Code that depends on a
   Proposed ADR must not be merged.
+- **Amending an ADR.** An ADR may be amended in place (status stays Accepted) when the decision's
+  direction is unchanged and only detail or scope is refined: add a header line
+  `- Amended: <date> (<issue/PR>) - <what>` and mark the changed text (e.g. an italic
+  "*Amended <date> ...*" note or an "Implementation note" section). A change of direction or a
+  reversed trade-off needs a new ADR that supersedes the old one.
 - Roadmap progress is tracked by ticking checklists in `docs/design/plan.md` (and its
   translations - see the language rule).

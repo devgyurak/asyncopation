@@ -6,6 +6,7 @@ import pytest
 from tests.support.drivers import (
     POSTGRES_ONLY,
     TzCase,
+    compare_session_value,
     isolation_in_transaction,
     open_driver,
     prepared_probe_count,
@@ -17,22 +18,30 @@ from tests.support.drivers import (
 
 pytestmark = POSTGRES_ONLY
 
+SERIALIZABLE_DEFAULT = {"options": "-c default_transaction_isolation=serializable"}
+
 
 @pytest.mark.parametrize(
     "case",
     [
         pytest.param(TzCase(True, None, "UTC"), id="utc"),
+        pytest.param(TzCase(True, None, "Asia/Seoul"), id="settings-seoul-ignored"),
         pytest.param(TzCase(True, "Asia/Seoul", "UTC"), id="db-seoul"),
         pytest.param(TzCase(False, None, "Asia/Seoul"), id="no-tz-seoul"),
     ],
 )
-async def test_session_time_zone_is_connection_time_zone(django_db_setup, case):
-    # given
-    async with open_driver(case=case) as driver, driver.connection() as conn:
-        # when
-        zone = await session_setting(conn, "TimeZone")
+async def test_session_time_zone_matches_sync_backend(readonly_db, binding, case):
+    # when
+    result = await compare_session_value(case, binding.options, "SHOW TimeZone")
     # then
-    assert zone == case.time_zone
+    assert result.async_value == result.sync_value
+
+
+async def test_session_time_zone_ignores_settings_zone_when_use_tz_is_on(readonly_db):
+    # when
+    result = await compare_session_value(TzCase(True, None, "Asia/Seoul"), None, "SHOW TimeZone")
+    # then
+    assert result.async_value == "UTC"
 
 
 async def test_client_encoding_option_is_forced_to_utf8(django_db_setup):
@@ -47,38 +56,75 @@ async def test_client_encoding_option_is_forced_to_utf8(django_db_setup):
     assert encoding == "UTF8"
 
 
-async def test_assume_role_option_sets_current_user(django_db_setup):
+async def test_assume_role_option_matches_sync_backend(readonly_db, binding):
     # given
-    async with (
-        temporary_role("asyncopation_test_role") as role,
-        open_driver(options={"assume_role": role}) as driver,
-        driver.connection() as conn,
-    ):
+    async with temporary_role("asyncopation_test_role") as role:
+        options = {**binding.options, "assume_role": role}
         # when
-        rows = await conn.fetch_all("SELECT current_user", None)
+        result = await compare_session_value(
+            TzCase(True, None, "UTC"), options, "SELECT current_user"
+        )
     # then
-    assert rows == [("asyncopation_test_role",)]
+    assert result.async_value == result.sync_value == "asyncopation_test_role"
 
 
-async def test_isolation_level_option_applies_to_transactions(django_db_setup):
+@pytest.mark.parametrize(
+    "isolation",
+    [
+        pytest.param(psycopg.IsolationLevel.SERIALIZABLE, id="serializable"),
+        pytest.param(psycopg.IsolationLevel.REPEATABLE_READ, id="repeatable-read"),
+        pytest.param(psycopg.IsolationLevel.READ_COMMITTED, id="read-committed"),
+    ],
+)
+async def test_isolation_level_option_matches_sync_backend(readonly_db, binding, isolation):
     # given
-    options = {"isolation_level": psycopg.IsolationLevel.SERIALIZABLE}
-    async with open_driver(options=options) as driver, driver.connection() as conn:
-        await conn.begin()
-        # when
-        level = await session_setting(conn, "transaction_isolation")
-        await conn.rollback()
+    options = {**binding.options, "isolation_level": isolation}
+    # when
+    result = await compare_session_value(
+        TzCase(True, None, "UTC"), options, "SHOW transaction_isolation", transactional=True
+    )
     # then
-    assert level == "serializable"
+    assert result.async_value == result.sync_value
 
 
-async def test_default_isolation_level_is_read_committed(django_db_setup, driver):
+async def test_default_isolation_level_matches_sync_backend(readonly_db, binding):
+    # when
+    result = await compare_session_value(
+        TzCase(True, None, "UTC"),
+        binding.options,
+        "SHOW transaction_isolation",
+        transactional=True,
+    )
+    # then
+    assert result.async_value == result.sync_value == "read committed"
+
+
+async def test_server_default_isolation_applies_without_isolation_level_option(readonly_db):
+    # when
+    result = await compare_session_value(
+        TzCase(True, None, "UTC"),
+        SERIALIZABLE_DEFAULT,
+        "SHOW transaction_isolation",
+        transactional=True,
+    )
+    # then
+    assert result.async_value == result.sync_value == "serializable"
+
+
+async def test_isolation_level_option_overrides_the_server_default(django_db_setup):
     # given
-    async with driver.connection() as conn:
-        await conn.begin()
-        # when
-        level = await session_setting(conn, "transaction_isolation")
-        await conn.rollback()
+    options = {**SERIALIZABLE_DEFAULT, "isolation_level": psycopg.IsolationLevel.REPEATABLE_READ}
+    # when
+    level = await isolation_in_transaction(options)
+    # then
+    assert level == "repeatable read"
+
+
+async def test_explicit_read_committed_overrides_a_stricter_server_default(django_db_setup):
+    # given
+    options = {**SERIALIZABLE_DEFAULT, "isolation_level": psycopg.IsolationLevel.READ_COMMITTED}
+    # when
+    level = await isolation_in_transaction(options)
     # then
     assert level == "read committed"
 
@@ -112,36 +158,3 @@ async def test_default_prepare_threshold_does_not_prepare_on_first_use(django_db
         prepared = await prepared_probe_count(conn)
     # then
     assert prepared == 0
-
-
-async def test_server_default_isolation_applies_without_isolation_level_option(django_db_setup):
-    # given
-    options = {"options": "-c default_transaction_isolation=serializable"}
-    # when
-    level = await isolation_in_transaction(options)
-    # then
-    assert level == "serializable"
-
-
-async def test_isolation_level_option_overrides_the_server_default(django_db_setup):
-    # given
-    options = {
-        "options": "-c default_transaction_isolation=serializable",
-        "isolation_level": psycopg.IsolationLevel.REPEATABLE_READ,
-    }
-    # when
-    level = await isolation_in_transaction(options)
-    # then
-    assert level == "repeatable read"
-
-
-async def test_explicit_read_committed_overrides_a_stricter_server_default(django_db_setup):
-    # given
-    options = {
-        "options": "-c default_transaction_isolation=serializable",
-        "isolation_level": psycopg.IsolationLevel.READ_COMMITTED,
-    }
-    # when
-    level = await isolation_in_transaction(options)
-    # then
-    assert level == "read committed"

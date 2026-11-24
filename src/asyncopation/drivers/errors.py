@@ -6,6 +6,7 @@ is imported here.
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Generator
 from contextlib import contextmanager
 from types import ModuleType
@@ -40,11 +41,20 @@ _DJANGO_ERRORS: tuple[type[Error], ...] = (
 )
 
 
+@functools.cache
+def django_error_pairs(dbapi: ModuleType) -> tuple[tuple[type[Error], type[BaseException]], ...]:
+    """``(django class, driver class)`` pairs in Django's order, computed once per DB-API module."""
+    return tuple(
+        (dj_exc_type, db_exc_type)
+        for dj_exc_type in _DJANGO_ERRORS
+        if (db_exc_type := getattr(dbapi, dj_exc_type.__name__, None)) is not None
+    )
+
+
 def map_exception(exc: BaseException, dbapi: ModuleType) -> Error | None:
     """The ``django.db`` exception for a driver exception, or ``None`` if it is not one."""
-    for dj_exc_type in _DJANGO_ERRORS:
-        db_exc_type = getattr(dbapi, dj_exc_type.__name__, None)
-        if db_exc_type is not None and isinstance(exc, db_exc_type):
+    for dj_exc_type, db_exc_type in django_error_pairs(dbapi):
+        if isinstance(exc, db_exc_type):
             return dj_exc_type(*exc.args)
     return None
 

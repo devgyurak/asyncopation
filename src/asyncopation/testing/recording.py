@@ -70,12 +70,7 @@ class RecordingConnection:
         self._check()
         item = self._driver._take("stream", sql, params)
         rows = (item.rows or []) if isinstance(item, ExecResult) else item
-        yield self._guarded_chunks(rows, chunk)
-
-    async def _guarded_chunks(self, rows: list[Row], size: int) -> AsyncIterator[list[Row]]:
-        for start in range(0, len(rows), size):
-            self._check()  # an iterator kept after the borrow ends must not keep working
-            yield rows[start : start + size]
+        yield _GuardedChunks(self, rows, chunk)
 
     async def begin(self) -> None:
         self._check()
@@ -185,3 +180,24 @@ def _frozen(params: Any) -> Any:
     if isinstance(params, list):
         return list(params)
     return params
+
+
+class _GuardedChunks:
+    """Chunk iterator of a recorded stream; unusable once its connection's borrow has ended."""
+
+    def __init__(self, connection: RecordingConnection, rows: list[Row], size: int) -> None:
+        self._connection = connection
+        self._rows = rows
+        self._size = size
+        self._position = 0
+
+    def __aiter__(self) -> _GuardedChunks:
+        return self
+
+    async def __anext__(self) -> list[Row]:
+        self._connection._check()  # even an exhausted iterator reports a released connection
+        if self._position >= len(self._rows):
+            raise StopAsyncIteration
+        chunk = self._rows[self._position : self._position + self._size]
+        self._position += self._size
+        return chunk

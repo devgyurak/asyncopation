@@ -111,6 +111,7 @@ class PostgresConnection:
         self, sql: str, params: Params, chunk: int
     ) -> AsyncGenerator[AsyncIterator[list[Row]]]:
         cursor = None
+        failed = False
         try:
             try:
                 cursor = self._stream_cursor()
@@ -128,9 +129,12 @@ class PostgresConnection:
                 # unknown: never hand this connection back (ADR-0001 6b).
                 await self._discard()
                 raise
+        except BaseException:
+            failed = True  # an error from the statement or the body wins over a failing CLOSE
+            raise
         finally:
             if cursor is not None:
-                await self._close_cursor(cursor)
+                await self._close_cursor(cursor, quiet=failed)
 
     async def _chunks(self, cursor: Any, chunk: int) -> AsyncIterator[list[Row]]:
         while True:
@@ -163,10 +167,19 @@ class PostgresConnection:
             return self._raw.cursor(name, scrollable=False, withhold=withhold)
         return AsyncClientServerCursor(self._raw, name=name, scrollable=False, withhold=withhold)
 
-    async def _close_cursor(self, cursor: Any) -> None:
-        if self._raw is _RELEASED:  # reset() already closed it; never touch the next borrower
+    async def _close_cursor(self, cursor: Any, *, quiet: bool = False) -> None:
+        """CLOSE a stream cursor when its stream ends.
+
+        A CLOSE that fails inside a transaction is an error the caller must see (Django's
+        ``ServerSideCursor.close()`` raises it): e.g. the cursor vanished with a savepoint
+        rollback. ``quiet`` (an earlier error is already propagating) only marks it closed. In
+        autocommit the error is swallowed and the cursor stays tracked: ``reset()`` retries.
+        """
+        raw = self._raw
+        if raw is _RELEASED:  # reset() already closed it; never touch the next borrower
             return
-        if self._raw.pgconn.transaction_status == _INERROR:
+        status = raw.pgconn.transaction_status
+        if status == _INERROR:
             # psycopg silently skips the CLOSE in a failed transaction and still marks the cursor
             # closed. A held (autocommit) cursor survives the rollback and needs the real CLOSE
             # later: keep it tracked, reset() closes it after the rollback. An ordinary cursor
@@ -175,13 +188,20 @@ class PostgresConnection:
                 await cursor.close()
                 self._forget(cursor)
             return
+        idle_autocommit = raw.autocommit and status == _IDLE
         try:
             await cursor.close()
         except asyncio.CancelledError:
             await self._discard()  # CLOSE may not have run: a held cursor must not reach the pool
             raise
-        except psycopg.Error:
-            return  # stays tracked: reset() retries after the rollback
+        except psycopg.Error as exc:
+            if idle_autocommit:
+                return  # stays tracked: reset() retries
+            await _mark_closed(cursor)
+            self._forget(cursor)
+            if not quiet:
+                await self._fail(exc)
+            return
         self._forget(cursor)
 
     def _forget(self, cursor: Any) -> None:
@@ -305,9 +325,8 @@ class PostgresConnection:
                     try:
                         await cursor.close()
                     except psycopg.errors.InvalidCursorName:
-                        # A held cursor declared inside a raw BEGIN died with the rollback: only
-                        # the client object is left to mark closed (psycopg's base-class close).
-                        await super(psycopg.AsyncServerCursor, cursor).close()
+                        # A held cursor declared inside a raw BEGIN died with the rollback.
+                        await _mark_closed(cursor)
         except Exception:
             # The body's outcome (including a CancelledError) must win over a failed cleanup.
             await self._discard()
@@ -344,3 +363,9 @@ def _has_result(cursor: Any) -> bool:
     # Same test as psycopg's `description`: columns, or a tuples result with zero columns
     # (`SELECT`), which Django's sync cursor returns as `[()]`.
     return result is not None and bool(result.nfields or result.status in _TUPLE_STATUSES)
+
+
+async def _mark_closed(cursor: Any) -> None:
+    """Mark a server cursor closed on the client only (psycopg's base-class ``close``)."""
+    with suppress(Exception):
+        await super(psycopg.AsyncServerCursor, cursor).close()

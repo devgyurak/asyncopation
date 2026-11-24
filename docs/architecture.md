@@ -78,14 +78,14 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named
   cursors are `scrollable=False` and `withhold` outside transactions. The SQL shape difference
   stays in the compile-only wrapper's `features.uses_server_side_binding`.
-- **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores `CONN_MAX_AGE`. Other types, unknown keys, any callable value, `close_returns=True` and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself) are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still rejected by name. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin `ValueError` is raised from `open()` before any connection is made (an explicit exception to ADR-0003 Decision 4, which covers database errors; this is a configuration error). Side effect: Django's own sync backend reads the same key and would
+- **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores `CONN_MAX_AGE`. Other types, unknown keys, any callable value (except `connection_class`, see below), `close_returns` unless it is exactly `False`, and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself) are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still rejected by name. `min_size` and `max_size` must be integers (`max_size` may be `None`); `timeout`, `max_waiting`, `max_lifetime`, `max_idle`, `reconnect_timeout` and `num_workers` must be numbers; `connection_class` is allowed only as a subclass of `psycopg.AsyncConnection` (or left unset) (it is not rejected as a callable); an explicit `check=None` switches the `CONN_HEALTH_CHECKS` check off. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin `ValueError` is raised from `open()` before any connection is made (an explicit exception to ADR-0003 Decision 4, which covers database errors; this is a configuration error). Side effect: Django's own sync backend reads the same key and would
   also enable *its* sync pool for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django
   raises `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes
   `psycopg_pool`'s `check_connection` (one extra round trip per borrow, as in Django's pool).
 - **Open fails fast.** `open()` first connects once directly, so bad credentials or a failing
   `assume_role` raise the same Django exception as the sync backend and leave no pool behind;
-  only then is the pool opened (the pool object is constructed first, without opening, only to
-  validate its sizes).
+  only then is the pool opened (the pool object is built earlier, without I/O, only to validate
+  its sizes).
 - **Capabilities** (PostgreSQL): the driver owns them. The direct connection of `open()` provides
   `server_version` from its startup parameters (no query) and the driver builds the frozen
   `Capabilities`; `driver.capabilities` is the single owner of runtime facts and is available
@@ -102,7 +102,10 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   unknown). Inside a transaction (autocommit off) or while a stream is open the connection is
   **discarded**: a held cursor survives a rollback, and a silent rollback would continue in a new
   implicit transaction. A stream still open when the borrow ends is `CLOSE`d on release (the
-  connection is discarded if `CLOSE` fails). A disconnected connection is closed so the pool
+  connection is discarded if `CLOSE` fails). A `CLOSE` that fails when a stream ends inside a
+  transaction (e.g. its cursor vanished with a savepoint rollback) raises the mapped `django.db`
+  error, like Django's `ServerSideCursor.close()`, unless an earlier error is already
+  propagating; in autocommit it is swallowed and release retries it. A disconnected connection is closed so the pool
   replaces it. A released connection wrapper, and any stream iterator it handed out, raise
   `InterfaceError` when used afterwards.
 - `connection_created` is **not** sent for driver connections; hstore/citext registration is

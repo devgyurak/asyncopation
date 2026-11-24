@@ -3,6 +3,7 @@
 from collections import OrderedDict
 from types import MappingProxyType
 
+import psycopg
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
@@ -17,7 +18,11 @@ from tests.support.drivers import (
 
 
 class NoopClass:
-    """A class is callable too: connection_class style values."""
+    """A class is callable too, but not a connection class."""
+
+
+class SubclassedConnection(psycopg.AsyncConnection):
+    """A legitimate `connection_class`."""
 
 
 @pytest.mark.parametrize(
@@ -49,10 +54,7 @@ def test_pool_option_of_any_other_type_is_rejected(pool):
     assert isinstance(error, ImproperlyConfigured)
 
 
-@pytest.mark.parametrize(
-    "key",
-    ["check", "reset", "configure", "connection_class", "reconnect_failed"],
-)
+@pytest.mark.parametrize("key", ["check", "reset", "configure", "reconnect_failed"])
 @pytest.mark.parametrize("value", [noop_hook, NoopClass], ids=["function", "class"])
 def test_callable_pool_values_are_rejected(key, value):
     # when
@@ -61,9 +63,14 @@ def test_callable_pool_values_are_rejected(key, value):
     assert isinstance(error, ImproperlyConfigured)
 
 
-def test_close_returns_true_is_rejected():
+@pytest.mark.parametrize(
+    "value",
+    [True, 1, "yes", "false"],
+    ids=["true", "one", "yes", "false-string"],
+)
+def test_close_returns_other_than_false_is_rejected(value):
     # when
-    error = config_error({"pool": {"close_returns": True}})
+    error = config_error({"pool": {"close_returns": value}})
     # then
     assert isinstance(error, ImproperlyConfigured)
 
@@ -155,7 +162,7 @@ def test_explicit_check_none_is_respected_with_health_checks_on():
     assert kwargs.get("check") is None
 
 
-def test_health_checks_provide_the_check_when_none_is_given_explicitly_absent():
+def test_health_checks_add_the_check_when_none_is_configured():
     # when
     kwargs = pool_kwargs_for({"CONN_HEALTH_CHECKS": True}, {"timeout": 5})
     # then
@@ -220,5 +227,68 @@ def test_pool_sizes_of_the_wrong_type_are_rejected(pool):
 def test_integer_pool_sizes_and_unset_max_size_are_accepted(pool):
     # when
     error = config_error({"pool": pool})
+    # then
+    assert error is None
+
+
+NUMERIC_OPTIONS = [
+    "timeout",
+    "max_waiting",
+    "max_lifetime",
+    "max_idle",
+    "reconnect_timeout",
+    "num_workers",
+]
+
+
+@pytest.mark.parametrize("option", NUMERIC_OPTIONS)
+@pytest.mark.parametrize(
+    "value",
+    ["5", True, [1], None],
+    ids=["str", "bool", "list", "none"],
+)
+def test_numeric_pool_options_of_the_wrong_type_are_rejected(option, value):
+    # when
+    error = config_error({"pool": {option: value}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize("option", NUMERIC_OPTIONS)
+@pytest.mark.parametrize("value", [5, 2.5], ids=["int", "float"])
+def test_numeric_pool_options_accept_ints_and_floats(option, value):
+    # when
+    error = config_error({"pool": {option: value}})
+    # then
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    "connection_class",
+    [
+        pytest.param(psycopg.Connection, id="sync-connection"),
+        pytest.param(noop_hook, id="function"),
+        pytest.param(NoopClass, id="unrelated-class"),
+        pytest.param("psycopg.AsyncConnection", id="dotted-string"),
+    ],
+)
+def test_pool_connection_class_must_be_an_async_connection_subclass(connection_class):
+    # when
+    error = config_error({"pool": {"connection_class": connection_class}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(
+    "connection_class",
+    [
+        pytest.param(psycopg.AsyncConnection, id="async-connection"),
+        pytest.param(SubclassedConnection, id="subclass"),
+        pytest.param(None, id="none"),
+    ],
+)
+def test_pool_connection_class_accepts_async_connection_subclasses(connection_class):
+    # when
+    error = config_error({"pool": {"connection_class": connection_class}})
     # then
     assert error is None

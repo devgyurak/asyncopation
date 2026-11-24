@@ -2,9 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-11-24
-- Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 Django's connections are thread-local (plan §1.3). Asyncopation replaces them with
@@ -81,12 +81,18 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`,
    `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a
    deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores
-   `CONN_MAX_AGE`. Other types, unknown keys, any callable value, `close_returns=True` and the
-   keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself)
-   are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is
-   still rejected by name. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin
-   `ValueError` is raised from `open()` before any connection is made (an explicit exception to
-   ADR-0003 Decision 4, which covers database errors; this is a configuration error).
+   `CONN_MAX_AGE`. Other types, unknown keys, any callable value (except `connection_class`, see
+   below), `close_returns` unless it is exactly `False`, and the keys `name`, `configure`,
+   `kwargs`, `conninfo` and `open` (the driver passes those itself) are rejected with
+   `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still rejected by
+   name. `min_size` and `max_size` must be integers (`max_size` may be `None`); `timeout`,
+   `max_waiting`, `max_lifetime`, `max_idle`, `reconnect_timeout` and `num_workers` must be
+   numbers; `connection_class` is allowed only as a subclass of `psycopg.AsyncConnection` (or left unset) (it is
+   not rejected as a callable); an explicit `check=None` switches the `CONN_HEALTH_CHECKS` check
+   off. A size the user gives is never corrected (a missing `max_size` defaults to `max(10,
+   min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin `ValueError`
+   is raised from `open()` before any connection is made (an explicit exception to ADR-0003
+   Decision 4, which covers database errors; this is a configuration error).
    Side effect: Django's own sync backend reads the same key and would also enable its sync pool
    for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django raises
    `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes `psycopg_pool`'s

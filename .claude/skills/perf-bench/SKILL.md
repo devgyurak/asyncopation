@@ -20,16 +20,21 @@ named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
   rowcount), `tx` (`begin` / statement / `commit`), `stream` (200 rows in chunks of 50);
 - impls: `raw` (`pool.connection()` + cursor on a pool built from the driver's own
   configuration: the baseline), `getconn` (raw `getconn` / `putconn`, the cheapest baseline,
-  `select1` only), `driver` (`driver.connection()` + the driver API);
+  present in every group), `driver` (`driver.connection()` + the driver API);
 - flags (see `uv run python -m bench.micro --help`): `--driver-seconds` (seconds per
   `driver.*` round, default 1.0), `--driver-rounds` (interleaved rounds, default 7), `--only`
   (comma-separated case names with the first dot-separated part removed, e.g.
   `--only select1.driver.t8`; the same filter as for the other cases);
+- no-I/O cases `driver.noio.<impl>.t<N>` (impls `getconn` and `driver`, fake pool and cursor
+  objects) isolate the driver's own per-operation overhead; the report adds a
+  `driver - getconn (us)` column. Every group now has a `getconn` impl (`getconn` / `putconn`
+  based baseline);
 - output columns: `CPU us/op` (client CPU per operation, the stable metric), `paired ratio
   (IQR)` (per-round paired ratio vs the baseline, median and inter-quartile range over the
   rounds) and `load` (min-max 1-minute load average over the rounds; the baselines of a selected
   case are always run too, so its ratio can be computed). Compare ratios, not absolute times, and rerun when
-  the load is high.
+  the load is high. Real-DB ratios within about +-5% are noise; the driver's per-operation
+  overhead is about 1 us (driver minus `getconn` CPU) - see the no-I/O cases.
 
 ## Load (k6, minutes)
 ```bash

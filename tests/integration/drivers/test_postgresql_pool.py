@@ -14,6 +14,7 @@ from tests.support.drivers import (
     cancel_during_sleep,
     cancel_waiting_borrower,
     concurrent_backend_pids,
+    connect_calls_during_open,
     raw_error_in_stream_body,
     release_and_cancel_waiter_together,
     released_connection_error,
@@ -259,3 +260,12 @@ async def test_without_health_checks_the_discarded_connection_is_replaced_for_th
     outcome = await borrow_after_idle_backend_killed(binding.options, health_checks=False)
     # then
     assert outcome.retry_rows == [(1,)]
+
+
+async def test_open_connects_with_the_configured_connection_class_for_probe_and_pool(
+    django_db_setup,
+):
+    # when
+    calls = await connect_calls_during_open()
+    # then
+    assert calls >= 2

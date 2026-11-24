@@ -70,7 +70,9 @@ QuerySet (Django, lazy)
 ```python
 class AsyncDriver(Protocol):  # one per backend; only module importing the driver lib
     @property
-    def capabilities(self) -> Capabilities: ...  # available once open() returned
+    def capabilities(
+        self,
+    ) -> Capabilities: ...  # available while open; RuntimeError before open() and after close()
 
     async def open(self) -> None: ...
     async def close(self) -> None: ...

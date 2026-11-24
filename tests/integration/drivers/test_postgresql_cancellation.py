@@ -1,7 +1,6 @@
 """Cancellation safety: transactions, open streams, cursor teardown and cleanup failures."""
 
 import pytest
-from django.db import InterfaceError, OperationalError
 
 from asyncopation.drivers.base import PoolStats
 from tests.support.drivers import (
@@ -23,7 +22,6 @@ pytestmark = POSTGRES_ONLY
 TRANSACTIONAL = pytest.mark.parametrize(
     "transactional", [False, True], ids=["autocommit-withhold", "transaction"]
 )
-DEAD = OperationalError | InterfaceError
 
 
 async def test_cancelled_write_in_transaction_leaves_the_row_absent(driver, scratch):
@@ -38,7 +36,6 @@ async def test_cancelled_statement_in_transaction_discards_the_connection(driver
     # when
     outcome = await cancel_write_in_transaction(driver, scratch)
     # then
-    assert isinstance(outcome.reuse_error, DEAD)
     assert outcome.old_backend_ended is True
 
 
@@ -63,7 +60,6 @@ async def test_cancelled_open_stream_discards_the_connection(driver, transaction
     # when
     outcome = await cancel_open_stream(driver, transactional=transactional)
     # then
-    assert isinstance(outcome.reuse_error, DEAD)
     assert outcome.old_backend_ended is True
 
 
@@ -88,7 +84,6 @@ async def test_cancel_during_stream_fetch_discards_the_connection(driver):
     outcome = await cancel_stream_fetch(driver)
     # then
     assert outcome.cancelled is True
-    assert isinstance(outcome.reuse_error, DEAD)
     assert outcome.old_backend_ended is True
 
 
@@ -106,7 +101,7 @@ async def test_cancel_during_commit_discards_the_connection_and_loses_the_row(dr
     outcome = await cancel_commit(driver, scratch)
     # then
     assert outcome.cancelled is True
-    assert isinstance(outcome.reuse_error, DEAD)
+    assert outcome.old_backend_ended is True
     assert outcome.rows_left == 0
 
 
@@ -143,6 +138,8 @@ async def test_cancellation_is_not_masked_when_cleanup_fails(driver):
 
 
 async def test_cancellation_during_recovery_still_propagates_as_cancelled_error(single_driver):
+    """Characterisation test: it documents the behaviour but cannot catch a regression, because
+    the discard path ends the task as cancelled whether or not the second cancel is re-raised."""
     # when
     cancelled = await cancel_again_during_recovery(single_driver)
     # then

@@ -15,6 +15,7 @@ from tests.support.drivers import (
     POSTGRES_ONLY,
     acquire_while_saturated,
     consume_failing_stream,
+    error_name,
     fail_in_transaction_then_rollback,
     failed_commit_aftermath,
     idle_timeout_then_query,
@@ -23,6 +24,7 @@ from tests.support.drivers import (
     savepoint_after_integrity_error,
     scratch_names,
     stream_error_after_kill,
+    sync_idle_timeout_error_name,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -150,11 +152,14 @@ async def test_pool_replaces_connection_killed_during_transaction(elastic_driver
     assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
 
 
-async def test_fatal_idle_timeout_raises_internal_error_like_the_sync_backend(idle_timeout_driver):
+async def test_fatal_idle_timeout_raises_internal_error_like_the_sync_backend(
+    readonly_db, idle_timeout_driver
+):
     # when
     outcome = await idle_timeout_then_query(idle_timeout_driver)
+    sync_name = await sync_idle_timeout_error_name()
     # then
-    # SQLSTATE 25P03 is class 25 (invalid transaction state): psycopg InternalError, as in Django.
+    assert error_name(outcome.error) == sync_name
     assert type(outcome.error) is InternalError
 
 

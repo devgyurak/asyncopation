@@ -28,8 +28,9 @@ DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 # (psycopg_pool would raise "multiple values for keyword argument"): `name` (the alias),
 # `configure` (the per-connection session setup), `kwargs` / `conninfo` (the connection settings)
 # and `open` (the pool is opened by `PostgresDriver.open()`). Every other key is validated by
-# VALUE: callables are sync hooks (or classes) that do not fit an async pool, and
-# `close_returns=True` would make a discarded connection go back to the pool.
+# VALUE: callables are sync hooks (or classes) that do not fit an async pool, `close_returns`
+# must be False (True would make a discarded connection go back to the pool), the numeric options
+# must be numbers and `connection_class` an `AsyncConnection` subclass.
 _DRIVER_OWNED_POOL_KEYS = frozenset({"name", "configure", "kwargs", "conninfo", "open"})
 _POOL_PARAMETERS = frozenset(inspect.signature(AsyncConnectionPool.__init__).parameters) - {"self"}
 
@@ -172,16 +173,12 @@ def _pool_kwargs(option: Any) -> dict[str, Any]:
     keys = {str(key) for key in option}
     unknown = sorted(keys - _POOL_PARAMETERS)
     owned = sorted(keys & _DRIVER_OWNED_POOL_KEYS)
-    by_value = sorted(
-        str(key)
-        for key, value in option.items()
-        if callable(value) or (key == "close_returns" and value is True)
-    )
+    by_value = sorted(str(key) for key, value in option.items() if _invalid_pool_value(key, value))
     if unknown or owned or by_value:
         problems = {
             "unknown keys": unknown,
             "keys the driver sets itself": owned,
-            "callables (hooks are managed by the driver) or close_returns=True": by_value,
+            "invalid values (callable hooks are managed by the driver; close_returns must be False; numbers; connection_class an AsyncConnection subclass)": by_value,
         }
         raise ImproperlyConfigured(
             "OPTIONS['pool'] cannot be used with the async pool: "
@@ -199,3 +196,21 @@ def _pool_kwargs(option: Any) -> dict[str, Any]:
     kwargs.setdefault("min_size", DEFAULT_POOL_OPTIONS["min_size"])
     kwargs.setdefault("max_size", max(DEFAULT_POOL_OPTIONS["max_size"], kwargs["min_size"] or 0))
     return kwargs
+
+
+_NUMERIC_POOL_OPTIONS = frozenset(
+    {"timeout", "max_waiting", "max_lifetime", "max_idle", "reconnect_timeout", "num_workers"}
+)
+
+
+def _invalid_pool_value(key: Any, value: Any) -> bool:
+    """Value rules for ``OPTIONS["pool"]`` (sizes are checked separately)."""
+    if key == "close_returns":
+        return value is not False  # True would return a discarded connection to the pool
+    if key == "connection_class":
+        return value is not None and not (
+            isinstance(value, type) and issubclass(value, psycopg.AsyncConnection)
+        )
+    if key in _NUMERIC_POOL_OPTIONS:
+        return isinstance(value, bool) or not isinstance(value, int | float)
+    return callable(value)  # sync hooks / classes do not fit an async pool

@@ -108,7 +108,10 @@ def main() -> None:
     parser.add_argument(
         "--only",
         default="",
-        help="comma separated case suffixes (aget,gather3,list20,raw.t1,asyncopation.t64,...)",
+        help=(
+            "comma separated case suffixes: aget,gather3,list20 or driver cases such as "
+            "select1.driver.t8 (the baselines of a selected driver case are added automatically)"
+        ),
     )
     parser.add_argument(
         "--driver-seconds", type=float, default=1.0, help="seconds per driver.* round"
@@ -172,12 +175,16 @@ def build_driver(only: set[str]) -> tuple[Any, Any] | None:
 
 def render(payload: dict[str, Any]) -> str:
     lines = [
-        "| case | status | p50 µs | p95 µs | p99 µs | ops/s | CPU µs/op | paired ratio (IQR) | load |",
-        "|---|---|---|---|---|---|---|---|---|",
+        "| case | status | p50 µs | p95 µs | p99 µs | ops/s | CPU µs/op | paired ratio (IQR) "
+        "| driver-getconn µs | load |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in payload["results"]:
         if row["status"] != "ok":
-            lines.append(f"| {row['case']} | skipped | - | - | - | - | - | - | - |")
+            note = row.get("error", "skipped")
+            lines.append(
+                f"| {row['case']} | {row['status']} | {note} | - | - | - | - | - | - | - |"
+            )
             continue
         cpu = f"{row['cpu_us']:.1f}" if "cpu_us" in row else "-"
         ratios = [
@@ -185,6 +192,7 @@ def render(payload: dict[str, Any]) -> str:
             for key in ("ratio_raw", "ratio_getconn")
             if key in row
         ]
+        diff = f"{row['diff_getconn_us']:+.2f}" if "diff_getconn_us" in row else "-"
         load = (
             f"{row['load_avg_1m_min']:.0f}-{row['load_avg_1m']:.0f}"
             if "load_avg_1m" in row
@@ -192,7 +200,7 @@ def render(payload: dict[str, Any]) -> str:
         )
         lines.append(
             f"| {row['case']} | ok | {row['p50_us']:.0f} | {row['p95_us']:.0f} | {row['p99_us']:.0f} "
-            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {load} |"
+            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {diff} | {load} |"
         )
     return "\n".join(lines)
 

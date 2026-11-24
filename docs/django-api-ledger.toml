@@ -67,7 +67,9 @@ signatures = { get_adapters_template = "(use_tz, timezone)" }
 # tests/unit/django_drift/test_postgresql_ports.py (connection params, cursor bases, timezone,
 # quoting, configuration errors), tests/unit/drivers/test_errors.py (error mapping order) and the
 # integration tests tests/integration/drivers/test_postgresql_session.py (session state, assume_role,
-# isolation) and test_postgresql_stream.py (server-side cursors) against a sync wrapper.
+# isolation) compare session values with a sync Django wrapper; test_postgresql_stream.py does NOT
+# run a sync comparison: it asserts the cursor declarations Django's ServerSideCursor produces
+# (non-scrollable, withhold only in autocommit) by reading pg_cursors.
 [[internal]]
 module = "django.db.utils"
 names = ["DatabaseErrorWrapper.__exit__"]

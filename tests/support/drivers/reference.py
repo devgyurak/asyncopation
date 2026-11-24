@@ -64,7 +64,9 @@ def normalise(rows: Iterable[Iterable[Any]]) -> list[Row]:
     return [tuple((type(v).__qualname__, _plain(v)) for v in row) for row in rows]
 
 
-def error_name(exc: BaseException) -> str:
+def error_name(exc: BaseException | None) -> str:
+    if exc is None:
+        return "no error"
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
@@ -132,9 +134,11 @@ async def sync_idle_timeout_error_name() -> str:
     from django.db.backends.postgresql.base import DatabaseWrapper
 
     options = {"options": "-c idle_in_transaction_session_timeout=300ms"}
-    wrapper = DatabaseWrapper(pg_settings(options=options), alias="drivers_reference")
+    holder: dict[str, Any] = {}
 
     def start() -> int:
+        wrapper = DatabaseWrapper(pg_settings(options=options), alias="drivers_reference")
+        holder["wrapper"] = wrapper  # created and used in the one sync worker thread
         wrapper.set_autocommit(False)
         with wrapper.cursor() as cursor:
             cursor.execute("SELECT pg_backend_pid()")
@@ -142,14 +146,14 @@ async def sync_idle_timeout_error_name() -> str:
 
     def use_again() -> str:
         try:
-            with wrapper.cursor() as cursor:
+            with holder["wrapper"].cursor() as cursor:
                 cursor.execute("SELECT 1")
         except Exception as exc:
             return error_name(exc)
         return "no error"
 
     def close() -> None:
-        wrapper.close()
+        holder["wrapper"].close()
 
     try:
         pid = await sync_to_async(start)()

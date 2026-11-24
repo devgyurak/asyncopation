@@ -9,6 +9,7 @@ import asyncio
 import contextlib
 import gc
 import uuid
+import warnings
 from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from tests.support.drivers.probes import (
     CursorRow,
     backend_pid,
     error_of_operation,
+    flatten,
     in_transaction,
     insert_named,
     open_cursors,
@@ -112,7 +114,6 @@ class Aftermath:
     """What is left after a task was cancelled while it held a connection."""
 
     cancelled: bool
-    reuse_error: BaseException | None
     old_backend_ended: bool
     fresh_cursors: list[CursorRow]
     after: PoolStats
@@ -136,16 +137,13 @@ async def cancel_and_inspect(
         await wait_until(lambda: started(held))
         task.cancel()
         await asyncio.wait([task])
-    error = await reuse_error(held["conn"])
     ended = await backend_ends(held["pid"])
     after = await settled_stats(driver, min_idle=1)  # the discarded connection is replaced
     async with driver.connection() as fresh:
         cursors = await open_cursors(fresh)
         fresh_pid = await backend_pid(fresh)
     rows_left = await scratch_count(table) if table else None
-    return Aftermath(
-        task.cancelled(), error, ended, cursors, after, held["pid"], fresh_pid, rows_left
-    )
+    return Aftermath(task.cancelled(), ended, cursors, after, held["pid"], fresh_pid, rows_left)
 
 
 async def cancel_open_stream(driver: Any, *, transactional: bool) -> Aftermath:
@@ -651,17 +649,26 @@ async def _open_stream(conn: AsyncDbConnection) -> tuple[Any, Any]:
     return stream, chunks
 
 
-async def release_with_open_stream(driver: Any, *, transactional: bool) -> list[CursorRow]:
-    """Leave the borrow with a stream still open; the cursors the next borrower's session sees."""
+@dataclass(frozen=True)
+class ReleaseWithStreamOutcome:
+    cursors: list[CursorRow]
+    pid_before: int
+    pid_after: int
+
+
+async def release_with_open_stream(driver: Any, *, transactional: bool) -> ReleaseWithStreamOutcome:
+    """Leave the borrow with a stream still open; what the next borrower's session sees."""
     async with driver.connection() as conn:
+        pid_before = await backend_pid(conn)
         if transactional:
             await conn.begin()
         stream, _ = await _open_stream(conn)
     async with driver.connection() as next_conn:
         cursors = await open_cursors(next_conn)
+        pid_after = await backend_pid(next_conn)
     with contextlib.suppress(Exception):
         await stream.__aexit__(None, None, None)
-    return cursors
+    return ReleaseWithStreamOutcome(cursors, pid_before, pid_after)
 
 
 @dataclass(frozen=True)
@@ -673,10 +680,13 @@ class StaleStreamOutcome:
     pid_after: int
 
 
-async def use_stale_stream(driver: Any, *, close: bool) -> StaleStreamOutcome:
+async def use_stale_stream(
+    driver: Any, *, close: bool, transactional: bool = True
+) -> StaleStreamOutcome:
     """Touch a stream of a finished borrow while borrower B has its own transaction open."""
     async with driver.connection() as a:
-        await a.begin()
+        if transactional:
+            await a.begin()
         stream, chunks = await _open_stream(a)
     stale_error: BaseException | None = None
     b_rows: list[Row] | None = None
@@ -894,13 +904,19 @@ async def recording_statements_snapshot(driver: Any) -> tuple[list[str], list[st
     return cleared, [s.kind for s in driver.statements]
 
 
-async def recording_stale_chunk_error(driver: Any) -> BaseException | None:
-    """`anext()` of a chunk iterator that outlived its borrow."""
-    driver.queue([(1,), (2,), (3,)])
+async def recording_stale_chunk_error(
+    driver: Any, rows: list[Row] | None = None, *, exhaust: bool = False
+) -> BaseException | None:
+    """`anext()` of a chunk iterator that outlived its borrow (empty / half read / exhausted)."""
+    driver.queue([(1,), (2,), (3,)] if rows is None else rows)
     async with driver.connection() as conn:
         stream = conn.stream("SELECT a", None, 1)
         chunks = await stream.__aenter__()
-        await anext(chunks)
+        if exhaust:
+            async for _ in chunks:
+                pass
+        elif rows is None:
+            await anext(chunks)
     try:
         await anext(chunks)
     except Exception as exc:
@@ -908,31 +924,38 @@ async def recording_stale_chunk_error(driver: Any) -> BaseException | None:
     return None
 
 
+def _resource_warnings(caught: list[warnings.WarningMessage]) -> int:
+    return sum(1 for w in caught if issubclass(w.category, ResourceWarning))
+
+
 @dataclass(frozen=True)
 class SavepointRecovery:
     error: BaseException | None
     second_rows: list[Row]
+    resource_warnings: int
 
 
 async def stream_failure_then_savepoint_rollback(driver: Any) -> SavepointRecovery:
     """A stream fails mid-FETCH under a savepoint; roll back to it and stream again."""
     error: BaseException | None = None
-    async with driver.connection() as conn:
-        await conn.begin()
-        await conn.savepoint("sp")
-        try:
-            async with conn.stream(
-                "SELECT 1/(g-3) FROM generate_series(1, 6) g", None, 1
-            ) as chunks:
-                async for _ in chunks:
-                    pass
-        except Exception as exc:
-            error = exc
-        await conn.rollback_to_savepoint("sp")
-        second = await stream_chunks(conn, "SELECT g FROM generate_series(1, 3) g", None, 1)
-        await conn.commit()
-    gc.collect()  # an unclosed cursor would warn "deleted while still open" right here
-    return SavepointRecovery(error, [row for chunk in second for row in chunk])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with driver.connection() as conn:
+            await conn.begin()
+            await conn.savepoint("sp")
+            try:
+                async with conn.stream(
+                    "SELECT 1/(g-3) FROM generate_series(1, 6) g", None, 1
+                ) as chunks:
+                    async for _ in chunks:
+                        pass
+            except Exception as exc:
+                error = exc
+            await conn.rollback_to_savepoint("sp")
+            second = await stream_chunks(conn, "SELECT g FROM generate_series(1, 3) g", None, 1)
+            await conn.commit()
+        gc.collect()  # an unclosed cursor would warn "deleted while still open" right here
+    return SavepointRecovery(error, flatten(second), _resource_warnings(caught))
 
 
 async def nested_streams_left_cursors(driver: Any, *, exit_inner_first: bool) -> list[CursorRow]:
@@ -956,24 +979,150 @@ class RawBeginStreamFailure:
     pid_before: int
     pid_after: int
     cursors_after: list[CursorRow]
+    resource_warnings: int
 
 
 async def raw_begin_then_failing_stream(driver: Any) -> RawBeginStreamFailure:
     """Autocommit connection, plain-SQL `BEGIN`, then a held-cursor stream whose fetch fails."""
     error: BaseException | None = None
-    async with driver.connection() as conn:
-        pid_before = await backend_pid(conn)
-        await conn.execute("BEGIN", None)
-        try:
-            async with conn.stream(
-                "SELECT 1/(g-3) FROM generate_series(1, 6) g", None, 1
-            ) as chunks:
-                async for _ in chunks:
-                    pass
-        except Exception as exc:
-            error = exc
-    gc.collect()  # an unclosed cursor would warn "deleted while still open" right here
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with driver.connection() as conn:
+            pid_before = await backend_pid(conn)
+            await conn.execute("BEGIN", None)
+            try:
+                async with conn.stream(
+                    "SELECT 1/(g-3) FROM generate_series(1, 6) g", None, 1
+                ) as chunks:
+                    async for _ in chunks:
+                        pass
+            except Exception as exc:
+                error = exc
+        gc.collect()  # an unclosed cursor would warn "deleted while still open" right here
     async with driver.connection() as next_conn:
         pid_after = await backend_pid(next_conn)
         cursors = await open_cursors(next_conn)
-    return RawBeginStreamFailure(error, pid_before, pid_after, cursors)
+    return RawBeginStreamFailure(error, pid_before, pid_after, cursors, _resource_warnings(caught))
+
+
+# --------------------------------------------------------------------------- CLOSE failures
+@dataclass(frozen=True)
+class SavepointCloseOutcome:
+    error: BaseException | None
+    rollback_error: BaseException | None
+
+
+async def stream_exit_after_savepoint_rollback(driver: Any) -> SavepointCloseOutcome:
+    """The savepoint the stream was declared after is rolled back inside the body."""
+    error: BaseException | None = None
+    rollback_error: BaseException | None = None
+    async with driver.connection() as conn:
+        await conn.begin()
+        await conn.savepoint("s1")
+        try:
+            async with conn.stream(HUNDRED, None, 2) as chunks:
+                await anext(chunks)
+                await conn.rollback_to_savepoint("s1")
+        except Exception as exc:
+            error = exc
+        rollback_error = await error_of_operation(conn, "rollback")
+    return SavepointCloseOutcome(error, rollback_error)
+
+
+@dataclass(frozen=True)
+class CloseAllOutcome:
+    error: BaseException | None
+    rollback_error: BaseException | None
+    pid_before: int
+    pid_after: int
+    cursors_after: list[CursorRow]
+
+
+async def stream_with_close_all_in_body(
+    driver: Any, *, transactional: bool, body_error: bool = False
+) -> CloseAllOutcome:
+    """`CLOSE ALL` inside the stream body makes the stream's own CLOSE fail at exit."""
+    error: BaseException | None = None
+    rollback_error: BaseException | None = None
+    async with driver.connection() as conn:
+        pid_before = await backend_pid(conn)
+        if transactional:
+            await conn.begin()
+        try:
+            async with conn.stream(HUNDRED, None, 2) as chunks:
+                await anext(chunks)
+                await conn.execute("CLOSE ALL", None)
+                if body_error:
+                    raise RuntimeError("body")
+        except Exception as exc:
+            error = exc
+        if transactional:
+            rollback_error = await error_of_operation(conn, "rollback")
+    gc.collect()
+    async with driver.connection() as next_conn:
+        pid_after = await backend_pid(next_conn)
+        cursors = await open_cursors(next_conn)
+    return CloseAllOutcome(error, rollback_error, pid_before, pid_after, cursors)
+
+
+@dataclass(frozen=True)
+class SavepointRecoveryAfterClose:
+    close_error: BaseException | None
+    savepoint_error: BaseException | None
+    rows: list[Row] | None
+    pid_before: int
+    pid_after: int
+
+
+async def recover_from_failed_close_with_savepoint(driver: Any) -> SavepointRecoveryAfterClose:
+    """The stream's CLOSE fails inside a transaction; `rollback_to_savepoint` must recover it."""
+    close_error: BaseException | None = None
+    rows: list[Row] | None = None
+    async with driver.connection() as conn:
+        pid_before = await backend_pid(conn)
+        await conn.begin()
+        await conn.savepoint("sp")
+        try:
+            async with conn.stream(HUNDRED, None, 2) as chunks:
+                await anext(chunks)
+                await conn.execute("CLOSE ALL", None)
+        except Exception as exc:
+            close_error = exc
+        savepoint_error = await rollback_to_sp_error(conn)
+        try:
+            rows = await conn.fetch_all("SELECT 1", None)
+        except Exception as exc:
+            rows = None
+            savepoint_error = savepoint_error or exc
+        pid_after = await backend_pid(conn)
+        await conn.rollback()
+    return SavepointRecoveryAfterClose(close_error, savepoint_error, rows, pid_before, pid_after)
+
+
+async def rollback_to_sp_error(conn: AsyncDbConnection) -> BaseException | None:
+    """The exception `rollback_to_savepoint("sp")` raises (None when it works)."""
+    try:
+        await conn.rollback_to_savepoint("sp")
+    except Exception as exc:
+        return exc
+    return None
+
+
+# --------------------------------------------------------------------------- connection class
+class CountingConnection(psycopg.AsyncConnection):
+    """A `connection_class` that counts how often it is asked to connect."""
+
+    calls = 0
+
+    @classmethod
+    async def connect(cls, *args: Any, **kwargs: Any) -> Any:
+        CountingConnection.calls += 1
+        return await super().connect(*args, **kwargs)
+
+
+async def connect_calls_during_open(options: dict[str, Any] | None = None) -> int:
+    """How many times the pool's connection class connected while the driver opened."""
+    CountingConnection.calls = 0
+    pool = {"min_size": 1, "max_size": 1, "connection_class": CountingConnection}
+    async with open_driver(options=options, pool=pool):
+        return CountingConnection.calls

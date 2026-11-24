@@ -2,9 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-11-24
-- Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first
@@ -60,7 +60,8 @@ Prior art:
    open it. Triggered by `await asyncopation.setup()`.
    *Amended 2026-11-24 (#2, PR #46): `open()` first connects once directly, so bad credentials or
    `assume_role` fail immediately with the sync backend's Django exception and leave no pool
-   behind; only then is the pool created and opened. The resulting order is open -> probe (reads
+   behind; only then is the pool opened (the pool object is built earlier, without I/O, only to
+   validate its sizes). The resulting order is open -> probe (reads
    `driver.capabilities`), no longer probe -> open.*
 4. **Lazy fallback:** a query before `setup()` runs the same open/probe (*Amended 2026-11-24 (#2,
    PR #46): open first, then probe, as in Decision 3*) under an `asyncio.Lock`

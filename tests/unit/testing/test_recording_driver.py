@@ -425,3 +425,19 @@ async def test_chunk_iterator_kept_after_the_borrow_raises_interface_error(drive
     error = await recording_stale_chunk_error(driver)
     # then
     assert type(error) is InterfaceError
+
+
+@pytest.mark.parametrize(
+    ("rows", "exhaust"),
+    [
+        pytest.param([], False, id="empty"),
+        pytest.param([(1,), (2,)], True, id="exhausted"),
+    ],
+)
+async def test_empty_or_exhausted_chunk_iterator_kept_after_the_borrow_raises_interface_error(
+    driver, rows, exhaust
+):
+    # when
+    error = await recording_stale_chunk_error(driver, rows, exhaust=exhaust)
+    # then
+    assert type(error) is InterfaceError

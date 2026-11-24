@@ -104,7 +104,10 @@ class PostgresDriver:
 
     async def _probe(self) -> tuple[int, ...]:
         with translate_errors():
-            raw = await psycopg.AsyncConnection.connect(**self._config.conn_kwargs)
+            connection_class = (
+                self._config.pool_kwargs.get("connection_class") or psycopg.AsyncConnection
+            )
+            raw = await connection_class.connect(**self._config.conn_kwargs)
             try:
                 await self._configure(raw)
                 return divmod(raw.info.server_version, 10000)

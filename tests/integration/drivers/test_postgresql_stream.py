@@ -1,7 +1,8 @@
 """Streams: chunking, server-side cursor options and cleanup."""
 
+import psycopg
 import pytest
-from django.db import DataError, InterfaceError
+from django.db import DataError, InterfaceError, ProgrammingError
 
 from tests.support.drivers import (
     POSTGRES_ONLY,
@@ -13,11 +14,14 @@ from tests.support.drivers import (
     observe_stream,
     open_cursors,
     raw_begin_then_failing_stream,
+    recover_from_failed_close_with_savepoint,
     release_with_open_stream,
     scrollable_flags,
     sizes,
     stream_chunks,
+    stream_exit_after_savepoint_rollback,
     stream_failure_then_savepoint_rollback,
+    stream_with_close_all_in_body,
     use_stale_stream,
 )
 
@@ -184,43 +188,67 @@ async def test_capabilities_report_disabled_server_side_cursors(no_cursor_driver
     assert capabilities.server_side_cursors is False
 
 
-@pytest.mark.parametrize("transactional", [False, True], ids=["autocommit-withhold", "transaction"])
+TRANSACTIONAL = pytest.mark.parametrize(
+    "transactional", [False, True], ids=["autocommit-withhold", "transaction"]
+)
+STALE_USE = pytest.mark.parametrize("close", [False, True], ids=["iterate", "close"])
+
+
+@TRANSACTIONAL
 async def test_stream_left_open_at_release_leaves_no_cursor_for_the_next_borrower(
     single_driver, transactional
 ):
     # when
-    cursors = await release_with_open_stream(single_driver, transactional=transactional)
+    outcome = await release_with_open_stream(single_driver, transactional=transactional)
     # then
-    assert cursors == []
+    assert outcome.cursors == []
 
 
-async def test_iterating_a_stream_after_its_borrow_ended_raises_interface_error(single_driver):
+@TRANSACTIONAL
+async def test_stream_left_open_at_release_keeps_the_same_backend(single_driver, transactional):
     # when
-    outcome = await use_stale_stream(single_driver, close=False)
+    outcome = await release_with_open_stream(single_driver, transactional=transactional)
+    # then
+    assert outcome.pid_after == outcome.pid_before
+
+
+@TRANSACTIONAL
+async def test_iterating_a_stream_after_its_borrow_ended_raises_interface_error(
+    single_driver, transactional
+):
+    # when
+    outcome = await use_stale_stream(single_driver, close=False, transactional=transactional)
     # then
     assert type(outcome.stale_error) is InterfaceError
 
 
-async def test_closing_a_stream_after_its_borrow_ended_is_a_no_op(single_driver):
+@TRANSACTIONAL
+async def test_closing_a_stream_after_its_borrow_ended_is_a_no_op(single_driver, transactional):
     # when
-    outcome = await use_stale_stream(single_driver, close=True)
+    outcome = await use_stale_stream(single_driver, close=True, transactional=transactional)
     # then
     assert outcome.stale_error is None
 
 
-@pytest.mark.parametrize("close", [False, True], ids=["iterate", "close"])
-async def test_stale_stream_does_not_disturb_the_next_borrowers_transaction(single_driver, close):
+@STALE_USE
+@TRANSACTIONAL
+async def test_stale_stream_does_not_disturb_the_next_borrowers_transaction(
+    single_driver, close, transactional
+):
     # when
-    outcome = await use_stale_stream(single_driver, close=close)
+    outcome = await use_stale_stream(single_driver, close=close, transactional=transactional)
     # then
     assert outcome.b_error is None
     assert outcome.b_rows == [(2,)]
 
 
-@pytest.mark.parametrize("close", [False, True], ids=["iterate", "close"])
-async def test_stale_stream_does_not_change_the_next_borrowers_backend(single_driver, close):
+@STALE_USE
+@TRANSACTIONAL
+async def test_stale_stream_does_not_change_the_next_borrowers_backend(
+    single_driver, close, transactional
+):
     # when
-    outcome = await use_stale_stream(single_driver, close=close)
+    outcome = await use_stale_stream(single_driver, close=close, transactional=transactional)
     # then
     assert outcome.pid_after == outcome.pid_before
 
@@ -240,6 +268,7 @@ async def test_stream_failing_under_a_savepoint_recovers_after_rollback_to_savep
     # then
     assert type(outcome.error) is DataError
     assert outcome.second_rows == [(1,), (2,), (3,)]
+    assert outcome.resource_warnings == 0
 
 
 @pytest.mark.parametrize("exit_inner_first", [True, False], ids=["inner-first", "outer-first"])
@@ -271,3 +300,75 @@ async def test_stream_error_after_a_raw_begin_leaves_no_held_cursor(single_drive
     outcome = await raw_begin_then_failing_stream(single_driver)
     # then
     assert outcome.cursors_after == []
+    assert outcome.resource_warnings == 0
+
+
+async def test_stream_exit_after_the_savepoint_was_rolled_back_raises_a_django_error(
+    single_driver,
+):
+    # when
+    outcome = await stream_exit_after_savepoint_rollback(single_driver)
+    # then
+    assert type(outcome.error) is ProgrammingError
+    assert isinstance(outcome.error.__cause__, psycopg.errors.InvalidCursorName)
+
+
+async def test_failing_close_inside_a_transaction_raises_a_django_error(single_driver):
+    # when
+    outcome = await stream_with_close_all_in_body(single_driver, transactional=True)
+    # then
+    assert type(outcome.error) is ProgrammingError
+    assert isinstance(outcome.error.__cause__, psycopg.errors.InvalidCursorName)
+
+
+async def test_rollback_after_a_failing_close_in_a_transaction_succeeds(single_driver):
+    # when
+    outcome = await stream_with_close_all_in_body(single_driver, transactional=True)
+    # then
+    assert outcome.rollback_error is None
+
+
+async def test_rollback_after_a_failing_close_and_a_savepoint_rollback_succeeds(single_driver):
+    # when
+    outcome = await stream_exit_after_savepoint_rollback(single_driver)
+    # then
+    assert outcome.rollback_error is None
+
+
+async def test_failing_close_in_transaction_leaves_it_recoverable_by_rollback_to_savepoint(
+    single_driver,
+):
+    # when
+    outcome = await recover_from_failed_close_with_savepoint(single_driver)
+    # then
+    assert outcome.close_error is not None
+    assert outcome.savepoint_error is None
+    assert outcome.rows == [(1,)]
+    assert outcome.pid_after == outcome.pid_before
+
+
+async def test_failing_close_in_autocommit_is_swallowed(single_driver):
+    # when
+    outcome = await stream_with_close_all_in_body(single_driver, transactional=False)
+    # then
+    assert outcome.error is None
+
+
+async def test_failing_close_in_autocommit_keeps_the_connection_and_leaves_no_cursor(
+    single_driver,
+):
+    # when
+    outcome = await stream_with_close_all_in_body(single_driver, transactional=False)
+    # then
+    assert outcome.pid_after == outcome.pid_before
+    assert outcome.cursors_after == []
+
+
+@TRANSACTIONAL
+async def test_body_error_wins_over_a_failing_close(single_driver, transactional):
+    # when
+    outcome = await stream_with_close_all_in_body(
+        single_driver, transactional=transactional, body_error=True
+    )
+    # then
+    assert type(outcome.error) is RuntimeError

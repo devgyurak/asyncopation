@@ -58,7 +58,9 @@ behind these decisions: [design/software-architecture.md](design/software-archit
 4. `compile/` never performs I/O; server info is injected by `connection/`. The compile-only wrapper is
    visible through `connections[alias]` only inside a synchronous `compile_scope` (ADR-0008).
 5. Every non-public Django import is recorded in [django-api-ledger.toml](django-api-ledger.toml)
-   and lives in `asyncopation._django` (enforced in review until the guard lands; ADR-0007).
+   and lives in `asyncopation._django` (enforced by guard A203 and the ledger drift test; ADR-0007). Private Django attributes
+   accessed directly are registered as ledger `[[attribute]]` entries and protected by the drift
+   test.
 6. Results are identical to the sync ORM on PostgreSQL, MySQL and MariaDB (differential tests).
 
 ## Connection ownership

@@ -186,7 +186,7 @@ reused unchanged.
   `_django.postgresql` pulls psycopg in through Django (drivers remain the only direct importers).
 
 ### Django internals this decision rests on
-Guard A202 rejects ledger entries for code that is not in `src/` yet, so these enter
+Guard A202 rejects ledger entries for code that is not imported under `src/asyncopation/_django/` yet, so these enter
 `docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
 in the PR that first uses them (#3 / #6 / Phase 5):
 

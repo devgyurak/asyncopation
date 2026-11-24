@@ -54,7 +54,9 @@ deviating needs a superseding ADR.
 
 ## Django coupling
 Every Django import outside the public modules listed in `docs/django-api-ledger.toml`
-must have a ledger entry (A201). See the `port-django-internals` skill.
+must have a ledger entry (A201) and may only be imported inside `asyncopation/_django/` (A203).
+Directly accessed private Django attributes are ledger `[[attribute]]` entries protected by the
+drift test. See the `port-django-internals` skill.
 
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `setup()` / `close()`,

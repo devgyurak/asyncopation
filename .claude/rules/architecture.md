@@ -17,18 +17,32 @@ and it is natively async. Never make `as_sql()` or any expression/lookup method 
 ## Layers (imports point downwards only - enforced by import-linter)
 ```
 testing
-deletion | prefetch
+query          public facade: aq(), AsyncObjects (aobjects), evaluation methods
+deletion | prefetch   sans-I/O cores (Collector, prefetch_one_level)
 fetch
-query          aobjects manager, aq(), async iterables, ModelIterable port
+engine         CompiledQuery, materializer (results_iter seam), sans-I/O runner
 transaction    async_atomic, savepoints, async on_commit
-connection     contextvars ownership, pools, server-info preload
+connection     executors (borrowed/pinned), registry (alias, loop), lifecycle, hooks
 drivers | compile
+_django        sole importer of non-public Django APIs
 ```
 - `drivers/` is the **only** place that imports `psycopg`, `psycopg_pool`, `asyncmy`.
   Postgres and MySQL drivers never import each other.
 - `compile/` never performs I/O: no `async def`, no imports of drivers/connection/transaction.
-  Server version/features are injected into it by `connection/` at startup.
-- Upper layers talk to drivers only through the `AsyncDriver` interface.
+  Server version/features are injected into it by `connection/` (ADR-0004); how Django's
+  compilers reach it is ADR-0008 (Proposed - do not merge code that depends on it).
+- Upper layers talk to drivers only through the `AsyncDriver` protocol. Core code never reads
+  vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
+  `Capabilities` (ADR-0003).
+- Non-public Django APIs are imported only in `_django/` (per-backend submodules, imported lazily)
+  and private attribute access goes through `_django` accessors (ADR-0007).
+- Ported orchestration is a sans-I/O generator core driven by the `engine` runner - never an
+  `async def` copy of a Django function (ADR-0007).
+
+## Accepted decisions
+ADR-0001 ownership, 0002 pipeline contracts, 0003 driver contract, 0004 lifecycle, 0005 hooks,
+0006 public API attachment, 0007 sans-I/O ports and `_django` (`docs/adr/`). Code must follow them;
+deviating needs a superseding ADR.
 
 ## Forbidden in src/ (tools/guards: A1xx)
 - `asgiref.sync` (`sync_to_async`, `async_to_sync`), `threading`, `concurrent.futures`,
@@ -42,5 +56,7 @@ Every Django import outside the public modules listed in `docs/django-api-ledger
 must have a ledger entry (A201). See the `port-django-internals` skill.
 
 ## Public API
-`aobjects`, `aq()`, `afetch()`, `async_atomic`, fetch-mode constants and `asyncopation.testing`.
+`aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `setup()` / `close()`,
+the ASGI lifespan wrapper, `observe()` / `intercept()`, fetch-mode constants and
+`asyncopation.testing`.
 Changing a public signature needs an ADR (`write-adr` skill) and a CHANGELOG entry.

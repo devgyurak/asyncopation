@@ -112,12 +112,14 @@ name = "asyncopation layers"
 type = "layers"
 layers = [
     "asyncopation.testing",
+    "asyncopation.query",
     "asyncopation.deletion | asyncopation.prefetch",
     "asyncopation.fetch",
-    "asyncopation.query",
+    "asyncopation.engine",
     "asyncopation.transaction",
     "asyncopation.connection",
     "asyncopation.drivers | asyncopation.compile",
+    "asyncopation._django",
 ]
 
 [[tool.importlinter.contracts]]

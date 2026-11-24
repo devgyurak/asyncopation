@@ -28,7 +28,9 @@ N_PUBLISHERS = 5
 N_AUTHORS = 20
 N_BOOKS = 100
 N_TAGS = 10
-N_EDITIONS = sum(1 + i % 3 for i in range(N_BOOKS))
+# Book i gets 1 + i % 3 editions: 34 * 1 + 33 * 2 + 33 * 3. A literal on purpose, so the row-count
+# test checks the seed against an independent number instead of its own formula.
+N_EDITIONS = 199
 
 EXPECTED_COUNTS = {
     "Publisher": N_PUBLISHERS,

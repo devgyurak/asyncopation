@@ -2,6 +2,7 @@
 
 Relations: FK (Book.author, Author.publisher), O2O (AuthorProfile.author), M2M (Book.tags),
 reverse FK (Author.books), GenericForeignKey (Comment.target).
+Composite primary key: BookEdition (book FK + number).
 FieldZoo exists to catch per-driver type conversion differences (datetime/Decimal/JSON/UUID/bytes).
 """
 
@@ -56,6 +57,19 @@ class Book(models.Model):
     published_at = models.DateTimeField(null=True)
     metadata = models.JSONField(default=dict)
     comments = GenericRelation("Comment", related_query_name="book")
+
+    class Meta:
+        ordering = ["pk"]
+
+
+class BookEdition(models.Model):
+    """Composite primary key (FK + integer)."""
+
+    pk = models.CompositePrimaryKey("book", "number")
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="editions")
+    number = models.PositiveSmallIntegerField()
+    isbn = models.CharField(max_length=13, unique=True)
+    released = models.DateField(null=True)
 
     class Meta:
         ordering = ["pk"]

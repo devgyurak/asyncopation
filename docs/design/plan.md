@@ -262,7 +262,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 
 ### Phase 0 checklist (test harness)
 
-- [x] Test model set (FK, O2O, M2M, reverse FK, GenericForeignKey, many field types) - `harness/catalog`
+- [x] Test model set (FK, O2O, M2M, reverse FK, GenericForeignKey, composite pk, many field types) - `harness/catalog`
 - [x] Differential test runner: run the same QuerySet sync / async and compare results (instance fields, order, types) - `tests/support/differential.py`
 - [x] Hypothesis QuerySet strategies (filter / exclude / order_by / select_related / slicing / annotate) - `tests/support/strategies.py`
 - [ ] Async query capture utility (async `assertNumQueries`, executed SQL log) - needs the driver instrumentation hook from Phase 1 (#9, blocked by #4)

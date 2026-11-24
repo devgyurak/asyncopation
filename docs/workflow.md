@@ -53,6 +53,13 @@ Every change follows the `feature-loop` skill:
 Gates: guards clean -> tests red for the right reason -> `make check` + `make test-int` green
 -> no open BLOCKER/MAJOR review findings -> no unexplained regression > 10% -> `make check-all`.
 
+Docs move with the code: the `docs-sync` rule maps every kind of change to the documents that
+must be updated in the same change, and `arch-guardian` reports misses as MAJOR findings.
+
+Work is tracked on GitHub: one milestone per phase, one issue per roadmap item, labels for type
+(`feature`, `perf`, `test`, `ci`, ...), layer (`area:*`), backend (`backend:*`) and process
+(`needs-decision`, `blocked`). PRs close their issue with `Closes #N`.
+
 Humans decide: accepting ADRs, changing guards/rules, updating benchmark baselines, releases.
 
 Branches: work happens on `<prefix>/<kebab-summary>` branches cut from `develop` and is PR'd

@@ -8,6 +8,8 @@ One iteration = one roadmap checklist item (or one bug). Keep iterations small e
 review in one sitting. Each step names its gate; do not move on until the gate passes.
 
 ## 0. Frame
+- Pick the GitHub issue from the current `Phase N` milestone (`gh issue list --milestone "Phase 1 - First working read path"`)
+  and read it with its dependencies; skip issues labelled `blocked` or `needs-decision`.
 - Locate the item in `docs/design/plan.md` (phase + checklist line). Write a 3-5 line spec:
   public API, behaviour, backends, out of scope.
 - Gate: spec exists (in the PR description draft or the conversation).
@@ -47,8 +49,10 @@ review in one sitting. Each step names its gate; do not move on until the gate p
 - Gate: no unexplained regression > 10% vs baseline.
 
 ## 8. Close
-- Tick the checklist line in `docs/design/plan.md`; update `docs/architecture.md` if the
-  picture changed; record Django internals in `docs/django-api-ledger.toml`.
+- Walk the `docs-sync` rule table for every changed file and update each listed document.
+- Tick the checklist line in `docs/design/plan.md` (and `plan-KO.md`); update
+  `docs/architecture.md` if the picture changed; record Django internals in
+  `docs/django-api-ledger.toml`. The PR body says `Closes #N`.
 - If an English doc with translations changed, update them (`translate-docs` / **translator**).
 - Commit following the `commit` skill (`ADD: alist() on aobjects for PostgreSQL`), on a
   `<prefix>/<kebab-summary>` branch cut from `develop`; PR into `develop`.

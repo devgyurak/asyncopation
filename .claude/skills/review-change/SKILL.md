@@ -32,6 +32,9 @@ How to spawn per tool:
 
 Give reviewers the code, not your conclusions - ask for an independent read.
 
+Every reviewer also checks **docs drift** against the `docs-sync` rule table: a changed
+command, port, API, layer, guard or decision whose documents were not updated is a MAJOR finding.
+
 ## 4. Consolidate
 Merge findings into one table sorted by severity, de-duplicated:
 `severity | file:line | finding | source agent | action`.

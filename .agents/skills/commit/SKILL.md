@@ -124,5 +124,7 @@ Same as the commit: `ADD: alist() on aobjects for PostgreSQL`. With squash merge
 - [ ] `make check` green; `make test-int` when `src/` or `tests/integration` changed.
 - [ ] `review-change` done for changes in `src/` or `tests/`.
 - [ ] No secrets, no `bench/results/`, no `.claude/settings.local.json`.
+- [ ] Every document required by the `docs-sync` rule is updated in this same commit.
 - [ ] Translations re-stamped if an English source with translations changed.
+- [ ] PR body references the issue (`Closes #N`) when it completes a roadmap item.
 - [ ] `DOCS:` only if no code, hook, guard or workflow changed.

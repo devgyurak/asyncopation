@@ -3,6 +3,8 @@
 
 ## What
 
+Closes #
+
 <!-- Roadmap item (docs/design/plan.md phase + checklist line) or bug. -->
 
 ## How
@@ -16,4 +18,4 @@
 - [ ] `make test-e2e` (user-visible scenarios)
 - [ ] `review-change`: no open BLOCKER/MAJOR (paste the consolidated table)
 - [ ] hot path changed? `make bench-micro` before/after attached
-- [ ] plan checklist, `docs/architecture.md`, ledger, translations updated
+- [ ] docs updated per the `docs-sync` rule (plan checklist, architecture, ledger, skills, translations)

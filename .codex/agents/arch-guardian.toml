@@ -21,7 +21,9 @@ Procedure:
    - new Django internals without ledger entries, ports without attribution headers, ports
      that diverge structurally from upstream without reason;
    - public API changes without an ADR / CHANGELOG entry;
-   - state stored at import time or bound to a specific event loop.
+   - state stored at import time or bound to a specific event loop;
+   - **docs drift**: walk `.agents/rules/docs-sync.md` for every changed file; any listed document
+     that still describes the old state is a MAJOR finding (name the file and the stale line).
 4. Classify findings: **BLOCKER** (violates a rule or ADR), **MAJOR** (likely bug or drift),
    **MINOR** (clarity / consistency).
 

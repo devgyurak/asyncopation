@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=3b031ce27b9c -->
+<!-- i18n: source=docs/workflow.md source-sha256=38556b713150 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -52,6 +52,13 @@ AGENTS.md 인덱스 블록                               Codex, Pi (Claude는 CL
 
 게이트: 가드 통과 -> 테스트가 올바른 이유로 실패(red) -> `make check` + `make test-int` 통과
 -> 열린 BLOCKER/MAJOR 리뷰 지적 없음 -> 설명되지 않은 10% 초과 성능 저하 없음 -> `make check-all`.
+
+문서는 코드와 함께 움직인다: `docs-sync` 규칙이 변경 종류마다 같은 변경에서 함께 고쳐야 할 문서를
+정해 두고, 빠뜨리면 `arch-guardian`이 MAJOR로 보고한다.
+
+작업은 GitHub에서 관리한다: Phase마다 마일스톤 하나, 로드맵 항목마다 이슈 하나, 라벨은 종류
+(`feature`, `perf`, `test`, `ci`, ...), 레이어(`area:*`), 백엔드(`backend:*`), 진행 상태
+(`needs-decision`, `blocked`)로 나눈다. PR은 `Closes #N`으로 이슈를 닫는다.
 
 사람이 결정하는 것: ADR 승인, 가드/규칙 변경, 벤치마크 기준선 갱신, 릴리스.
 

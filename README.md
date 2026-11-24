@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha / design phase.** Nothing here is usable yet. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** Only `asyncopation.testing` is usable so far; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -19,6 +19,33 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 ```
 
 Translations: [Korean](README-KO.md)
+
+## Testing upper layers without a database
+
+`asyncopation.testing.RecordingDriver` implements the `AsyncDriver` protocol in memory: queue the
+results a test needs, run the code under test, then inspect the statement log. `Capabilities` and
+`ExecResult` are re-exported from `asyncopation.testing`.
+
+```python
+import asyncio
+
+from asyncopation.testing import ExecResult, RecordingDriver
+
+
+async def main() -> None:
+    driver = RecordingDriver()
+    await driver.open()
+    driver.queue([(1, "a"), (2, "b")], ExecResult(rowcount=1))  # FIFO, one per statement
+    async with driver.connection() as conn:
+        rows = await conn.fetch_all("SELECT id, name FROM t WHERE id > %s", [0])
+        await conn.execute("DELETE FROM t WHERE id = %s", [1])
+    assert rows == [(1, "a"), (2, "b")]
+    assert [s.kind for s in driver.statements] == ["fetch_all", "execute"]
+    await driver.close()
+
+
+asyncio.run(main())
+```
 
 ## Development
 

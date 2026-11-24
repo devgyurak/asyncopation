@@ -13,6 +13,34 @@ Measures per-call latency of core async vs Asyncopation for single lookups, gath
 and list evaluation against the seeded DB. Writes `bench/results/micro-<ts>.json`.
 Asyncopation cases are reported as `skipped` until the API exists.
 
+### Driver cases
+`bench/micro.py` also runs PostgreSQL driver cases (implementation in `bench/driver_micro.py`)
+named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
+- groups: `select1` (`SELECT 1`), `wide` (one row with 15 columns), `execute` (`execute()` with
+  rowcount), `tx` (`begin` / statement / `commit`), `stream` (200 rows in chunks of 50);
+- impls: `raw` (`pool.connection()` + cursor on a pool built from the driver's own
+  configuration), `getconn` (raw `getconn` / `putconn`, the cheapest baseline, present in every
+  group), `driver` (`driver.connection()` + the driver API);
+- flags (see `uv run python -m bench.micro --help`): `--driver-seconds` (seconds per
+  `driver.*` round, default 1.0), `--driver-rounds` (interleaved rounds, default 7), `--only`
+  (comma-separated case names with the first dot-separated part removed, e.g.
+  `--only select1.driver.t8`; the same filter as for the other cases);
+- no-I/O cases `driver.noio.<impl>.t1` and `driver.noio-yield.<impl>.t1` (impls `getconn` and
+  `driver`, run with 1 task only): fake pool and cursor objects take the database out, so the
+  difference measures the driver's own cost; `noio-yield` uses a fake that yields
+  (`await asyncio.sleep(0)`). Treat the result as a LOWER BOUND of the driver's own cost;
+- output columns: `CPU µs/op` (client CPU per operation, the stable metric), `paired ratio
+  (IQR)` (per-round paired ratio vs the baseline: median and inter-quartile range over the
+  rounds), `driver-getconn µs` (driver minus `getconn` CPU per operation, shown with its IQR
+  only for the noio groups), `load` (min-max 1-minute load average over the rounds) and a
+  `note` column (error or skip reason). A case without samples has status `no-samples`. The baselines of a
+  selected case always run too, so its ratio can be computed.
+
+Compare ratios, not absolute times, and rerun when the load is high. Real-DB ratios within about
++-5% are noise. Driver overhead (driver minus `getconn`), as ranges: `noio` (plain fake) about
+0.5-0.7 us/op, `noio-yield` about 0.6-1.4 us/op (the IQR reaches about 2.4 us under load, so
+rerun on a quiet machine).
+
 ## Load (k6, minutes)
 ```bash
 make bench BENCH_ARGS="--configs wsgi,asgi-core,asyncopation --scenarios single,gather,nplus1,write --duration 30s --vus 50"

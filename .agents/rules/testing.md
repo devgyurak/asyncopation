@@ -43,6 +43,14 @@ Async connections cannot see the sync test transaction, so pytest-django's defau
 - Read-only tests use the `readonly_db` fixture: the deterministic seed (`harness/seed.py`)
   is committed once per session. Never write in these tests.
 - Tests that write use `writable_db`; it re-seeds (committed) after the test.
+- Allowed alternative for write tests: a **scratch-table fixture**. The test creates and drops
+  its own table through a `tests/support` helper (e.g. `create_scratch_table` /
+  `drop_scratch_table` in `tests/support/drivers/admin.py`, wrapped by the `scratch` fixture in
+  `tests/integration/drivers/conftest.py`). The committed seed is never touched, so no re-seed is
+  needed. Table names carry a per-run random suffix so that concurrent checkouts sharing one test
+  database cannot collide; they are not isolated from other connections to the same database.
+  Use it for driver-level tests that execute raw SQL; ORM-level tests keep `readonly_db` /
+  `writable_db`.
 
 ## Differential testing is the default for read APIs
 For every read API compare against the sync ORM with the `differential` fixture
@@ -52,6 +60,11 @@ every annotation (any public non-field instance attribute), related objects cach
 differs from "loaded as None"), value **and type**, and order. `_prefetched_objects_cache`
 (multi-valued prefetch: reverse FK, M2M, GenericRelation) is out of scope until #17.
 Add Hypothesis strategies when adding QuerySet features.
+
+Driver-level tests (no QuerySet) use the same idea one layer lower: run the same SQL through the
+async driver and through a synchronous Django `DatabaseWrapper` built from the same settings and
+`OPTIONS`, then compare rows **and** Python types (`compare_with_sync` in
+`tests/support/drivers/reference.py`). See the `differential-testing` skill.
 
 ## Backends
 Every integration test must pass on postgresql, mysql and mariadb. Backend-specific behaviour

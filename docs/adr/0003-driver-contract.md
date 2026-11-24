@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs
@@ -41,17 +42,23 @@ connection setup exactly.
 ### D - Frozen capabilities refined by a server probe; SQL shape stays with Django features
 + core code is vendor-agnostic; no second source of truth for SQL shape. - needs a probe at
 startup (ADR-0004).
+*Amended 2026-11-24 (#2, PR #46): for PostgreSQL the capabilities come from the driver's `open()`
+connection (startup parameters, no probe query); ADR-0004 Decision 2.*
 
 ## Decision
 **B + D**, with a typed protocol in `asyncopation.drivers`:
 
 ```python
 class AsyncDriver(Protocol):
-    capabilities: Capabilities
+    # Amended 2026-11-24 (#2, PR #46): a property that raises RuntimeError unless the driver is open
+    @property
+    def capabilities(self) -> Capabilities: ...
 
     async def open(self) -> None: ...
     async def close(self) -> None: ...
     def connection(self) -> AbstractAsyncContextManager[AsyncDbConnection]: ...
+    # Amended 2026-11-24 (#2, PR #46): added to the protocol
+    def is_disconnect(self, exc: BaseException) -> bool: ...
 
 
 class AsyncDbConnection(Protocol):
@@ -77,11 +84,21 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 1. **Normalization contract:** a driver connection returns the same values, the same
    `rowcount`/`lastrowid` semantics and the same session state as Django's sync backend
    connection for that alias - including the connection setup listed in Context. psycopg uses
-   Django's adapters template, `AsyncClientCursor`, and Django's server-side cursor mix
-   (`ClientCursorMixin` + `AsyncServerCursor`, `withhold` outside transactions). asyncmy gets a
-   decoder shim matching mysqlclient and `CLIENT.FOUND_ROWS`.
+   Django's adapters template and mirrors Django's cursor selection: by default
+   `AsyncClientCursor` for plain statements and Django's server-side cursor mix
+   (`ClientCursorMixin` + `AsyncServerCursor`) for streams; with `OPTIONS["server_side_binding"]
+   = True` psycopg's `AsyncCursor` / `AsyncServerCursor`. Named cursors are `scrollable=False` and
+   `withhold` while in autocommit (outside a transaction), as in Django's `create_cursor`. SQL
+   shape differences stay in the wrapper's `features.uses_server_side_binding`; the driver never
+   branches SQL on binding or vendor. asyncmy gets a decoder shim matching mysqlclient and
+   `CLIENT.FOUND_ROWS`. *Amended 2026-11-24 (#2, PR #46): the cursor selection (default
+   `AsyncClientCursor`, `AsyncCursor` with `OPTIONS["server_side_binding"] = True`) mirrors
+   Django's sync backend; the former text named `AsyncClientCursor` only.*
 2. **contrib.postgres:** the PostgreSQL driver's connection-configure step registers hstore/citext
-   handlers asynchronously. `connection_created` is **not** sent for our connections (documented).
+   handlers asynchronously (**deferred to #43**: the harness has no `contrib.postgres` yet).
+   *Amended 2026-11-24 (#2, PR #46): this registration is NOT implemented yet - the sentence above
+   is a plan, not current behaviour; tracked in #43.*
+   `connection_created` is **not** sent for our connections (documented).
 3. **Single source of truth for SQL shape:** the compile-only wrapper's `features`. `Capabilities`
    holds only driver/runtime facts. Core code never reads vendor strings; it reads `Capabilities`
    or the wrapper's `features`.
@@ -89,6 +106,9 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
    `django.db` hierarchy with subclasses first and `__cause__` chaining - for `execute` and
    `execute_many`, including MySQL's integrity-code remap. It exposes `is_disconnect(exc)`; broken
    connections are discarded. No driver exception type crosses layer `drivers`.
+   *Amended 2026-11-24 (#2, PR #46): this is about database errors. A pool configuration error
+   (`min_size > max_size`) surfaces as `psycopg_pool`'s builtin `ValueError` from `open()`, see
+   ADR-0001 Decision 8.*
 5. **Streams** are async context managers (async-correctness rule 7, ADR-0001 rule 7).
 6. A **recording driver** (queued results + statement log) implements the protocol for unit tests
    of upper layers. It lives in `asyncopation.testing`. Query counting is built on observers
@@ -106,4 +126,6 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 - integration: MySQL `update()` rowcount when rows already hold the value (FOUND_ROWS) equals sync.
 - integration: unique, NOT NULL and CHECK violations raise `IntegrityError` on every backend;
   a killed connection raises `OperationalError` and is not returned to the pool.
+- *Amended 2026-11-24 (#2, PR #46):* integration: `server_side_binding=True` statements and streams
+  behave like the sync backend (values, cursors, withhold)
 - integration: `HStoreField` round-trip once `contrib.postgres` is in the harness.

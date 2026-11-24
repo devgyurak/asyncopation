@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first
@@ -44,11 +45,26 @@ Prior art:
    `@@sql_auto_is_null`, the `CONVERT_TZ` zoneinfo test) - and inject the results into the
    compile-only wrapper's cached properties. Every derived property (`mysql_version`,
    `mysql_is_mariadb`, `sql_mode`, dependent features) follows from these. Django's own
-   `connections[alias]` does not receive this data; the compile-only wrapper is the only recipient (ADR-0008). The frozen `Capabilities`
-   (ADR-0003) are built here.
+   `connections[alias]` does not receive this data; the compile-only wrapper is the only recipient (ADR-0008).
+   *Amended 2026-11-24 (#2, PR #46): ~~The frozen `Capabilities` (ADR-0003) are built here.~~ The
+   probe no longer builds `Capabilities`: the driver builds them in `open()` and
+   `driver.capabilities` is the single owner of runtime facts. PostgreSQL: the probe reads
+   `server_version` / `pg_version` from `driver.capabilities` (taken from the startup parameters of
+   `open()`'s direct connection, no query) and runs no second query. MySQL/MariaDB: the future
+   asyncmy driver's `open()` builds `Capabilities` from its own connection's server version
+   before/while the probe runs, and the probe's `mysql_server_data` result must equal it (see
+   Validation). The once-per-alias probe takes the first successfully opened driver's
+   `driver.capabilities`; `server_version` is loop-independent, so later loops need no re-read. If
+   the first open fails the probe stays once-unless-exception (retried on the next open).*
 3. **Open** (per `(alias, event loop)`): create the `AsyncDriver` and its pool inside that loop and
    open it. Triggered by `await asyncopation.setup()`.
-4. **Lazy fallback:** a query before `setup()` runs the same probe/open under an `asyncio.Lock`
+   *Amended 2026-11-24 (#2, PR #46): `open()` first connects once directly, so bad credentials or
+   `assume_role` fail immediately with the sync backend's Django exception and leave no pool
+   behind; only then is the pool opened (the pool object is built earlier, without I/O, only to
+   validate its sizes). The resulting order is open -> probe (reads
+   `driver.capabilities`), no longer probe -> open.*
+4. **Lazy fallback:** a query before `setup()` runs the same open/probe (*Amended 2026-11-24 (#2,
+   PR #46): open first, then probe, as in Decision 3*) under an `asyncio.Lock`
    created inside that loop for that `(alias, loop)` entry, once-unless-exception, and logs a
    warning recommending the lifespan wrapper.
 5. **Close** (`await asyncopation.close()`): stop new acquires, wait for in-flight statements up to a
@@ -65,6 +81,20 @@ Prior art:
 loop is discarded without `close()`; tests assert the registry is empty after teardown.
 - Users must add `asyncopation` to `INSTALLED_APPS` and wrap their ASGI app.
 
+## Implementation note
+*Amended 2026-11-24 (#2, PR #46).*
+- **Capabilities ownership (PostgreSQL).** `open()` connects once directly, reads `server_version`
+  from that connection's startup parameters (no query) and builds the frozen `Capabilities`;
+  `driver.capabilities` is the single owner of runtime facts and is available only while the
+  driver is open (`RuntimeError` before `open()` and after `close()`). The Decision 2 probe (#3,
+  once per alias) takes `server_version` / `pg_version` from the first opened driver's
+  `Capabilities` and must not run a second source of truth; the registry builds the alias-level
+  server info from it. For MySQL/MariaDB the asyncmy driver's `open()` builds `Capabilities` from its own
+  connection and the `mysql_server_data` probe result must equal it (Validation).
+- **Fail-fast open.** The direct connection in `open()` happens before the pool is opened (the pool object is constructed first, with `open=False`, only to validate its sizes).
+- **Pool options and `CONN_HEALTH_CHECKS`** (validation rule, defaults, the extra round trip per
+  borrow) are specified in ADR-0001 Decision 8 (implementation note).
+
 ## Validation
 - integration: no `SynchronousOnlyOperation` and no sync connection opened during `as_sql()` after
   `setup()` (plan Phase 1 checklist item); the differential suite also runs with Django's sync
@@ -72,3 +102,5 @@ loop is discarded without `close()`; tests assert the registry is empty after te
 - integration: concurrent first queries without `setup()` run the probe exactly once.
 - integration: a second event loop gets its own pool; server info is probed once per process.
 - e2e: uvicorn lifespan opens and closes pools; pool stats are zero after shutdown.
+- *Amended 2026-11-24 (#2, PR #46):* integration (MySQL/MariaDB, asyncmy driver issue):
+  `Capabilities.server_version` equals the version derived by the `mysql_server_data` probe.

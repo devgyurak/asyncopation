@@ -13,3 +13,17 @@ description: Write an Architecture Decision Record for an expensive-to-reverse d
 5. Link the ADR from `docs/architecture.md` and from code that depends on it
    (`# See ADR-0001`).
 English only; ADRs are not translated.
+
+# Amend an ADR
+Use this instead of a new ADR only when the chosen Option stays the same and no Validation item
+becomes invalid (detail or scope refinement). Otherwise write a superseding ADR (steps above).
+An amendment may add or tighten Validation items but never drop or contradict one.
+1. Ask **architect** to review the amendment and wait for a real verdict.
+2. Add one header line (after `Architect review`): `- Amended: <date> (#N, PR #M) - <every
+   changed item>; approved by: <maintainer>; architect verdict: <verdict>`. One verdict per line,
+   never `PENDING` at merge. Write the approval as "to be confirmed in the PR review" until the
+   maintainer gives it, then as `maintainer (@login), <date> in the PR #M review`: an agent cannot
+   self-attest the maintainer's approval. Status stays `Accepted`.
+3. Mark every changed or contradicted Decision/Validation sentence, code block and Option pro/con
+   inline with `*Amended <date> (#N, PR #M): ...*`; detail may live in an "Implementation note".
+4. Update `docs/architecture.md` and the docs-sync targets as for any ADR change.

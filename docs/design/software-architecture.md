@@ -69,11 +69,15 @@ QuerySet (Django, lazy)
 
 ```python
 class AsyncDriver(Protocol):  # one per backend; only module importing the driver lib
-    capabilities: Capabilities
+    @property
+    def capabilities(
+        self,
+    ) -> Capabilities: ...  # available while open; RuntimeError before open() and after close()
 
     async def open(self) -> None: ...
     async def close(self) -> None: ...
     def connection(self) -> AbstractAsyncContextManager[AsyncDbConnection]: ...  # borrow
+    def is_disconnect(self, exc: BaseException) -> bool: ...
 
 
 class AsyncDbConnection(Protocol):
@@ -82,21 +86,26 @@ class AsyncDbConnection(Protocol):
         self, sql: str, params: Params
     ) -> ExecResult: ...  # rowcount, lastrowid, returned
     async def execute_many(self, sql: str, batch: Sequence[Params]) -> ExecResult: ...
-    def stream(self, sql: str, params: Params, chunk: int) -> AsyncIterator[list[tuple]]: ...
+    def stream(
+        self, sql: str, params: Params, chunk: int
+    ) -> AbstractAsyncContextManager[AsyncIterator[list[tuple]]]: ...  # closed on exit
     async def begin(self) -> None: ...  # + commit, rollback, savepoint, release, rollback_to
 
 
 @dataclass(frozen=True)
-class Capabilities:  # static per driver, refined by the server probe
-    vendor: str
+class Capabilities:  # runtime facts only, built by the driver in open()
     server_version: tuple[int, ...]
-    insert_returning: bool
-    bulk_insert_returning: bool
-    server_side_cursors: bool
+    server_side_cursors: bool  # false under poolers / DISABLE_SERVER_SIDE_CURSORS
+    atomic_execute_many: bool  # one failing parameter set leaves no rows behind
 ```
 
-- **Core code reads capabilities, never vendor names** (Prisma ADR 031). MariaDB >= 10.5
-  `RETURNING` is a probed capability, not a subclass (SQLAlchemy `initialize`).
+The sketch above mirrors `src/asyncopation/drivers/base.py`; ADR-0003 and that module are
+authoritative. SQL-shape facts (`RETURNING` support and the like) are the compile-only wrapper's
+`features`, not capabilities.
+
+- **Core code reads capabilities or the wrapper's `features`, never vendor names** (Prisma ADR 031). MariaDB >= 10.5
+  `RETURNING` is a probed fact exposed through the compile-only wrapper's `features`, not a
+  subclass (SQLAlchemy `initialize`).
 - **Type normalization lives in the driver.** Contract: a driver returns the same Python types
   Django's own backend driver would (psycopg: connect with Django's
   `get_adapters_template(use_tz, tz)`; asyncmy: a decoder shim matching mysqlclient). Django's

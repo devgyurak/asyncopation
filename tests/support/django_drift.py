@@ -121,6 +121,12 @@ def _defines(body: list[ast.stmt], path: list[str]) -> bool:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             if not rest and any(isinstance(t, ast.Name) and t.id == head for t in targets):
                 return True
+        elif isinstance(node, ast.If | ast.Try):  # e.g. `if is_psycopg3:` around a class
+            blocks = [node.body, node.orelse]
+            if isinstance(node, ast.Try):
+                blocks += [h.body for h in node.handlers]
+            if any(_defines(block, path) for block in blocks):
+                return True
     return False
 
 

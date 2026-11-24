@@ -3,6 +3,10 @@
     uv run python -m bench.micro [--iterations 1000] [--only aget,gather3]
 
 Asyncopation cases are reported as skipped until the API exists.
+
+``driver.*`` cases (see ``bench/driver_micro.py``) compare the PostgreSQL driver with the raw
+psycopg_pool calls it wraps at 1/8/64 tasks and report client CPU per operation and the paired
+ratio vs the baseline.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from bench import driver_micro
 from bench.db import BENCH_DB, ROOT, ensure_bench_db
 from bench.stats import summarize
 
@@ -74,10 +79,24 @@ async def measure(case: Case, iterations: int, warmup: int) -> dict[str, Any]:
     return {"status": "ok", "iterations": iterations, **summarize(samples)}
 
 
-async def main_async(pk: int, iterations: int, warmup: int, only: set[str]) -> dict[str, Any]:
+async def main_async(
+    pk: int,
+    iterations: int,
+    warmup: int,
+    only: set[str],
+    driver: tuple[Any, Any] | None,
+    driver_seconds: float,
+    driver_rounds: int,
+) -> dict[str, Any]:
     cases = build_cases(pk)
     selected = {k: v for k, v in cases.items() if not only or k.split(".", 1)[1] in only}
-    return {name: await measure(case, iterations, warmup) for name, case in selected.items()}
+    results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
+    if driver is not None:
+        names = driver_micro.selected(only)
+        results |= await driver_micro.run(
+            driver[0], driver[1], names, driver_seconds, driver_rounds
+        )
+    return results
 
 
 def main() -> None:
@@ -87,8 +106,17 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument(
-        "--only", default="", help="comma separated case suffixes (aget,gather3,list20)"
+        "--only",
+        default="",
+        help=(
+            "comma separated case suffixes: aget,gather3,list20 or driver cases such as "
+            "select1.driver.t8 (the baselines of a selected driver case are added automatically)"
+        ),
     )
+    parser.add_argument(
+        "--driver-seconds", type=float, default=1.0, help="seconds per driver.* round"
+    )
+    parser.add_argument("--driver-rounds", type=int, default=7, help="interleaved driver.* rounds")
     parser.add_argument("--skip-seed", action="store_true")
     args = parser.parse_args()
 
@@ -103,7 +131,15 @@ def main() -> None:
 
     pk = Book.objects.order_by("pk").values_list("pk", flat=True)[0]  # sync, before the loop starts
     only = {s for s in args.only.split(",") if s}
-    results = asyncio.run(main_async(pk, args.iterations, args.warmup, only))
+    unknown = sorted(only - {"aget", "gather3", "list20"} - driver_micro.known_suffixes())
+    if unknown:
+        parser.error(f"--only matches no case: {', '.join(unknown)}")
+    driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
+    results = asyncio.run(
+        main_async(
+            pk, args.iterations, args.warmup, only, driver, args.driver_seconds, args.driver_rounds
+        )
+    )
     payload = {
         "kind": "micro",
         "meta": {
@@ -120,15 +156,55 @@ def main() -> None:
     print(f"\nwritten: {out.relative_to(ROOT)}")
 
 
+def build_driver(only: set[str]) -> tuple[Any, Any] | None:
+    """``(driver, config)`` when a ``driver.*`` case is selected on PostgreSQL, else ``None``."""
+    if os.environ.get("ASYNCOPATION_DB", "postgresql") != "postgresql":
+        return None
+    if not driver_micro.selected(only):
+        return None
+    from django.conf import settings
+
+    from asyncopation.drivers.postgresql import PostgresDriver
+    from asyncopation.drivers.postgresql.settings import build_config
+
+    config = build_config(
+        "default",
+        settings.DATABASES["default"],
+        use_tz=settings.USE_TZ,
+        time_zone=settings.TIME_ZONE,
+    )
+    return PostgresDriver(config), config
+
+
 def render(payload: dict[str, Any]) -> str:
-    lines = ["| case | status | p50 µs | p95 µs | p99 µs | ops/s |", "|---|---|---|---|---|---|"]
+    lines = [
+        "| case | status | p50 µs | p95 µs | p99 µs | ops/s | CPU µs/op | paired ratio (IQR) "
+        "| driver-getconn µs | load | note |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
     for row in payload["results"]:
         if row["status"] != "ok":
-            lines.append(f"| {row['case']} | skipped | - | - | - | - |")
+            note = row.get("error") or row.get("reason", "")
+            lines.append(
+                f"| {row['case']} | {row['status']} | - | - | - | - | - | - | - | - | {note} |"
+            )
             continue
+        cpu = f"{row['cpu_us']:.1f}" if "cpu_us" in row else "-"
+        ratios = [
+            f"{row[key]['median']:.2f}x [{row[key]['q1']:.2f}-{row[key]['q3']:.2f}] vs {key[6:]}"
+            for key in ("ratio_raw", "ratio_getconn")
+            if key in row
+        ]
+        d = row.get("diff_getconn_us")
+        diff = f"{d['median']:+.2f} [{d['q1']:+.2f}..{d['q3']:+.2f}]" if d else "-"
+        load = (
+            f"{row['load_avg_1m_min']:.0f}-{row['load_avg_1m']:.0f}"
+            if "load_avg_1m" in row
+            else "-"
+        )
         lines.append(
             f"| {row['case']} | ok | {row['p50_us']:.0f} | {row['p95_us']:.0f} | {row['p99_us']:.0f} "
-            f"| {row['ops_per_s']:.0f} |"
+            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {diff} | {load} | |"
         )
     return "\n".join(lines)
 

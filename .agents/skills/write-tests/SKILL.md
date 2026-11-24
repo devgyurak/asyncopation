@@ -42,6 +42,11 @@ async def test_filter_by_title_matches_sync(readonly_db, differential, title, ex
 ## Fixtures (tests/conftest.py)
 - `readonly_db` - committed deterministic seed (`harness/seed.py`); never write.
 - `writable_db` - same seed; reset (committed) after the test.
+- Scratch tables (driver-level write tests) - instead of `writable_db`, a fixture creates and
+  drops its own table via a `tests/support` helper (see `scratch` in
+  `tests/integration/drivers/conftest.py`, helpers in `tests/support/drivers/`). Allowed because
+  the committed seed stays untouched; table names carry a per-run random suffix so concurrent
+  checkouts sharing one test database cannot collide.
 - `differential` - runs a QuerySet factory through sync Django and Asyncopation, returns both
   outcomes as comparable snapshots. `reference_differential` uses Django core async instead of
   Asyncopation (harness self-check).

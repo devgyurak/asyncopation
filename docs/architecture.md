@@ -78,7 +78,7 @@ shutdown, with a lock-guarded lazy fallback: [ADR-0004](adr/0004-lifecycle-and-r
 | Path | Purpose |
 |---|---|
 | `harness/settings.py` | Django settings for tests, e2e and benchmarks (`ASYNCOPATION_DB`) |
-| `harness/catalog/` | test models: every relation kind + `FieldZoo` for type conversion |
+| `harness/catalog/` | test models: every relation kind, a composite-pk model (`BookEdition`) + `FieldZoo` for type conversion |
 | `harness/seed.py` | deterministic dataset |
 | `harness/site/` | Django site with `/sync`, `/core`, `/aopt` variants per scenario |
 | `tests/support/` | differential runner, snapshots, Hypothesis strategies |

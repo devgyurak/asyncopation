@@ -28,6 +28,7 @@ N_PUBLISHERS = 5
 N_AUTHORS = 20
 N_BOOKS = 100
 N_TAGS = 10
+N_EDITIONS = sum(1 + i % 3 for i in range(N_BOOKS))
 
 EXPECTED_COUNTS = {
     "Publisher": N_PUBLISHERS,
@@ -35,6 +36,7 @@ EXPECTED_COUNTS = {
     "AuthorProfile": N_AUTHORS // 2,
     "Tag": N_TAGS,
     "Book": N_BOOKS,
+    "BookEdition": N_EDITIONS,
     "Comment": N_BOOKS + N_AUTHORS,
     "FieldZoo": 4,
 }
@@ -63,6 +65,7 @@ def seed() -> None:
         Author,
         AuthorProfile,
         Book,
+        BookEdition,
         Comment,
         FieldZoo,
         Publisher,
@@ -142,6 +145,17 @@ def seed() -> None:
             ]
         )
         FieldZoo.objects.bulk_create(_field_zoo_rows())
+        # Deterministic without `rnd`: drawing from it here would shift later seed data.
+        BookEdition.objects.bulk_create(
+            BookEdition(
+                book=book,
+                number=number,
+                isbn=f"978{i:08d}{number:02d}",
+                released=None if i % 5 == 0 else _EPOCH.date() + dt.timedelta(days=i * 7 + number),
+            )
+            for i, book in enumerate(books)
+            for number in range(1, 2 + i % 3)
+        )
 
 
 def _field_zoo_rows() -> list[FieldZoo]:
@@ -185,10 +199,19 @@ def _field_zoo_rows() -> list[FieldZoo]:
 
 def reset() -> None:
     """Delete everything and seed again (used after tests that write)."""
-    from harness.catalog.models import Author, Comment, FieldZoo, Order, Publisher, Tag
+    from harness.catalog.models import (
+        Author,
+        BookEdition,
+        Comment,
+        FieldZoo,
+        Order,
+        Publisher,
+        Tag,
+    )
 
     with transaction.atomic():
         Order.objects.all().delete()
+        BookEdition.objects.all().delete()
         Author.objects.all().delete()  # cascades to books, profiles, through rows
         Publisher.objects.all().delete()
         Tag.objects.all().delete()

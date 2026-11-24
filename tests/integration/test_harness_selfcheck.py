@@ -9,7 +9,7 @@ from functools import partial
 import pytest
 from hypothesis import given
 
-from harness.catalog.models import Author, Book, FieldZoo
+from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
 from tests.support.snapshot import annotation_names
 from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
@@ -43,6 +43,16 @@ async def test_seed_creates_expected_row_counts(readonly_db, model_name, expecte
         ),
         pytest.param(FieldZoo.objects.all, id="field-zoo-types"),
         pytest.param(partial(Book.objects.filter, title="missing"), id="empty"),
+        pytest.param(BookEdition.objects.all, id="composite-pk-all"),
+        pytest.param(lambda: BookEdition.objects.values().order_by("pk"), id="composite-pk-values"),
+        pytest.param(
+            lambda: BookEdition.objects.values_list("pk", flat=True).order_by("pk"),
+            id="composite-pk-values-list-pk",
+        ),
+        pytest.param(
+            lambda: BookEdition.objects.select_related("book").order_by("pk")[:20],
+            id="composite-pk-select-related",
+        ),
     ],
 )
 async def test_reference_list_matches_sync(readonly_db, reference_differential, build):
@@ -61,6 +71,19 @@ async def test_reference_list_matches_sync(readonly_db, reference_differential, 
         pytest.param(partial(Book.objects.filter, published=False), "count", id="count"),
         pytest.param(partial(Author.objects.order_by, "-name"), "first", id="first"),
         pytest.param(partial(Book.objects.filter, title="missing"), "exists", id="exists-false"),
+        pytest.param(
+            partial(BookEdition.objects.filter, book__title="book-0", number=1),
+            "get",
+            id="composite-pk-get",
+        ),
+        pytest.param(
+            partial(BookEdition.objects.filter, book__title="book-0", number=99),
+            "get",
+            id="composite-pk-get-does-not-exist",
+        ),
+        pytest.param(BookEdition.objects.all, "get", id="composite-pk-get-multiple"),
+        pytest.param(BookEdition.objects.all, "count", id="composite-pk-count"),
+        pytest.param(BookEdition.objects.all, "first", id="composite-pk-first"),
     ],
 )
 async def test_reference_single_result_operations_match_sync(

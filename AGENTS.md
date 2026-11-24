@@ -42,14 +42,22 @@ saying why (prefer the stack in the plan; otherwise justify in the PR).
 7. **Fix code, not guards.** There are no suppression comments for project guards.
 8. **Generated agent files** (`.claude/agents|rules|skills`, `.codex/agents`, `.pi/agents`) are
    never edited directly - edit `.agents/` and run `make agents-sync`.
+9. **Docs move with the code.** Every change updates the documents that describe it in the same
+   change (README, architecture, ADRs, ledger, plan checklist, skills/rules, translations) - see
+   the `docs-sync` rule for the full "if you change X, update Y" table.
 
 ## Workflow
 Every change follows the `feature-loop` skill: frame -> research -> design check -> red tests
 -> implement -> refactor -> `review-change` (parallel sub-agent review) -> perf (hot paths) ->
 close (plan checklist, docs, ledger, translations). Details: `docs/workflow.md`.
 
-Definition of done: `make check-all` green, review has no open BLOCKER/MAJOR, plan checklist
-ticked, docs/ledger/translations updated.
+Definition of done: `make check-all` green, review has no open BLOCKER/MAJOR, every document
+listed by the `docs-sync` rule updated, plan checklist ticked, the GitHub issue closed by the PR.
+
+Tracking: every roadmap item is a GitHub issue in a `Phase N` milestone, labelled by type
+(`feature`, `perf`, `test`, `ci`, `documentation`, ...), layer (`area:*`) and backend
+(`backend:*`). `needs-decision` marks issues waiting on a human/ADR. Pick work from the current
+phase milestone and reference the issue in the PR (`Closes #N`).
 
 Commits and branches: one prefix per change - `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` - with an
 English summary and a body explaining why (`ADD: alist() on aobjects for PostgreSQL`). Work
@@ -78,6 +86,7 @@ asked.
 | [`async-correctness`](.agents/rules/async-correctness.md) | `src/**` | Event-loop safety, connection ownership, cancellation and concurrency rules |
 | [`django-porting`](.agents/rules/django-porting.md) | `src/**`, `docs/django-api-ledger.toml` | How to depend on and port Django internals without silent drift |
 | [`docs-and-adr`](.agents/rules/docs-and-adr.md) | `docs/**` | Design documents, ADRs and when a decision needs one |
+| [`docs-sync`](.agents/rules/docs-sync.md) | `**/*` | Every change must update the documents that describe it, in the same change |
 | [`harness-and-bench`](.agents/rules/harness-and-bench.md) | `harness/**`, `bench/**`, `tests/e2e/**` | Shared harness (models, seed, site), e2e and benchmark conventions |
 | [`language-and-i18n`](.agents/rules/language-and-i18n.md) | `**/*.py`, `**/*.md`, `**/*.toml`, `**/*.yml` | English-only code comments and docs; -XX suffixed translations for selected docs |
 | [`testing`](.agents/rules/testing.md) | `tests/**` | Given/When/Then, zero control flow, fixtures, DB isolation and differential testing |

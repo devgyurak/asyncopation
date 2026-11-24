@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=043fb35d2122 -->
+<!-- i18n: source=docs/design/plan.md source-sha256=6c859ea30d5e -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -251,6 +251,9 @@ books = await aq(author.book_set.filter(published=True)).alist()
 | 5 | 쓰기 연산 (`acreate`/`asave`/`aupdate`/`adelete`), async `Collector`, `async_atomic`, `Signal.asend` 연동 | 상 | |
 | 6 | 벤치마크, 문서, 첫 공개 릴리스 | 중 | README 비교표 |
 
+진행 관리: 각 Phase는 GitHub 마일스톤, 각 로드맵 항목은 이슈로 관리한다 -
+[마일스톤](https://github.com/devgyurak/asyncopation/milestones).
+
 > Phase 0~1은 사실상 **테스트 하네스를 잡는 데 대부분의 시간**을 쓴다. 이후 Phase 2~5는 모두 "하네스에 케이스를 추가하고 통과시키는" 반복이 되므로, 여기에 들인 시간이 이후 속도를 결정한다.
 
 ### Phase 0 체크리스트 (테스트 하네스)
@@ -258,7 +261,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] 테스트용 모델 세트 (FK, O2O, M2M, reverse FK, GenericForeignKey, 다양한 필드 타입) - `harness/catalog`
 - [x] 차등 테스트 러너: 같은 QuerySet을 sync / async로 실행하고 결과(인스턴스 필드, 순서, 타입)를 비교 - `tests/support/differential.py`
 - [x] Hypothesis 쿼리셋 생성 전략 (filter / exclude / order_by / select_related / slicing 조합, annotate는 추후) - `tests/support/strategies.py`
-- [ ] async 쪽 쿼리 캡처 유틸 (`assertNumQueries`의 async 버전, 실행 SQL 기록) - Phase 1의 드라이버 계측 훅이 필요
+- [ ] async 쪽 쿼리 캡처 유틸 (`assertNumQueries`의 async 버전, 실행 SQL 기록) - Phase 1의 드라이버 계측 훅이 필요 (#9, #4에 막혀 있음)
 - [x] CI 매트릭스: PostgreSQL / MySQL / MariaDB × 지원 Django 버전 (+ Django main 카나리아)
 - [x] E2E 하네스(uvicorn + 하네스 사이트)와 벤치마크 하네스(micro + k6)
 

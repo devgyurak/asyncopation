@@ -250,6 +250,9 @@ Compare the same endpoints in three configurations:
 | 5 | Writes (`acreate`/`asave`/`aupdate`/`adelete`), async `Collector`, `async_atomic`, `Signal.asend` integration | High | |
 | 6 | Benchmarks, docs, first public release | Medium | README comparison table |
 
+Tracking: each phase is a GitHub milestone and each roadmap item an issue -
+[milestones](https://github.com/devgyurak/asyncopation/milestones).
+
 > Phases 0-1 spend **most of their time on the test harness**. Phases 2-5 then become a loop of "add cases to the harness and make them pass", so the time invested here sets the pace for everything after.
 
 ### Phase 0 checklist (test harness)
@@ -257,7 +260,7 @@ Compare the same endpoints in three configurations:
 - [x] Test model set (FK, O2O, M2M, reverse FK, GenericForeignKey, many field types) - `harness/catalog`
 - [x] Differential test runner: run the same QuerySet sync / async and compare results (instance fields, order, types) - `tests/support/differential.py`
 - [x] Hypothesis QuerySet strategies (filter / exclude / order_by / select_related / slicing; annotate pending) - `tests/support/strategies.py`
-- [ ] Async query capture utility (async `assertNumQueries`, executed SQL log) - needs the driver instrumentation hook from Phase 1
+- [ ] Async query capture utility (async `assertNumQueries`, executed SQL log) - needs the driver instrumentation hook from Phase 1 (#9, blocked by #4)
 - [x] CI matrix: PostgreSQL / MySQL / MariaDB x supported Django versions (+ Django main canary)
 - [x] E2E harness (uvicorn + harness site) and benchmark harness (micro + k6)
 

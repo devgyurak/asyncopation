@@ -50,7 +50,8 @@ Async connections cannot see the sync test transaction, so pytest-django's defau
 ## Differential testing is the default for read APIs
 For every read API compare against the sync ORM with the `differential` fixture
 (see the `differential-testing` skill). Snapshots compare model, pk, every concrete field,
-value **and type**, and order. Add Hypothesis strategies when adding QuerySet features.
+every annotation (any public non-field instance attribute), value **and type**, and
+order. Add Hypothesis strategies when adding QuerySet features.
 
 ## Backends
 Every integration test must pass on postgresql, mysql and mariadb. Backend-specific behaviour

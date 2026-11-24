@@ -9,17 +9,20 @@ Asyncopation must give identical snapshots on every backend.
 
 ## Pieces (tests/support/)
 - `snapshot.py` - `snapshot(obj)` turns a model instance into a hashable tuple
-  `(app_label.Model, (attname, type_name, value)...)`; `snapshot_rows(rows)` keeps order.
+  `(app_label.Model, ((attname, type_name, value)...), ((annotation, type_name, value)...))`;
+  annotations are the instance's public non-field attributes (`annotation_names()` lists them).
+  `snapshot_result(rows)` keeps order.
   Types are part of the snapshot on purpose: drivers differ (Decimal vs float, naive vs aware
   datetime, `memoryview` vs `bytes`, JSON decoding).
-- `differential.py` - `Outcome(rows, error)` and `run_differential(build, evaluator)`.
+- `differential.py` - `Outcome(snapshot, error)` (`.rows` for list results) and `run_differential(build, evaluator)`.
   `build` is a zero-arg callable returning a **fresh** QuerySet (never share a QuerySet between
   the two sides: result caches would leak). Exceptions are captured by type, so
   `DoesNotExist` on one side and a row on the other is a mismatch.
 - `evaluators.py` - `asyncopation_evaluator` (the subject) and `reference_evaluator`
   (Django core async API; used for the harness self-check).
 - `strategies.py` - Hypothesis strategies producing `QuerySetSpec`s (filters, excludes,
-  ordering, slicing, select_related, values/values_list) and `build_queryset(spec)`.
+  ordering, slicing, select_related, annotations picked by name from `ANNOTATIONS` and usable in
+  the ordering) and `build_queryset(spec)`; `annotated_spec()` builds example-based specs.
 
 ## Adding coverage for a new QuerySet feature
 1. Extend `QuerySetSpec` + `queryset_specs()` with the new dimension (keep generation

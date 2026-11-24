@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=4015aa74b79e -->
+<!-- i18n: source=docs/design/plan.md source-sha256=d961386e347e -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -264,7 +264,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 
 - [x] 테스트용 모델 세트 (FK, O2O, M2M, reverse FK, GenericForeignKey, 다양한 필드 타입) - `harness/catalog`
 - [x] 차등 테스트 러너: 같은 QuerySet을 sync / async로 실행하고 결과(인스턴스 필드, 순서, 타입)를 비교 - `tests/support/differential.py`
-- [x] Hypothesis 쿼리셋 생성 전략 (filter / exclude / order_by / select_related / slicing 조합, annotate는 추후) - `tests/support/strategies.py`
+- [x] Hypothesis 쿼리셋 생성 전략 (filter / exclude / order_by / select_related / slicing / annotate 조합) - `tests/support/strategies.py`
 - [ ] async 쪽 쿼리 캡처 유틸 (`assertNumQueries`의 async 버전, 실행 SQL 기록) - Phase 1의 드라이버 계측 훅이 필요 (#9, #4에 막혀 있음)
 - [x] CI 매트릭스: PostgreSQL / MySQL / MariaDB × 지원 Django 버전 (+ Django main 카나리아)
 - [x] E2E 하네스(uvicorn + 하네스 사이트)와 벤치마크 하네스(micro + k6)

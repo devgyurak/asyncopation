@@ -69,7 +69,7 @@ a, b, c = await asyncio.gather(
 ### 1.5 Progress in core
 
 - **#35629 Implement async cursors**: step one opens a low-level API (`new_connection()` + `acursor()`). Making the whole ORM async comes after that.
-- **Django 6.1 (2026-08) fetch modes**: introduced `FETCH_ONE` / `FETCH_PEERS` / `RAISE`.
+- **Django 6.1 (2026-08) fetch modes**: introduced `FETCH_ONE` / `FETCH_PEERS` / `FETCH_RAISE`.
 - **#37218**: documents that lazy relation access is sync-only. Using `FETCH_PEERS` in async raises `SynchronousOnlyOperation`. The discussion raised the need for `AFETCH_PEERS` / `afetch_{one,many}()`. -> **This is a gap Asyncopation can fill.**
 
 ---
@@ -105,7 +105,7 @@ a, b, c = await asyncio.gather(
 | # | Decision |
 |---|---|
 | 1 | Drivers: **psycopg3 (PostgreSQL) + asyncmy (MySQL)** |
-| 2 | API: leave `objects` untouched and add an **`aobjects`** manager |
+| 2 | API: leave `objects` untouched and add an **`aobjects`** accessor (a descriptor, not a `Manager` - ADR-0006) |
 | 3 | Scope: support the core traits of the Django ORM, **lazy loading + eager loading** |
 | 4 | End goal: make **the SQL generation path async-friendly** as well (defined in §4.4) |
 
@@ -140,20 +140,22 @@ rows = await cur.fetchall()
 | (b) per-query borrowing | Outside transactions, borrow from the pool per query and return it |
 | (c) transaction pinning | Pin a connection only inside a transaction |
 
--> **(b) + (c)** is the default, because it gives real parallelism. This decision is confirmed in a separate design document before any code is written (ADR-0001).
+-> **(b) + (c)** is the default, because it gives real parallelism. Accepted in ADR-0001: inside a transaction, use of the pinned connection from another task raises `ConcurrentQueryError` instead of being serialized.
 
 ### 4.3 Driver abstraction
 
 The interface assumes two implementations from day one; PostgreSQL is implemented first.
 
 ```
-AsyncDriver (interface)
-├── connect / pool
-├── execute(sql, params) -> AsyncCursor
-├── fetchone / fetchmany / fetchall / server-side cursors
-├── last_insert_id / RETURNING support
-└── begin / commit / rollback / savepoint
+AsyncDriver (protocol)                       AsyncDbConnection (protocol)
+├── capabilities: Capabilities (frozen)      ├── fetch_all / execute / execute_many
+├── open / close                             ├── stream(...) -> async context manager
+└── connection() -> borrow                   └── begin / commit / rollback / savepoints
 ```
+
+The driver behaves like Django's sync backend connection (values, rowcount semantics, session
+setup) and translates exceptions to `django.db`; SQL shape stays with Django's `features`
+(ADR-0003).
 
 **Per-driver pitfalls**
 
@@ -177,17 +179,20 @@ AsyncDriver (interface)
    - Build a **compile-only `DatabaseWrapper`** that never connects.
    - At startup, query server version/info asynchronously and inject it into the features/ops caches.
    - SQL generation is thereby fully decoupled from sync connection objects.
+   - Some Django compilers re-resolve `connections[using]` (aggregate, update) - how they reach the
+     compile-only wrapper is ADR-0008 (Proposed, decided after the Phase 1 spike).
 2. **Rewrite orchestration that mixes I/O and logic as async**
    - `Collector.collect` (runs queries while collecting cascade-delete targets)
    - `get_or_create`, `update_or_create`
    - `prefetch_related_objects`
+   - Written as sans-I/O generator cores driven by one async runner, not `async def` copies (ADR-0007).
 
 ### 4.5 Lazy loading
 
-Python attribute access cannot be awaited, so the approach is **explicit async accessors + RAISE by default**.
+Python attribute access cannot be awaited, so the approach is **explicit async accessors + `FETCH_RAISE` by default**.
 
 ```python
-books = await Book.aobjects.filter(...).alist()  # aobjects defaults to RAISE mode
+books = await Book.aobjects.filter(...).alist()  # aobjects defaults to FETCH_RAISE
 books[0].author  # not loaded -> FieldFetchBlocked (fail fast)
 await books[0].afetch("author")  # async FETCH_PEERS: fills all peers with one query
 books[1].author  # already filled, sync access OK
@@ -205,7 +210,7 @@ books[1].author  # already filled, sync access OK
 | Feature | Difficulty | Approach |
 |---|---|---|
 | `select_related` | Easy | The compiler generates the JOIN and `RelatedPopulator` (pure Python) is reused; only execution is replaced |
-| `prefetch_related` | Hard | Port `prefetch_one_level` to async: build querysets with the descriptor's `get_prefetch_querysets` (no I/O) -> evaluate asynchronously -> reuse the assignment logic. Must support `Prefetch` objects, `to_attr`, nested lookups and GenericForeignKey |
+| `prefetch_related` | Hard | Port `prefetch_one_level` to async: build querysets with the descriptor's `get_prefetch_querysets` (audited for hidden I/O: the GenericForeignKey variant queries ContentType on a cache miss) -> evaluate asynchronously -> reuse the assignment logic. Must support `Prefetch` objects, `to_attr`, nested lookups and GenericForeignKey |
 | related managers | Medium | `author.book_set.filter(...)` is a lazy QuerySet, so an **`aq()` adapter** intervenes only at evaluation |
 
 ```python
@@ -245,7 +250,7 @@ Compare the same endpoints in three configurations:
 | 0 | **Test harness**: differential test runner, QuerySet generation strategies, async query capture, CI matrix | Medium | harness, CI |
 | 1 | Driver abstraction + compile-only connection + `aobjects` read API (`alist`/`aget`/`afirst`/`acount`/`aexists`/`async for`) - PG -> MySQL. Refines the harness against the real implementation | Medium | first working version |
 | 2 | `select_related`, `values` / `values_list` | Medium-low | |
-| 3 | **`afetch` + RAISE by default + async peer loading** (flagship feature) | Medium-high | async fetch modes |
+| 3 | **`afetch` + `FETCH_RAISE` by default + async peer loading** (flagship feature) | Medium-high | async fetch modes |
 | 4 | Async port of `prefetch_related`, `aq()` adapter | High | |
 | 5 | Writes (`acreate`/`asave`/`aupdate`/`adelete`), async `Collector`, `async_atomic`, `Signal.asend` integration | High | |
 | 6 | Benchmarks, docs, first public release | Medium | README comparison table |

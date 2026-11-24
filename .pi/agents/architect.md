@@ -18,7 +18,8 @@ Given a proposal (feature, design note, ADR draft), produce a decision-ready rev
    a driver import outside `drivers/`, or I/O inside `compile/`.
 3. Identify every I/O point the feature introduces and which layer owns it.
 4. Check connection ownership against ADR-0001: which connection does each query use inside
-   and outside `async_atomic`, and what happens under `asyncio.gather`?
+   and outside `async_atomic`, and what happens under `asyncio.gather`? Check the other accepted
+   ADRs too (pipeline contracts, driver contract, lifecycle, hooks, public API, sans-I/O ports).
 5. List Django internals that will be reused or ported (they need ledger entries).
 6. Name the tests that prove it: differential cases, backends, e2e scenario, benchmark scenario.
 7. Decide whether an ADR is required (expensive-to-reverse decisions) and draft its title.

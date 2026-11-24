@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=6c859ea30d5e -->
+<!-- i18n: source=docs/design/plan.md source-sha256=4015aa74b79e -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -70,7 +70,7 @@ a, b, c = await asyncio.gather(
 ### 1.5 코어 진행 상황
 
 - **#35629 Implement async cursors**: 1단계로 저수준 API(`new_connection()` + `acursor()`)를 여는 방향이다. ORM 전체가 async로 바뀌는 건 그 이후다.
-- **Django 6.1 (2026-08) fetch modes**: `FETCH_ONE` / `FETCH_PEERS` / `RAISE` 모드가 도입됐다.
+- **Django 6.1 (2026-08) fetch modes**: `FETCH_ONE` / `FETCH_PEERS` / `FETCH_RAISE` 모드가 도입됐다.
 - **#37218**: lazy relation 접근이 sync 전용이라는 점을 문서화한 티켓이다. async에서 `FETCH_PEERS`를 쓰면 `SynchronousOnlyOperation`이 발생한다. 논의 중에 `AFETCH_PEERS` / `afetch_{one,many}()`가 필요하다는 의견이 나왔다. → **Asyncopation이 채울 수 있는 빈자리다.**
 
 ---
@@ -106,7 +106,7 @@ a, b, c = await asyncio.gather(
 | # | 결정 사항 |
 |---|---|
 | 1 | 드라이버: **psycopg3 (PostgreSQL) + asyncmy (MySQL)** |
-| 2 | API: 기존 `objects`는 그대로 두고 **`aobjects`** 매니저를 추가한다 |
+| 2 | API: 기존 `objects`는 그대로 두고 **`aobjects`** 접근자(`Manager`가 아닌 디스크립터 - ADR-0006)를 추가한다 |
 | 3 | 목표 범위: Django ORM의 핵심 특징인 **lazy loading + eager loading**까지 지원한다 |
 | 4 | 최종 목표: **SQL 생성 경로까지 비동기 친화적으로** 만든다 (정의는 §4.4 참고) |
 
@@ -141,20 +141,21 @@ rows = await cur.fetchall()
 | (b) 쿼리 단위 대여 | 트랜잭션 밖에서는 쿼리마다 풀에서 빌리고 반납한다 |
 | (c) 트랜잭션 고정 | 트랜잭션 안에서만 커넥션을 고정한다 |
 
-→ **(b) + (c) 조합**을 기본으로 한다. 실제 병렬성을 얻을 수 있는 방식이다. 코드를 쓰기 전에 이 결정을 별도 설계 문서(ADR-0001)로 확정한다.
+→ **(b) + (c) 조합**을 기본으로 한다. 실제 병렬성을 얻을 수 있는 방식이다. ADR-0001로 채택됐다. 트랜잭션 안에서 다른 task가 고정된 커넥션을 쓰면 직렬화하지 않고 `ConcurrentQueryError`를 발생시킨다.
 
 ### 4.3 드라이버 추상화
 
 인터페이스는 처음부터 두 구현체를 전제로 잡고, 구현은 PostgreSQL을 먼저 한다.
 
 ```
-AsyncDriver (interface)
-├── connect / pool
-├── execute(sql, params) -> AsyncCursor
-├── fetchone / fetchmany / fetchall / 서버 사이드 커서
-├── last_insert_id / RETURNING 지원 여부
-└── begin / commit / rollback / savepoint
+AsyncDriver (protocol)                       AsyncDbConnection (protocol)
+├── capabilities: Capabilities (frozen)      ├── fetch_all / execute / execute_many
+├── open / close                             ├── stream(...) -> async context manager
+└── connection() -> borrow                   └── begin / commit / rollback / savepoints
 ```
+
+드라이버는 Django의 sync 백엔드 커넥션과 똑같이 동작하고(값, rowcount 의미, 세션 설정) 예외를
+`django.db` 예외로 변환한다. SQL 모양은 Django의 `features`가 결정한다(ADR-0003).
 
 **드라이버별 함정**
 
@@ -178,17 +179,20 @@ AsyncDriver (interface)
    - 절대 연결하지 않는 **컴파일 전용 `DatabaseWrapper`**를 만든다.
    - 앱 시작 시 서버 버전/정보를 async로 조회해 features/ops 캐시에 미리 주입한다.
    - 결과적으로 SQL 생성이 sync 커넥션 객체에서 완전히 분리된다.
+   - 일부 Django 컴파일러(aggregate, update)는 `connections[using]`을 다시 조회한다. 이들이 컴파일 전용
+     wrapper에 닿는 방법은 ADR-0008에서 정한다(Proposed, Phase 1 스파이크 후 결정).
 2. **I/O와 로직이 섞인 오케스트레이션을 async로 재작성**
    - `Collector.collect` (cascade 삭제 대상 수집 중 쿼리 실행)
    - `get_or_create`, `update_or_create`
    - `prefetch_related_objects`
+   - `async def` 복사본이 아니라 하나의 async 실행기가 구동하는 sans-I/O 제너레이터 코어로 작성한다(ADR-0007).
 
 ### 4.5 Lazy loading
 
-파이썬 속성 접근은 await할 수 없으므로 **명시적 async 접근자 + 기본 RAISE** 방식을 쓴다.
+파이썬 속성 접근은 await할 수 없으므로 **명시적 async 접근자 + 기본 `FETCH_RAISE`** 방식을 쓴다.
 
 ```python
-books = await Book.aobjects.filter(...).alist()  # aobjects는 기본 RAISE 모드
+books = await Book.aobjects.filter(...).alist()  # aobjects는 기본 FETCH_RAISE
 books[0].author  # 로드 안 됐으면 FieldFetchBlocked (빠르게 실패)
 await books[0].afetch("author")  # async FETCH_PEERS: peers 전체를 쿼리 1번으로 채움
 books[1].author  # 이미 채워져 있으니 sync 접근 OK
@@ -206,7 +210,7 @@ books[1].author  # 이미 채워져 있으니 sync 접근 OK
 | 기능 | 난이도 | 방식 |
 |---|---|---|
 | `select_related` | 쉬움 | 컴파일러가 JOIN을 생성하고 `RelatedPopulator`(순수 파이썬)를 재사용한다. 실행 부분만 교체한다 |
-| `prefetch_related` | 어려움 | `prefetch_one_level`을 async로 포팅한다. 디스크립터의 `get_prefetch_querysets`(I/O 없음)로 쿼리셋을 만들고 → async로 평가하고 → 할당 로직을 재사용한다. `Prefetch` 객체, `to_attr`, 중첩 lookup, GenericForeignKey를 지원해야 한다 |
+| `prefetch_related` | 어려움 | `prefetch_one_level`을 async로 포팅한다. 디스크립터의 `get_prefetch_querysets`(숨은 I/O 점검 필요: GenericForeignKey 쪽은 캐시 미스 시 ContentType을 조회한다)로 쿼리셋을 만들고 → async로 평가하고 → 할당 로직을 재사용한다. `Prefetch` 객체, `to_attr`, 중첩 lookup, GenericForeignKey를 지원해야 한다 |
 | related manager | 보통 | `author.book_set.filter(...)`는 lazy QuerySet이므로 **`aq()` 어댑터**로 평가 시점에만 개입한다 |
 
 ```python
@@ -246,7 +250,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 | 0 | **테스트 하네스**: 차등 테스트 러너, 쿼리셋 생성 전략, async 쿼리 캡처, CI 매트릭스 | 중 | 하네스, CI |
 | 1 | 드라이버 추상화 + 컴파일 전용 커넥션 + `aobjects` 읽기 API (`alist`/`aget`/`afirst`/`acount`/`aexists`/`async for`) — PG → MySQL. 하네스를 실제 구현에 붙여서 다듬는 단계 | 중 | 첫 동작 버전 |
 | 2 | `select_related`, `values` / `values_list` | 중하 | |
-| 3 | **`afetch` + 기본 RAISE + async peers 로딩** (대표 기능) | 중상 | async fetch modes |
+| 3 | **`afetch` + 기본 `FETCH_RAISE` + async peers 로딩** (대표 기능) | 중상 | async fetch modes |
 | 4 | `prefetch_related` async 포팅, `aq()` 어댑터 | 상 | |
 | 5 | 쓰기 연산 (`acreate`/`asave`/`aupdate`/`adelete`), async `Collector`, `async_atomic`, `Signal.asend` 연동 | 상 | |
 | 6 | 벤치마크, 문서, 첫 공개 릴리스 | 중 | README 비교표 |

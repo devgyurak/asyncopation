@@ -1,5 +1,6 @@
-"""Layer 3 - evaluation: the ``aobjects`` manager, ``aq()`` adapter and async iterables.
+"""Layer 7 - public facade: ``aq()``, the ``aobjects`` descriptor and evaluation methods.
 
-QuerySet building stays Django's (lazy, no I/O). This layer intervenes only at evaluation time:
-compile -> execute through the connection layer -> apply converters -> ``Model.from_db``.
+QuerySet building stays Django's (lazy, no I/O). ``aq()`` wraps any QuerySet or Manager by
+composition and only adds async evaluation (ADR-0006); execution is delegated to
+``asyncopation.engine``.
 """

@@ -145,11 +145,12 @@ reason = """`CompileOperations` overrides `compose_sql`: Django's version calls 
 `connection.cursor()`, which `contrib.postgres` `SearchHeadline` options reach while the SQL is \
 generated (contrib/postgres/search.py, its only caller there). The override is plain Python, \
 with no driver and no server settings involved: it renders the exact types str / int / float / \
-bool / None and finite Decimal byte for byte like Django's output on a live connection (C and \
-pure-Python psycopg alike) and rejects every other type at build time: non-finite Decimal \
-(the two implementations render the NaN variants differently: the C one -NaN as " -NaN" and \
-NaN123 as "NaN123", the pure-Python one every such value as 'NaN'::numeric; +-Infinity and plain \
-NaN are alike in both and are rejected with them) and every subclass, since the two psycopg \
+bool / None and finite Decimal byte for byte like Django's output on a live connection (psycopg's \
+compiled binary build and its pure-Python implementation alike; signed zeros get the leading \
+space) and rejects every other type at build time: non-finite Decimal \
+(the two implementations render the NaN variants differently: the compiled one -NaN as " -NaN" and \
+NaN123 as "NaN123", the pure-Python one every such value as 'NaN'::numeric; +-Infinity, plain \
+NaN and positive sNaN are alike in both and are rejected with them) and every subclass, since the two psycopg \
 implementations disagree about subclasses and an overridden __str__ would put arbitrary text into \
 the SQL; a NUL character is a ValueError (live: DataError); tests/integration compares both (`make test-compose-python` for the pure-Python one)."""
 verified_against = "6.1.3"

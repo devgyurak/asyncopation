@@ -81,7 +81,13 @@ def _missing_driver(exc: BaseException) -> bool:
 def import_every_wrapper_module(packages: list[str] | None = None) -> list[str]:
     """Import every module of the packages, sub-packages included (they register their wrapper
     classes); returns the modules skipped because a database driver library is missing. Any
-    other import error is raised."""
+    other import error is raised.
+
+    Limits of the "driver library is missing" test: Django's PostgreSQL backend raises
+    `ImproperlyConfigured` without `from`, so its `__cause__` is None and it is not skipped (the
+    `no_from` fixture pins that); a typo in a module of an installed driver (`psycopg.typos`) is
+    read as a missing driver and skipped (a non-empty `skipped_in_this_environment()` shows it).
+    """
     import importlib
     import pkgutil
 
@@ -90,7 +96,7 @@ def import_every_wrapper_module(packages: list[str] | None = None) -> list[str]:
     skipped: list[str] = []
     for name in default_wrapper_packages() if packages is None else packages:
         package = importlib.import_module(name)  # a default package itself needs no driver
-        for info in pkgutil.walk_packages(package.__path__, name + "."):
+        for info in pkgutil.walk_packages(package.__path__, name + ".", onerror=lambda _name: None):
             try:  # walk_packages yields a sub-package before importing it: this import decides
                 importlib.import_module(info.name)
             except (ImportError, ImproperlyConfigured) as exc:
@@ -144,6 +150,13 @@ def _write_scanned_package(directory: Any, name: str | None = None) -> str:
         (package / f"{module}.py").write_text(
             f"raise ModuleNotFoundError('no driver', name={library!r})\n"
         )
+    (package / "driverless_config").mkdir()
+    (package / "driverless_config" / "__init__.py").write_text(
+        "from django.core.exceptions import ImproperlyConfigured\n"
+        "try:\n    raise ModuleNotFoundError('no driver', name='MySQLdb')\n"
+        "except ModuleNotFoundError as exc:\n"
+        "    raise ImproperlyConfigured('Error loading MySQLdb') from exc\n"
+    )
     (package / "driverless").mkdir()
     (package / "driverless" / "__init__.py").write_text(
         "raise ModuleNotFoundError('no driver', name='MySQLdb')\n"
@@ -172,6 +185,9 @@ FAILING_MODULES = [
     ("nameless.py", "raise ImportError('boom')\n"),
     ("missing_dep.py", "raise ModuleNotFoundError('x', name='asyncopation.nothing')\n"),
     ("unnamed_missing.py", "raise ModuleNotFoundError('x')\n"),
+    ("narrow_pool.py", "raise ModuleNotFoundError('x', name='psycopg_pool')\n"),
+    ("narrow_extra.py", "raise ModuleNotFoundError('x', name='MySQLdb_extra')\n"),
+    ("narrow_ours.py", "raise ModuleNotFoundError('x', name='asyncopation.psycopg')\n"),
     ("wrong_symbol.py", "raise ImportError('cannot import name', name='psycopg')\n"),
     (
         "no_from.py",
@@ -185,15 +201,15 @@ FAILING_MODULES = [
 
 def scanned_package_report(
     directory: Any,
-) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Scan a throwaway package: (classes that can connect, classes found, modules skipped, error
-    kinds raised by modules that fail for another reason)."""
+) -> tuple[list[str], list[str], list[str], list[tuple[str, str]]]:
+    """Scan a throwaway package: (classes that can connect, classes found, modules skipped,
+    (module, error kind) pairs raised by modules that fail for another reason)."""
     import importlib
     import sys
 
     name = _write_scanned_package(directory)
     sys.path.insert(0, str(directory))
-    raised: list[str] = []
+    raised: list[tuple[str, str]] = []
     try:
         skipped = import_every_wrapper_module([name])
         reported = wrapper_classes_that_can_connect(name, scan=False)
@@ -206,7 +222,9 @@ def scanned_package_report(
             try:
                 import_every_wrapper_module([name])
             except Exception as exc:
-                raised.append(type(exc).__name__)
+                raised.append(
+                    (relative.removesuffix("/__init__.py").removesuffix(".py"), type(exc).__name__)
+                )
             path.unlink()
             _forget(name + "." + relative.removesuffix(".py").removesuffix("/__init__"))
     finally:

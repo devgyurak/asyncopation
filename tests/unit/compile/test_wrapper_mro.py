@@ -94,6 +94,7 @@ def test_modules_whose_database_driver_is_missing_are_skipped_and_listed(tmp_pat
     assert skipped == [
         "bad_config",
         "driverless",
+        "driverless_config",
         "no_dotted",
         "no_driver",
         "no_psycopg",
@@ -106,14 +107,17 @@ def test_an_import_error_for_anything_but_a_driver_library_is_not_hidden(tmp_pat
     _reported, _found, _skipped, raised = scanned_package_report(tmp_path)
     # then
     assert raised == [
-        "RuntimeError",
-        "ImportError",
-        "ImportError",
-        "ModuleNotFoundError",
-        "ModuleNotFoundError",
-        "ImportError",
-        "ImproperlyConfigured",
-        "ImportError",
+        ("crash", "RuntimeError"),
+        ("typo", "ImportError"),
+        ("nameless", "ImportError"),
+        ("missing_dep", "ModuleNotFoundError"),
+        ("unnamed_missing", "ModuleNotFoundError"),
+        ("narrow_pool", "ModuleNotFoundError"),
+        ("narrow_extra", "ModuleNotFoundError"),
+        ("narrow_ours", "ModuleNotFoundError"),
+        ("wrong_symbol", "ImportError"),
+        ("no_from", "ImproperlyConfigured"),
+        ("broken", "ImportError"),
     ]
 
 

@@ -296,6 +296,15 @@ GETATTR_ADAPTER_OUTSIDE = 'import asyncopation\n\ndef f():\n    return getattr(a
           id="connections-outside"),
         P(GETATTR_ADAPTER_OUTSIDE, ENGINE, "A104", "may only be used by", ["A102", "A104"], True,
           id="adapters-outside"),
+        P('import asyncopation as a\n\ndef f():\n    return getattr(a, "_django").connections.x\n',
+          DJANGO, "A102", "reachable only from compile/scope.py", ["A102"], True,
+          id="connections-through-an-alias"),
+        P('import asyncopation\n\ndef f():\n    return getattr(getattr(asyncopation, "_django"), '
+          '"postgresql_adapters").adapters_template\n',
+          DJANGO, "A104", "may only be used by", ["A104"], True, id="adapters-nested-getattr"),
+        P('import asyncopation\n\ndef f():\n    return getattr(asyncopation, "_django", None).connections.x\n',
+          DJANGO, "A102", "reachable only from compile/scope.py", ["A102"], True,
+          id="connections-with-a-default"),
         P(GETATTR_CONN, "src/asyncopation/compile/scope.py", "A102", "reachable only from compile/scope.py",
           ["A102"], False, id="connections-in-the-scope-module-is-no-boundary-hit"),
         P(GETATTR_ADAPTER, "src/asyncopation/drivers/postgresql/x.py", "A104", "may only be used by",
@@ -318,10 +327,23 @@ def test_constant_getattr_steps_reach_the_boundary_modules_like_attributes(
           id="hasattr"),
         P('import asyncopation\n\ndef f():\n    return getattr(asyncopation, "_django")\n',
           id="no-chain"),
+        P('import asyncopation\n\ndef f():\n    return hasattr(asyncopation._django, "connections")\n',
+          id="hasattr-on-the-boundary-module"),
     ],
 )  # fmt: skip
 def test_the_package_object_alone_is_not_a_boundary_module_in_the_django_package(source):
     # when
     codes = distinct_codes(source, DJANGO)
+    # then
+    assert codes == []
+
+
+def test_another_asyncopation_attribute_is_not_a_boundary_module_outside_the_django_package():
+    # given
+    source = (
+        'import asyncopation\n\ndef f():\n    return getattr(asyncopation, "engine").connections\n'
+    )
+    # when
+    codes = distinct_codes(source, ENGINE)
     # then
     assert codes == []

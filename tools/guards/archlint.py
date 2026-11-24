@@ -46,7 +46,8 @@ guarded function through a variable (``e = eval``), ``super(CompileOnlyMixin, w)
 ``_private`` names taken from a public module (A203), ``BaseWrapper`` handed on through
 ``getattr(<asyncopation module>, "BaseWrapper")``, a star import, a call argument, ``return`` /
 ``yield`` or a lambda body inside ``compile/`` / ``_django/``, an ``asyncopation`` module
-object assigned to a variable (``x = getattr(asyncopation, "_django")``), psycopg objects that an
+object assigned to a variable inside ``_django/`` (``x = getattr(asyncopation, "_django")``;
+outside it the ``_django`` access is rejected), psycopg objects that an
 ``asyncopation.drivers`` module re-exports under a public name (``from
 asyncopation.drivers.postgresql import sql``; ADR-0003: drivers do not do that). Django-name
 tracking in ``connlint`` is per module, not per scope, so a parameter that shadows a Django name

@@ -35,26 +35,26 @@ class CompileOperations(DatabaseOperations):
     """PostgreSQL operations whose ``compose_sql`` needs no connection and no driver.
 
     Django's ``compose_sql`` renders client-side through ``mogrify``, which opens a cursor
-    (``contrib.postgres`` ``SearchHeadline`` options call it while the SQL is generated, and that
-    is its only caller during SQL generation). This version is plain Python and renders exactly the
+    (``contrib.postgres`` ``SearchHeadline`` options call it while the SQL is generated, and that is
+    its only caller during SQL generation). This version is plain Python and renders exactly the
     types that caller passes, byte for byte like Django's output on a live connection (checked in
-    tests/integration against both the C and the pure-Python psycopg implementation): ``str``
-    (quotes doubled; a string with a backslash becomes `` E'...'`` with doubled backslashes, which
-    is correct whatever ``standard_conforming_strings`` is), ``int``, ``float`` (``'NaN'::float8``,
-    ``'Infinity'::float8`` and ``'-Infinity'::float8`` for the special values), finite ``Decimal``,
-    ``bool`` and ``None`` (``NULL``). Finite negative numbers (``int``, ``float`` and ``Decimal``)
-    get a leading space.
+    tests/integration against psycopg's compiled ``binary`` build and its pure-Python
+    implementation): ``str`` (quotes doubled; a string with a backslash becomes `` E'...'`` with
+    doubled backslashes, which is correct whatever ``standard_conforming_strings`` is), ``int``,
+    ``float`` (``'NaN'::float8``, ``'Infinity'::float8`` and ``'-Infinity'::float8`` for the special
+    values), finite ``Decimal``, ``bool`` and ``None`` (``NULL``). Negative numbers (``int``,
+    ``float`` and ``Decimal``), signed zeros included, get a leading space.
 
-    Only the *exact* built-in types are rendered. A subclass (``IntEnum``, ``TextChoices``, a
-    Django ``Choices`` enum, ...) raises ``TypeError``: the C and the pure-Python psycopg
+    Only the *exact* built-in types are rendered. A subclass (``IntEnum``, ``TextChoices``, a Django
+    ``Choices`` enum, ...) raises ``TypeError``: the compiled and the pure-Python psycopg
     implementations disagree about subclasses (they call ``__int__``, ``encode``, ``__contains__``
     or ``__str__`` of the subclass, or not), so no single rendering is the live one, and an
-    overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays and ranges
-    depend on the driver's adapters and raise ``TypeError`` too, at build time, and so does a
-    non-finite ``Decimal``: the two implementations render the NaN variants differently (the C one
-    ``-NaN`` as `` -NaN`` and ``NaN123`` as ``NaN123``, the pure-Python one every such value as
-    ``'NaN'::numeric``); ``±Infinity`` and plain NaN come out alike in both, and are rejected with
-    them to keep a single rule.
+    overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays and
+    ranges depend on the driver's adapters and raise ``TypeError`` too, at build time, and so does a
+    non-finite ``Decimal``: the two implementations render the NaN variants differently (the
+    compiled one ``-NaN`` as `` -NaN`` and ``NaN123`` as ``NaN123``, the pure-Python one every such
+    value as ``'NaN'::numeric``); ``±Infinity``, plain NaN and positive sNaN come out alike in both
+    (``-sNaN`` is a differing variant), and are rejected with them to keep a single rule.
 
     ``sql`` is encoded first (a lone surrogate raises ``UnicodeEncodeError``, with or without
     ``params``). ``params`` must be exactly a list or a tuple (``None`` returns ``sql`` untouched).
@@ -63,11 +63,11 @@ class CompileOperations(DatabaseOperations):
     counts raise ``ValueError``; ``Mapping`` params raise ``TypeError`` (``%(name)s`` with a list is
     an unsupported placeholder, ``ValueError``). A live connection raises psycopg's
     ``ProgrammingError`` for wrong counts and renders ``%b`` and ``%t``: the exception classes
-    differ, and these two placeholders are not supported. A NUL character in a string
-    raises ``ValueError`` (a live connection raises psycopg's ``DataError``; matching it would need
+    differ, and these two placeholders are not supported. A NUL character in a string raises
+    ``ValueError`` (a live connection raises psycopg's ``DataError``; matching it would need
     psycopg), a lone surrogate ``UnicodeEncodeError`` like a live connection. A string with both
-    raises ``UnicodeEncodeError`` (the C implementation's order; the pure-Python one reports the
-    NUL first).
+    raises ``UnicodeEncodeError`` (the compiled implementation's order; the pure-Python one reports
+    the NUL first).
     """
 
     def compose_sql(self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None) -> str:

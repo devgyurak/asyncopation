@@ -86,29 +86,31 @@ A-scoped, concretely:
    info is injected before first use (`pg_version`; `mysql_server_data`). Concurrent tasks in
    different transaction modes (`asyncio.gather`) and concurrent loop threads do not interfere.
    *Amended 2026-11-24 (#3, PR #45): the `compose_sql` override and its contract, the rest of this
-   item.* One further Django code path
-   asks for a live connection while generating SQL (besides `get_autocommit` for
-   `select_for_update`, above), `ops.compose_sql` (reached by
-   `contrib.postgres` `SearchHeadline` options through `mogrify` -> `connection.cursor()`), is
-   overridden by the compile-only operations with a plain-Python renderer: no driver (psycopg stays
+   item.* One further Django code path that asks for a live connection while generating SQL
+   (besides `get_autocommit` for `select_for_update`, above) is `ops.compose_sql` (reached by
+   `contrib.postgres` `SearchHeadline` options through `mogrify` -> `connection.cursor()`); the
+   compile-only operations override it with a plain-Python renderer: no driver (psycopg stays
    confined to `drivers/`) and no dependence on server settings. It supports exactly the types that
    caller passes: the *exact* built-in types `str`, `int`, `float`, `bool`, `None` and finite
-   `Decimal`, byte for byte like Django on a live connection (checked in the integration tests
-   against both the C and the pure-Python psycopg implementation: `make test-compose-python`, run
-   in CI). Every other type raises `TypeError` at build time: dates, `bytes`, arrays, ranges and
-   the like, non-finite `Decimal` (the two implementations render the NaN variants differently: the C one
-   `-NaN` as ` -NaN` and `NaN123` as `NaN123`, the pure-Python one every such value as
-   `'NaN'::numeric`; `±Infinity` and plain NaN are rendered alike by both, and are rejected
-   together to keep a single rule),
+   `Decimal` (a leading space for negative numbers, signed zeros included), byte for byte like
+   Django on a live connection (checked in the integration tests against psycopg's compiled
+   `binary` build and its pure-Python implementation: `make test-compose-python`, run in CI; a
+   source-built `c` implementation was not checked). Every other type raises `TypeError` at build
+   time: dates, `bytes`, arrays, ranges and
+   the like, non-finite `Decimal` (the two implementations render the NaN variants differently:
+   the compiled one `-NaN` as ` -NaN` and `NaN123` as `NaN123`, the pure-Python one every such
+   value as `'NaN'::numeric`; `±Infinity`, plain NaN and positive sNaN are rendered alike by
+   both (`-sNaN` differs like `-NaN`), and
+   are rejected together to keep a single rule),
    and every *subclass* (`IntEnum`, `TextChoices`, Django `Choices`, ...), because the two psycopg
    implementations disagree about subclasses (they call `__int__`, `encode`, `__contains__`,
    `__str__`, ... of the subclass or not) and an overridden `__str__` would put arbitrary text into
    the SQL. `params` must be exactly a `list` or `tuple`. For the exact types the rendering is
    the live one; the errors are not always: a NUL character in a string is a `ValueError` (live:
    psycopg's `DataError`), a lone surrogate in `sql` or a value a `UnicodeEncodeError` like live
-   (a string with both reports the surrogate first, as the C implementation does; the pure-Python
-   one reports the NUL, so its exception class differs from ours), wrong counts and unsupported
-   placeholders are `ValueError` (live: `ProgrammingError`, and `%b` / `%t` render live).
+   (a string with both reports the surrogate first, as the compiled implementation does; the
+   pure-Python one reports the NUL, so its exception class differs from ours), wrong counts and
+   unsupported placeholders are `ValueError` (live: `ProgrammingError`, and `%b` / `%t` render live).
    Placeholder shapes and the parameter count are checked before any value is rendered.
 4. I/O-bearing Django steps are ported as ADR-0007 cores, not reached through the wrapper:
    `Query.get_aggregation` (compile outer query, `Execute`, convert), `QuerySet.exists` /
@@ -151,7 +153,8 @@ A-scoped, concretely:
    docstring, which has the full list; star imports are ruff F403) that architecture review
    covers, as are `BaseWrapper` handed on through `getattr(<asyncopation module>, "BaseWrapper")`,
    a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, an
-   `asyncopation` module object assigned to a variable, and a
+   `asyncopation` module object assigned to a variable inside `_django/` (`x = getattr(asyncopation,
+   "_django")`; outside it the guard rejects the `_django` access itself), and a
    class built with `type(...)`. The guard itself requires a class based on `BaseWrapper` to list
    `CompileOnlyMixin` before it and rejects calling `BaseWrapper(...)`, and a unit test checks the
    MRO of every Asyncopation subclass (of any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an

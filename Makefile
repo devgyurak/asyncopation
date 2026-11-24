@@ -72,8 +72,8 @@ test-int-all: ## Integration tests on postgresql, mysql and mariadb
 	$(MAKE) test-int ASYNCOPATION_DB=mysql
 	$(MAKE) test-int ASYNCOPATION_DB=mariadb
 
-test-compose-python: ## compose_sql / compile differential against the pure-Python psycopg (PostgreSQL, needs libpq + db-up)
-	PSYCOPG_IMPL=python ASYNCOPATION_DB=postgresql uv run pytest \
+test-compose-python: ## compose_sql / compile differential against the pure-Python psycopg (PostgreSQL, needs libpq + db-up; checks the loaded implementation)
+	PSYCOPG_IMPL=python ASYNCOPATION_EXPECT_PSYCOPG_IMPL=python ASYNCOPATION_DB=postgresql uv run pytest \
 		tests/integration/test_compose_sql_live.py tests/integration/test_compile_scope_differential.py \
 		tests/integration/test_psycopg_implementation.py $(PYTEST_ARGS)
 

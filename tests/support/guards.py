@@ -18,6 +18,9 @@ ITERABLE_LEDGER = Ledger(
     internal=frozenset({("django.db.models.query", "ModelIterable")}),
     attributes=frozenset({("django.db.models.query.QuerySet", "_fetch_mode")}),
 )
+PUBLIC_EXTRA_LEDGER = Ledger(
+    public=EMPTY_LEDGER.public | {"django.db.models.signals"}, internal=frozenset()
+)
 IMPORT_ONLY_LEDGER = Ledger(public=EMPTY_LEDGER.public, internal=ITERABLE_LEDGER.internal)
 FETCH_MODE_LEDGER = Ledger(
     public=EMPTY_LEDGER.public, internal=frozenset(), attributes=ITERABLE_LEDGER.attributes

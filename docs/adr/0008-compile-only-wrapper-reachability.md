@@ -200,7 +200,7 @@ in the PR that first uses them (#3 / #6 / Phase 5):
 | `django.db.backends.base.base` | `BaseDatabaseWrapper.get_autocommit`, `ensure_connection` | `compile/wrapper.py` | overridden in the compile-only wrapper |
 | `django.db.backends.mysql.base` | `DatabaseWrapper._data_types`, `operators`, `pattern_esc`, `pattern_ops`, `isolation_levels`, `mysql_server_data` | `_django/mysql.py` | ported, not imported (it imports MySQLdb): `ported = true`, the drift test reads the source |
 | `django.db.backends.mysql.{features,operations,compiler}` | `DatabaseFeatures`, `DatabaseOperations`, compiler classes | `_django/mysql.py` | composed into the wrapper; none imports MySQLdb |
-| `django.db.backends.postgresql.base` | `DatabaseWrapper.pg_version` | `_django/postgresql.py` | injected into `__dict__` |
+| `django.db.backends.postgresql.base` | `DatabaseWrapper.pg_version` (an `[[attribute]]` entry) | `_django/postgresql.py` | injected into `__dict__` |
 
 ### Deviations from the working hypothesis
 1. `connections` is per async context inside a loop, not per loop thread (above).

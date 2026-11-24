@@ -9,12 +9,22 @@ from tests.support.django_drift import (
     attribute_signature_problem,
     import_problem,
     ported_problem,
+    raw_entry_count,
     signature_problem,
 )
-from tools.guards.archlint import Ledger
+from tools.guards.archlint import LEDGER_PATH, ROOT, Ledger
 
 LEDGER = Ledger.load()
 IMPORTED = sorted(LEDGER.internal - LEDGER.ported)
+
+
+def test_every_written_ledger_entry_is_loaded():
+    # given
+    written = raw_entry_count((ROOT / LEDGER_PATH).read_text(encoding="utf-8"))
+    # when
+    loaded = len(LEDGER.internal) + len(LEDGER.attributes)
+    # then
+    assert loaded == written
 
 
 def test_django_is_the_pinned_minor():

@@ -184,7 +184,7 @@ async def run(plan, executor):          # the only async part, ~10 lines, shared
   `tools/guards` check (A203, ADR-0007). The ledger stays the inventory.
 - A drift test (driven by the ledger's `[[internal]]`, `signatures` and `[[attribute]]` entries)
   asserts every private attribute we touch still exists on the pinned Django
-  version (ormar `test_sqlalchemy_internals.py`), so Django upgrades fail loudly in one place.
+  version. `ported` entries are checked against the module source instead of imported (ormar `test_sqlalchemy_internals.py`), so Django upgrades fail loudly in one place.
 
 ## 4. Rejected options
 

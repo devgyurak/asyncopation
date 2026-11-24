@@ -16,9 +16,9 @@ description: Procedure for porting or reusing Django internals (ModelIterable, p
    # Changes: cursor iteration -> await driver.fetchmany(); otherwise identical.
    ```
 4. **Ledger**: add or extend an `[[internal]]` entry in `docs/django-api-ledger.toml`
-   (`module`, `names`, `used_by`, `reason`, `verified_against = "<django version>"`; optional
+   (`module`, `names` (required; `"*"` = the whole module), `used_by`, `reason`, `verified_against = "<django version>"`; optional
    `signatures = { "Name.method" = "<str(inspect.signature(obj))>" }` with dotted keys quoted;
-   `ported = true` when you port it without importing it). Import it only inside
+   `ported = true` when you port it without importing it - dotted names allowed, no `signatures`). Import it only inside
    `src/asyncopation/_django/` (A203). Every private attribute you access directly (`qs._fetch_mode`), inside `_django` or not,
    gets an `[[attribute]]` entry (`owner` dotted class path, `names`, `used_by`, `reason`,
    `verified_against`). `tests/unit/django_drift` verifies every entry against installed Django.

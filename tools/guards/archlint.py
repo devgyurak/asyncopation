@@ -65,6 +65,13 @@ def applies_to(path: str) -> bool:
     return p.parts[:2] == ("src", "asyncopation") and p.suffix == ".py"
 
 
+_TOP_KEYS = {"public", "internal", "attribute"}
+_INTERNAL_KEYS = {
+    "module", "names", "used_by", "reason", "verified_against", "signatures", "ported",
+}  # fmt: skip
+_ATTRIBUTE_KEYS = {"owner", "names", "used_by", "reason", "verified_against", "signatures"}
+
+
 @dataclass(frozen=True)
 class Ledger:
     public: frozenset[str]
@@ -76,39 +83,58 @@ class Ledger:
     attribute_signatures: frozenset[tuple[str, str, str]] = field(  # (owner path, name, signature)
         default_factory=frozenset
     )
-    ported: frozenset[tuple[str, str]] = field(
+    ported: frozenset[tuple[str, str]] = field(  # (module, dotted name): never imported
         default_factory=frozenset
-    )  # (module, name) not imported
+    )
 
     @classmethod
     def load(cls) -> Ledger:
-        return cls.from_toml((ROOT / LEDGER_PATH).read_text())
+        return cls.from_toml((ROOT / LEDGER_PATH).read_text(encoding="utf-8"))
 
     @classmethod
     def from_toml(cls, text: str) -> Ledger:
         data = tomllib.loads(text)
-        internal, signatures, ported = set(), set(), set()
-        for entry in data.get("internal", []):
+        _check_keys(data, _TOP_KEYS, "ledger")
+        public = data.get("public")
+        if not isinstance(public, dict):
+            raise ValueError("ledger: the [public] table is missing")
+        _check_keys(public, {"modules"}, "[public]")
+        modules = public.get("modules")
+        if not isinstance(modules, list) or not all(isinstance(m, str) for m in modules):
+            raise ValueError("[public] `modules` must be a list of strings")
+        internal: set[tuple[str, str]] = set()
+        signatures: set[tuple[str, str, str]] = set()
+        ported: set[tuple[str, str]] = set()
+        for entry in _tables(data, "internal"):
+            _check_keys(entry, _INTERNAL_KEYS, "[[internal]]")
             module = _require(entry, "[[internal]]", "module", str)
-            names = _names(entry, "[[internal]]", default=["*"])
+            names = _names(entry, "[[internal]]")
+            is_ported = entry.get("ported", False)
+            if not isinstance(is_ported, bool):
+                raise ValueError(f"[[internal]] {module}: `ported` must be true or false")
+            if is_ported and entry.get("signatures"):
+                raise ValueError(f"[[internal]] {module}: `signatures` need an importable entry")
             for name in names:
+                _check_internal_name(module, name, is_ported)
+                if (module, name) in internal:
+                    raise ValueError(f"[[internal]] {module}: `{name}` is listed twice")
                 internal.add((module, name))
-                if entry.get("ported", False):
+                if is_ported:
                     ported.add((module, name))
-                if name != "*" and _is_django_submodule(module, name):
-                    raise ValueError(
-                        f"[[internal]] {module}: `{name}` is a submodule - "
-                        f'use module = "{module}.{name}" instead'
-                    )
             signatures |= _signatures(entry, module, names, "[[internal]]")
-        attributes, attribute_signatures = set(), set()
-        for entry in data.get("attribute", []):
+        attributes: set[tuple[str, str]] = set()
+        attribute_signatures: set[tuple[str, str, str]] = set()
+        for entry in _tables(data, "attribute"):
+            _check_keys(entry, _ATTRIBUTE_KEYS, "[[attribute]]")
             owner = _require(entry, "[[attribute]]", "owner", str)
             names = _names(entry, "[[attribute]]")
-            attributes |= {(owner, name) for name in names}
+            for name in names:
+                if (owner, name) in attributes:
+                    raise ValueError(f"[[attribute]] {owner}: `{name}` is listed twice")
+                attributes.add((owner, name))
             attribute_signatures |= _signatures(entry, owner, names, "[[attribute]]")
         return cls(
-            frozenset(data["public"]["modules"]),
+            frozenset(modules),
             frozenset(internal),
             frozenset(attributes),
             frozenset(signatures),
@@ -117,10 +143,30 @@ class Ledger:
         )
 
     def covers(self, module: str, name: str) -> bool:
-        return (
-            module in self.public
-            or (module, name) in self.internal
-            or (module, "*") in self.internal
+        """Is importing ``module.name`` recorded? Ported entries are never imported, so no."""
+        importable = self.internal - self.ported
+        return module in self.public or (module, name) in importable or (module, "*") in importable
+
+
+def _tables(data: dict, key: str) -> list[dict]:
+    tables = data.get(key, [])
+    if not isinstance(tables, list) or not all(isinstance(t, dict) for t in tables):
+        raise ValueError(f"ledger: `{key}` must be an array of tables ([[{key}]])")
+    return tables
+
+
+def _check_keys(table: dict, allowed: set[str], kind: str) -> None:
+    if unknown := sorted(set(table) - allowed):
+        raise ValueError(f"{kind}: unknown key(s) {unknown} (allowed: {sorted(allowed)})")
+
+
+def _check_internal_name(module: str, name: str, is_ported: bool) -> None:
+    if "." in name and not is_ported:
+        raise ValueError(f"[[internal]] {module}: dotted name `{name}` is only allowed if ported")
+    if name != "*" and _is_django_submodule(module, name):
+        raise ValueError(
+            f"[[internal]] {module}: `{name}` is a submodule - "
+            f'use module = "{module}.{name}" instead'
         )
 
 
@@ -131,16 +177,19 @@ def _require(entry: dict, kind: str, key: str, expected: type) -> Any:
     return value
 
 
-def _names(entry: dict, kind: str, default: list[str] | None = None) -> list[str]:
-    names = entry.get("names", default)
+def _names(entry: dict, kind: str) -> list[str]:
+    names = entry.get("names")
     if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
         raise ValueError(f"{kind} entry {entry!r}: `names` must be a non-empty list of strings")
     return names
 
 
 def _signatures(entry: dict, owner: str, names: list[str], kind: str) -> set[tuple[str, str, str]]:
+    table = entry.get("signatures", {})
+    if not isinstance(table, dict):
+        raise ValueError(f"{kind} {owner}: `signatures` must be a table")
     found: set[tuple[str, str, str]] = set()
-    for name, signature in entry.get("signatures", {}).items():
+    for name, signature in table.items():
         if not isinstance(signature, str):
             raise ValueError(
                 f"{kind} {owner}: signature of `{name}` must be a string - quote dotted keys: "
@@ -188,7 +237,9 @@ def _django_root() -> Path | None:
 def _is_django_submodule(module: str, name: str) -> bool:
     root = _django_root()
     if root is None:
-        raise RuntimeError("django is not importable - the A203 submodule check needs it")
+        raise RuntimeError(
+            "django is not importable - run `uv sync` (the A203 submodule check needs it)"
+        )
     if name == "*":
         return False
     package = root.parent.joinpath(*module.split("."))

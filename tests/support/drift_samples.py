@@ -21,3 +21,6 @@ class Child(Sample):
 
 def method_with_signature(a: int, b: int = 2) -> int:
     return a + b
+
+
+CONSTANT = 1

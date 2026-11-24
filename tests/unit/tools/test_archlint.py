@@ -5,6 +5,7 @@ from tests.support.guards import (
     FETCH_MODE_LEDGER,
     IMPORT_ONLY_LEDGER,
     PORTED_LEDGER,
+    PUBLIC_EXTRA_LEDGER,
     SQL_QUERY_LEDGER,
     lint_src_module,
     stale_messages,
@@ -94,6 +95,8 @@ def test_ledgered_internal_import_is_allowed():
         ("from django.db.models.query import QuerySet\n", EMPTY_LEDGER, ["A201", "A203"]),
         ("from django.db.models.sql import QUERY\n", SQL_QUERY_LEDGER, ["A201", "A203"]),
         ("from django.db.models import query\n", EMPTY_LEDGER, ["A201", "A203"]),
+        ("from django.db.models.deletion import Collector\n", EMPTY_LEDGER, ["A201", "A203"]),
+        ("from django.db.models.signals import post_save\n", PUBLIC_EXTRA_LEDGER, []),
     ],
     ids=[
         "ledgered-outside",
@@ -107,6 +110,8 @@ def test_ledgered_internal_import_is_allowed():
         "private-module-from-import",
         "name-differing-from-submodule-only-by-case",
         "private-py-submodule-as-name",
+        "deletion-is-private",
+        "signals-is-public",
     ],
 )
 def test_private_django_import_outside_the_django_package_is_classified(source, ledger, expected):

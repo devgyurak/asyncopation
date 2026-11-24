@@ -33,8 +33,8 @@ _django        sole importer of non-public Django APIs
   vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
   `Capabilities` (ADR-0003).
 - Non-public Django APIs are imported only in `_django/` (per-backend submodules, imported lazily)
-  and private attribute access goes through `_django` accessors (ADR-0007), each registered as a
-  ledger `[[attribute]]` entry.
+  and every private attribute we access, inside `_django` or not, is a ledger `[[attribute]]`
+  entry (ADR-0007).
 - Ported orchestration is a sans-I/O generator core driven by the `engine` runner - never an
   `async def` copy of a Django function (ADR-0007).
 
@@ -53,8 +53,8 @@ deviating needs a superseding ADR.
 ## Django coupling
 Every Django import outside the public modules listed in `docs/django-api-ledger.toml`
 must have a ledger entry (A201) and may only be imported inside `asyncopation/_django/` (A203).
-Directly accessed private Django attributes are ledger `[[attribute]]` entries protected by the
-drift test. See the `port-django-internals` skill.
+Every private Django attribute accessed directly is a ledger `[[attribute]]` entry protected by
+the drift test. See the `port-django-internals` skill.
 
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `setup()` / `close()`,

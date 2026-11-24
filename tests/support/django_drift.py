@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import inspect
 import textwrap
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -42,14 +43,20 @@ def attribute_problem(owner: str, name: str) -> str | None:
     """Why ``owner.name`` no longer exists, or None.
 
     A class attribute passes ``hasattr``; an instance attribute is found as a ``self.<name>``
-    assignment in the source of the owner or any base class.
+    assignment in the source of the owner or any base class; an attribute installed by a
+    metaclass (``Model._meta``) is found as ``add_to_class("name", ...)`` / ``setattr(obj, "name", ...)``
+    in the metaclass source, or as a member of the metaclass itself (a property).
     """
     cls = _resolve(owner)
     if isinstance(cls, _Unresolved):
         return f"{owner}: owner not resolvable ({cls.reason})"
     if not inspect.isclass(cls):
         return f"{owner}: owner is not a class"
-    if hasattr(cls, name) or any(_assigns_self_attribute(base, name) for base in cls.__mro__):
+    if (
+        hasattr(cls, name)
+        or any(_assigns_self_attribute(base, name) for base in cls.__mro__)
+        or any(_installed_by_metaclass(meta, name) for meta in type(cls).__mro__[:-2])
+    ):
         return None
     return f"{owner}.{name}: not a class attribute and never assigned as self.{name}"
 
@@ -58,12 +65,12 @@ def ported_problem(module: str, name: str) -> str | None:
     """Why a *ported* (never imported) ``module.<dotted name>`` is gone from the source."""
     try:
         spec = importlib.util.find_spec(module)
-        source = Path(spec.origin).read_text() if spec and spec.origin else None
+        source = Path(spec.origin).read_text(encoding="utf-8") if spec and spec.origin else None
     except Exception as exc:
         return f"{module}: {type(exc).__name__}: {exc}"
     if source is None:
         return f"{module}: no source file"
-    if _defines(ast.parse(source).body, name.split(".")):
+    if name == "*" or _defines(ast.parse(source).body, name.split(".")):
         return None
     return f"{module}.{name}: not defined in the module source"
 
@@ -115,6 +122,38 @@ def _defines(body: list[ast.stmt], path: list[str]) -> bool:
             if not rest and any(isinstance(t, ast.Name) and t.id == head for t in targets):
                 return True
     return False
+
+
+def raw_entry_count(ledger_text: str) -> int:
+    """Number of (module|owner, name) pairs written in the ledger TOML, before any processing."""
+    data = tomllib.loads(ledger_text)
+    return sum(
+        len(entry["names"]) for table in ("internal", "attribute") for entry in data.get(table, [])
+    )
+
+
+def _installed_by_metaclass(meta: Any, name: str) -> bool:
+    if name in vars(meta):
+        return True
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(meta)))
+    except (OSError, TypeError, SyntaxError):
+        return False
+    return any(_installs(node, name) for node in ast.walk(tree) if isinstance(node, ast.Call))
+
+
+def _installs(call: ast.Call, name: str) -> bool:
+    func = call.func
+    if isinstance(func, ast.Attribute) and func.attr == "add_to_class":
+        position = 0
+    elif isinstance(func, ast.Name) and func.id == "setattr":
+        position = 1
+    else:
+        return False
+    if len(call.args) <= position:
+        return False
+    target = call.args[position]
+    return isinstance(target, ast.Constant) and target.value == name
 
 
 def _assigns_self_attribute(cls: Any, name: str) -> bool:

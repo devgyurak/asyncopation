@@ -14,10 +14,11 @@ import contextlib
 import datetime as dt
 import random
 import uuid
+from collections.abc import Iterable
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from django.db import transaction
+from django.db import connection, models, transaction
 
 if TYPE_CHECKING:
     from harness.catalog.models import FieldZoo
@@ -41,6 +42,19 @@ EXPECTED_COUNTS = {
 _EPOCH = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
 
 
+def _bulk_create[M: models.Model](model: type[M], objs: Iterable[M]) -> list[M]:
+    """bulk_create that always returns saved rows with primary keys.
+
+    MySQL has no RETURNING, so bulk_create() leaves pks unset there (MariaDB and PostgreSQL
+    return them). Seeding always starts from empty tables, so re-reading in pk order yields the
+    rows in insertion order.
+    """
+    created = model._default_manager.bulk_create(objs)
+    if connection.features.can_return_rows_from_bulk_insert:
+        return created
+    return list(model._default_manager.order_by("pk"))
+
+
 def seed() -> None:
     """Insert the dataset. Caller must ensure tables are empty."""
     from django.contrib.contenttypes.models import ContentType
@@ -57,37 +71,46 @@ def seed() -> None:
 
     rnd = random.Random(SEED)
     with transaction.atomic():
-        publishers = Publisher.objects.bulk_create(
-            Publisher(name=f"publisher-{i}", country=rnd.choice(["KR", "US", "FR", "JP"]))
-            for i in range(N_PUBLISHERS)
+        publishers = _bulk_create(
+            Publisher,
+            [
+                Publisher(name=f"publisher-{i}", country=rnd.choice(["KR", "US", "FR", "JP"]))
+                for i in range(N_PUBLISHERS)
+            ],
         )
-        authors = Author.objects.bulk_create(
-            Author(
-                name=f"author-{i}",
-                email=f"author-{i}@example.com",
-                birth_date=None if i % 7 == 0 else dt.date(1950 + i, 1 + i % 12, 1 + i % 28),
-                publisher=None if i % 9 == 0 else publishers[i % N_PUBLISHERS],
-            )
-            for i in range(N_AUTHORS)
+        authors = _bulk_create(
+            Author,
+            [
+                Author(
+                    name=f"author-{i}",
+                    email=f"author-{i}@example.com",
+                    birth_date=None if i % 7 == 0 else dt.date(1950 + i, 1 + i % 12, 1 + i % 28),
+                    publisher=None if i % 9 == 0 else publishers[i % N_PUBLISHERS],
+                )
+                for i in range(N_AUTHORS)
+            ],
         )
         AuthorProfile.objects.bulk_create(
             AuthorProfile(author=a, bio=f"bio of {a.name} ✍️", website=f"https://{a.name}.example")
             for a in authors[::2]
         )
-        tags = Tag.objects.bulk_create(Tag(name=f"tag-{i}") for i in range(N_TAGS))
-        books = Book.objects.bulk_create(
-            Book(
-                title=f"book-{i}",
-                author=authors[rnd.randrange(N_AUTHORS)],
-                price=Decimal(rnd.randrange(100, 100_000)) / 100,
-                pages=rnd.randrange(50, 1200),
-                published=i % 3 != 0,
-                published_at=None
-                if i % 3 == 0
-                else _EPOCH + dt.timedelta(hours=rnd.randrange(10_000)),
-                metadata={"edition": 1 + i % 4, "langs": ["ko", "en"][: 1 + i % 2]},
-            )
-            for i in range(N_BOOKS)
+        tags = _bulk_create(Tag, (Tag(name=f"tag-{i}") for i in range(N_TAGS)))
+        books = _bulk_create(
+            Book,
+            [
+                Book(
+                    title=f"book-{i}",
+                    author=authors[rnd.randrange(N_AUTHORS)],
+                    price=Decimal(rnd.randrange(100, 100_000)) / 100,
+                    pages=rnd.randrange(50, 1200),
+                    published=i % 3 != 0,
+                    published_at=None
+                    if i % 3 == 0
+                    else _EPOCH + dt.timedelta(hours=rnd.randrange(10_000)),
+                    metadata={"edition": 1 + i % 4, "langs": ["ko", "en"][: 1 + i % 2]},
+                )
+                for i in range(N_BOOKS)
+            ],
         )
         Book.tags.through.objects.bulk_create(
             Book.tags.through(book=b, tag=t)

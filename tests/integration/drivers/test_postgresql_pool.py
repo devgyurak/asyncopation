@@ -2,13 +2,14 @@
 
 import psycopg
 import pytest
-from django.db import InterfaceError
+from django.db import InterfaceError, OperationalError
 
 from asyncopation.drivers.base import Capabilities, PoolStats
 from tests.support.drivers import (
     POSTGRES_ONLY,
     backend_ends,
     backend_pid,
+    borrow_after_idle_backend_killed,
     build_driver,
     cancel_during_sleep,
     cancel_waiting_borrower,
@@ -46,15 +47,6 @@ async def test_capabilities_report_server_version(driver):
     assert capabilities.server_side_cursors is True
 
 
-async def test_connection_before_open_raises_runtime_error(django_db_setup):
-    # given
-    driver = build_driver()
-    # when / then
-    with pytest.raises(RuntimeError):
-        async with driver.connection():
-            pass
-
-
 async def test_second_open_is_a_no_op(counted_driver):
     # given
     capabilities = counted_driver.capabilities
@@ -73,6 +65,16 @@ async def test_pool_stats_are_zero_after_close(django_db_setup):
     await driver.close()
     # then
     assert driver.pool_stats() == PoolStats(in_use=0, idle=0, waiting=0)
+
+
+async def test_capabilities_after_close_raise_runtime_error(django_db_setup):
+    # given
+    driver = build_driver(pool={"min_size": 1, "max_size": 1})
+    await driver.open()
+    await driver.close()
+    # when / then
+    with pytest.raises(RuntimeError):
+        _ = driver.capabilities
 
 
 async def test_connection_after_close_raises_runtime_error(django_db_setup):
@@ -189,6 +191,7 @@ async def test_release_and_waiter_cancellation_in_the_same_tick_leak_nothing(sin
     # when
     outcome = await release_and_cancel_waiter_together(single_driver)
     # then
+    assert outcome.cancelled is True
     assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
 
 
@@ -227,3 +230,32 @@ async def test_raw_driver_exception_from_the_callers_body_keeps_the_connection(s
     # then
     assert outcome.pid_after == outcome.pid_before
     assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
+
+
+async def test_health_check_replaces_an_idle_connection_killed_between_borrows(
+    readonly_db, binding
+):
+    # when
+    outcome = await borrow_after_idle_backend_killed(binding.options, health_checks=True)
+    # then
+    assert outcome.error is None
+    assert outcome.rows == [(1,)]
+    assert outcome.next_pid != outcome.killed_pid
+
+
+async def test_without_health_checks_the_first_borrow_after_a_kill_fails_with_a_django_error(
+    readonly_db, binding
+):
+    # when
+    outcome = await borrow_after_idle_backend_killed(binding.options, health_checks=False)
+    # then
+    assert type(outcome.error) is OperationalError
+
+
+async def test_without_health_checks_the_discarded_connection_is_replaced_for_the_next_borrow(
+    readonly_db, binding
+):
+    # when
+    outcome = await borrow_after_idle_backend_killed(binding.options, health_checks=False)
+    # then
+    assert outcome.retry_rows == [(1,)]

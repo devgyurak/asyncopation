@@ -13,6 +13,24 @@ Measures per-call latency of core async vs Asyncopation for single lookups, gath
 and list evaluation against the seeded DB. Writes `bench/results/micro-<ts>.json`.
 Asyncopation cases are reported as `skipped` until the API exists.
 
+### Driver cases
+`bench/micro.py` also runs PostgreSQL driver cases (implementation in `bench/driver_micro.py`)
+named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
+- groups: `select1` (`SELECT 1`), `wide` (one row with 15 columns), `execute` (`execute()` with
+  rowcount), `tx` (`begin` / statement / `commit`), `stream` (200 rows in chunks of 50);
+- impls: `raw` (`pool.connection()` + cursor on a pool built from the driver's own
+  configuration: the baseline), `getconn` (raw `getconn` / `putconn`, the cheapest baseline,
+  `select1` only), `driver` (`driver.connection()` + the driver API);
+- flags (see `uv run python -m bench.micro --help`): `--driver-seconds` (seconds per
+  `driver.*` round, default 1.0), `--driver-rounds` (interleaved rounds, default 7), `--only`
+  (comma-separated case names with the first dot-separated part removed, e.g.
+  `--only select1.driver.t8`; the same filter as for the other cases);
+- output columns: `CPU us/op` (client CPU per operation, the stable metric), `paired ratio
+  (IQR)` (per-round paired ratio vs the baseline, median and inter-quartile range over the
+  rounds) and `load` (min-max 1-minute load average over the rounds; the baselines of a selected
+  case are always run too, so its ratio can be computed). Compare ratios, not absolute times, and rerun when
+  the load is high.
+
 ## Load (k6, minutes)
 ```bash
 make bench BENCH_ARGS="--configs wsgi,asgi-core,asyncopation --scenarios single,gather,nplus1,write --duration 30s --vus 50"

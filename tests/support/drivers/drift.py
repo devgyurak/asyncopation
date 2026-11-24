@@ -41,7 +41,7 @@ def drift_settings(
 ) -> dict[str, Any]:
     settings_dict = copy.deepcopy(DRIFT_SETTINGS)
     settings_dict["NAME"] = name
-    settings_dict["OPTIONS"] = copy.deepcopy(options or {})
+    settings_dict["OPTIONS"] = dict(options or {})
     settings_dict.update(extra)
     return settings_dict
 
@@ -138,12 +138,12 @@ class _StubInfo:
         return self._fields.get(field)
 
 
-def error_with_diag(cls: type[psycopg.Error], *, severity: bytes, sqlstate: bytes | None) -> Any:
+def error_with_diag(cls: type[Any], *, severity: bytes, sqlstate: bytes | None) -> Any:
     """A psycopg error whose `diag` reports `severity` (non-localized) and optional SQLSTATE."""
     fields = {psycopg.pq.DiagnosticField.SEVERITY_NONLOCALIZED: severity}
     if sqlstate is not None:
         fields[psycopg.pq.DiagnosticField.SQLSTATE] = sqlstate
-    return cls("x", info=_StubInfo(fields))  # ty: ignore[invalid-argument-type]
+    return cls("x", info=_StubInfo(fields))
 
 
 def lookup_error(sqlstate: str) -> Any:

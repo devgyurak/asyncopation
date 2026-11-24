@@ -9,7 +9,9 @@ import pytest
 
 from tests.support.drivers import (
     Binding,
+    create_deferred_table,
     create_scratch_table,
+    drop_deferred_table,
     drop_scratch_table,
     open_driver,
 )
@@ -87,3 +89,11 @@ async def scratch(django_db_setup: None) -> AsyncIterator[str]:
     table = await create_scratch_table()
     yield table
     await drop_scratch_table()
+
+
+@pytest.fixture
+async def deferred(django_db_setup: None) -> AsyncIterator[str]:
+    """A table whose unique constraint is only checked at COMMIT."""
+    table = await create_deferred_table()
+    yield table
+    await drop_deferred_table()

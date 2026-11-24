@@ -8,7 +8,9 @@ Ported from ``django/db/backends/postgresql/base.py`` (``DatabaseWrapper.get_con
 from __future__ import annotations
 
 import datetime
+import inspect
 import zoneinfo
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,22 +24,16 @@ from asyncopation._django.postgresql import adapters_template
 # ADR-0004 implementation issue benchmarks pool sizing.
 DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 
-# Pool keys that only make sense for Django's own sync pool or that the driver manages itself.
-# `close_returns` would make a discarded connection go back to the pool (and putconn then runs
-# twice); `open`, `kwargs` and `conninfo` are passed by the driver.
-_REJECTED_POOL_KEYS = (
-    "name",
-    "check",
-    "reset",
-    "configure",
-    "connection_class",
-    "reconnect_failed",
-    "close_returns",
-    "open",
-    "kwargs",
-    "conninfo",
-)
+# OPTIONS["pool"] keys rejected by NAME because the driver passes the same argument itself
+# (psycopg_pool would raise "multiple values for keyword argument"): `name` (the alias),
+# `configure` (the per-connection session setup), `kwargs` / `conninfo` (the connection settings)
+# and `open` (the pool is opened by `PostgresDriver.open()`). Every other key is validated by
+# VALUE: callables are sync hooks (or classes) that do not fit an async pool, and
+# `close_returns=True` would make a discarded connection go back to the pool.
+_DRIVER_OWNED_POOL_KEYS = frozenset({"name", "configure", "kwargs", "conninfo", "open"})
+_POOL_PARAMETERS = frozenset(inspect.signature(AsyncConnectionPool.__init__).parameters) - {"self"}
 
+# Ported from django/db/backends/postgresql/operations.py::max_name_length @ 6.1.3 - unchanged.
 _MAX_NAME_LENGTH = 63  # PostgreSQL identifier limit, Django's ops.max_name_length()
 
 
@@ -145,23 +141,9 @@ def build_config(
                 "one of the psycopg.IsolationLevel values."
             ) from None
 
-    pool_kwargs = dict(DEFAULT_POOL_OPTIONS)
-    if isinstance(pool_option, dict):
-        rejected = sorted(
-            {*pool_option} & {*_REJECTED_POOL_KEYS}
-            | {k for k, v in pool_option.items() if callable(v)}
-        )
-        if rejected:
-            raise ImproperlyConfigured(
-                f"OPTIONS['pool'] keys {rejected} cannot be used with the async pool "
-                "(they are sync callables or managed by the driver)."
-            )
-        pool_kwargs.update(pool_option)
-    # psycopg_pool: max_size None means "min_size"; never let a custom min_size exceed the default.
-    if pool_kwargs.get("max_size") is not None:
-        pool_kwargs["max_size"] = max(pool_kwargs["max_size"], pool_kwargs.get("min_size", 0))
-    if settings_dict.get("CONN_HEALTH_CHECKS"):
-        pool_kwargs.setdefault("check", AsyncConnectionPool.check_connection)
+    pool_kwargs = _pool_kwargs(pool_option)
+    if settings_dict.get("CONN_HEALTH_CHECKS") and "check" not in pool_kwargs:
+        pool_kwargs["check"] = AsyncConnectionPool.check_connection
     return PostgresConfig(
         alias=alias,
         conn_kwargs=conn_params,
@@ -172,3 +154,48 @@ def build_config(
         server_side_binding=server_side_binding,
         server_side_cursors=not settings_dict.get("DISABLE_SERVER_SIDE_CURSORS", False),
     )
+
+
+def _pool_kwargs(option: Any) -> dict[str, Any]:
+    """``OPTIONS["pool"]`` -> ``AsyncConnectionPool`` keyword arguments (see the key rules above).
+
+    ``None`` / ``True`` / ``False`` mean the defaults (the async side always pools); a mapping
+    overrides them. Sizes are not corrected: ``min_size > max_size`` is psycopg_pool's ``ValueError``
+    when the driver opens.
+    """
+    if option is None or isinstance(option, bool):
+        return dict(DEFAULT_POOL_OPTIONS)
+    if not isinstance(option, Mapping):
+        raise ImproperlyConfigured(
+            f"OPTIONS['pool'] must be a mapping, True, False or None, not {type(option).__name__}."
+        )
+    keys = {str(key) for key in option}
+    unknown = sorted(keys - _POOL_PARAMETERS)
+    owned = sorted(keys & _DRIVER_OWNED_POOL_KEYS)
+    by_value = sorted(
+        str(key)
+        for key, value in option.items()
+        if callable(value) or (key == "close_returns" and value is True)
+    )
+    if unknown or owned or by_value:
+        problems = {
+            "unknown keys": unknown,
+            "keys the driver sets itself": owned,
+            "callables (hooks are managed by the driver) or close_returns=True": by_value,
+        }
+        raise ImproperlyConfigured(
+            "OPTIONS['pool'] cannot be used with the async pool: "
+            + "; ".join(f"{name} {names}" for name, names in problems.items() if names)
+        )
+    for size in ("min_size", "max_size"):
+        if size not in option or (size == "max_size" and option[size] is None):
+            continue  # max_size=None means "min_size" to psycopg_pool
+        if isinstance(option[size], bool) or not isinstance(option[size], int):
+            raise ImproperlyConfigured(
+                f"OPTIONS['pool'][{size!r}] must be an integer, not {option[size]!r}."
+            )
+    kwargs = dict(option)
+    # Defaults only fill what the user left out; a size the user gave is never corrected.
+    kwargs.setdefault("min_size", DEFAULT_POOL_OPTIONS["min_size"])
+    kwargs.setdefault("max_size", max(DEFAULT_POOL_OPTIONS["max_size"], kwargs["min_size"] or 0))
+    return kwargs

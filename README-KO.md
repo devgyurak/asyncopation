@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=ebc7a67464a5 -->
+<!-- i18n: source=README.md source-sha256=8d0c75749fcf -->
 # Asyncopation
 
-> **상태: pre-alpha / 설계 단계.** 아직 사용할 수 있는 기능이 없다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** 지금 사용할 수 있는 것은 `asyncopation.testing`뿐이다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -28,14 +28,24 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 `Capabilities`와 `ExecResult`도 `asyncopation.testing`에서 다시 내보낸다.
 
 ```python
+import asyncio
+
 from asyncopation.testing import ExecResult, RecordingDriver
 
-driver = RecordingDriver()
-driver.queue([(1, "a"), (2, "b")], ExecResult(rowcount=1))  # FIFO, one per statement
-async with driver.connection() as conn:
-    rows = await conn.fetch_all("SELECT id, name FROM t WHERE id > %s", [0])
-    await conn.execute("DELETE FROM t WHERE id = %s", [1])
-assert [s.kind for s in driver.statements] == ["fetch_all", "execute"]
+
+async def main() -> None:
+    driver = RecordingDriver()
+    await driver.open()
+    driver.queue([(1, "a"), (2, "b")], ExecResult(rowcount=1))  # FIFO, one per statement
+    async with driver.connection() as conn:
+        rows = await conn.fetch_all("SELECT id, name FROM t WHERE id > %s", [0])
+        await conn.execute("DELETE FROM t WHERE id = %s", [1])
+    assert rows == [(1, "a"), (2, "b")]
+    assert [s.kind for s in driver.statements] == ["fetch_all", "execute"]
+    await driver.close()
+
+
+asyncio.run(main())
 ```
 
 ## 개발

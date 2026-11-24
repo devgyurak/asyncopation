@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+import uuid
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -24,12 +25,14 @@ from tests.support.aio import wait_until
 
 POSTGRES_ONLY = pytest.mark.skipif(VENDOR != "postgresql", reason="PostgreSQL driver tests")
 
-SCRATCH_TABLE = "asyncopation_scratch"
+RUN_ID = uuid.uuid4().hex[:8]  # global DB object names carry it: concurrent checkouts share a DB
+SCRATCH_TABLE = f"asyncopation_scratch_{RUN_ID}"
+DEFERRED_TABLE = f"asyncopation_deferred_{RUN_ID}"
 SCRATCH_DDL = (
     "id serial PRIMARY KEY, name text NOT NULL UNIQUE, "
     "qty integer NOT NULL DEFAULT 0 CHECK (qty >= 0)"
 )
-SLOW_COMMIT_FUNCTION = "asyncopation_slow_commit"
+SLOW_COMMIT_FUNCTION = f"asyncopation_slow_commit_{RUN_ID}"
 
 type Row = tuple[Any, ...]
 
@@ -156,6 +159,19 @@ async def drop_scratch_table() -> None:
     await admin_query(f"DROP FUNCTION IF EXISTS {SLOW_COMMIT_FUNCTION}()")
 
 
+async def create_deferred_table() -> str:
+    """A table whose unique constraint is checked at COMMIT (`DEFERRABLE INITIALLY DEFERRED`)."""
+    await admin_query(f"DROP TABLE IF EXISTS {DEFERRED_TABLE}")
+    await admin_query(
+        f"CREATE TABLE {DEFERRED_TABLE} (id int UNIQUE DEFERRABLE INITIALLY DEFERRED)"
+    )
+    return DEFERRED_TABLE
+
+
+async def drop_deferred_table() -> None:
+    await admin_query(f"DROP TABLE IF EXISTS {DEFERRED_TABLE}")
+
+
 async def install_slow_commit(table: str) -> None:
     """A deferred trigger that makes `COMMIT` of any insert into `table` sleep for a while."""
     await admin_query(
@@ -177,7 +193,8 @@ async def scratch_names(table: str = SCRATCH_TABLE) -> list[str]:
 
 
 @asynccontextmanager
-async def temporary_role(name: str) -> AsyncGenerator[str]:
+async def temporary_role(prefix: str) -> AsyncGenerator[str]:
+    name = f"{prefix}_{RUN_ID}"
     await admin_query(f"DROP ROLE IF EXISTS {name}")
     await admin_query(f"CREATE ROLE {name}")
     try:
@@ -187,7 +204,8 @@ async def temporary_role(name: str) -> AsyncGenerator[str]:
 
 
 @asynccontextmanager
-async def temporary_login_role(name: str, password: str) -> AsyncGenerator[str]:
+async def temporary_login_role(prefix: str, password: str) -> AsyncGenerator[str]:
+    name = f"{prefix}_{RUN_ID}"
     await admin_query(f"DROP ROLE IF EXISTS {name}")
     await admin_query(f"CREATE ROLE {name} LOGIN PASSWORD '{password}'")
     try:

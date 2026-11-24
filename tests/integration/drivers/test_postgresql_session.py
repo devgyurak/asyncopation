@@ -65,7 +65,7 @@ async def test_assume_role_option_matches_sync_backend(readonly_db, binding):
             TzCase(True, None, "UTC"), options, "SELECT current_user"
         )
     # then
-    assert result.async_value == result.sync_value == "asyncopation_test_role"
+    assert result.async_value == result.sync_value == role
 
 
 @pytest.mark.parametrize(

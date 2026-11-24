@@ -4,7 +4,7 @@
 - Date: YYYY-MM-DD
 - Deciders: (human maintainers)
 - Architect review: (verdict from the `architect` sub-agent, with date)
-- Amended: (optional, one line per amendment) YYYY-MM-DD (issue/PR) - what changed
+- Amended: (optional; one line per amendment, one architect verdict per line) YYYY-MM-DD (#N, PR #M) - every changed item; approved by: <maintainer, to be confirmed in the PR review>; architect verdict: <real verdict, never PENDING at merge>
 
 ## Context
 Facts and constraints. Link plan sections, Django source lines, benchmarks.

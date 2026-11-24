@@ -92,7 +92,8 @@ class AsyncDriver(Protocol):
 
     @property
     def capabilities(self) -> Capabilities:
-        """Available once ``open()`` returned; raises ``RuntimeError`` before."""
+        """Available while the driver is open; raises ``RuntimeError`` before ``open()`` and after
+        ``close()``."""
         ...
 
     async def open(self) -> None: ...

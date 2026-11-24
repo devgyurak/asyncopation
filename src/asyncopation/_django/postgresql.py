@@ -1,6 +1,7 @@
 """PostgreSQL boundary: Django's psycopg3 helpers the driver reuses (ADR-0007).
 
-Imported lazily by ``drivers.postgresql`` so MySQL-only installs never need psycopg.
+Importing this module needs neither psycopg nor Django's PostgreSQL backend: each helper imports
+Django's ``psycopg_any`` on first call, so MySQL-only installs never load psycopg.
 """
 
 from __future__ import annotations

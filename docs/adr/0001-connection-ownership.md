@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-11-24
-- Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]`
+- Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 
@@ -76,13 +76,22 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    timeout raises `django.db.OperationalError`. Sizing defaults are fixed and benchmarked in the
    ADR-0004 implementation issue.
    *Amended 2026-11-24 (#2, PR #46) - implementation note:* the PostgreSQL driver reuses
-   `DATABASES[alias]["OPTIONS"]["pool"]` (`psycopg_pool` keyword arguments: `min_size`, `max_size`,
-   `timeout`, `max_lifetime`, ...; `True` means defaults). Provisional defaults are `min_size=1`,
-   `max_size=10` until the ADR-0004 implementation benchmark. Side effect: Django's own sync
-   backend reads the same key and would also enable its sync pool for that alias (`CONN_MAX_AGE`
-   must then stay 0, otherwise Django raises `ImproperlyConfigured`). Keys that do not fit an
-   async pool are rejected with `ImproperlyConfigured`: `name`, `reconnect_failed`, `close_returns`, `open`, `kwargs`, `conninfo`, any callable
-   value (`check`, `reset`, `configure`, `connection_class`, ...) and `OPTIONS["cursor_factory"]`.
+   `DATABASES[alias]["OPTIONS"]["pool"]`: `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of `psycopg_pool`
+   `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`, `max_lifetime`,
+   ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`,
+   `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a
+   deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores
+   `CONN_MAX_AGE`. Other types, unknown keys, any callable value, `close_returns=True` and the
+   keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself)
+   are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is
+   still rejected by name. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin
+   `ValueError` is raised from `open()` before any connection is made (an explicit exception to
+   ADR-0003 Decision 4, which covers database errors; this is a configuration error).
+   Side effect: Django's own sync backend reads the same key and would also enable its sync pool
+   for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django raises
+   `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes `psycopg_pool`'s
+   `check_connection`, which costs one extra round trip per borrow (same meaning as Django's
+   pool; referenced from ADR-0004).
 9. **Sync code in the same request.** Sync receivers called directly from our coroutines raise
    `SynchronousOnlyOperation`. Code run in a thread (`Signal.asend` sync receivers, user
    `sync_to_async`) uses Django's own sync connection: it is not part of the `async_atomic`

@@ -1,11 +1,11 @@
 """fetch_all / execute / execute_many semantics (rowcount, RETURNING, atomicity)."""
 
-import psycopg
 from django.db import IntegrityError
 
 from asyncopation.drivers.base import ExecResult
 from tests.support.drivers import (
     POSTGRES_ONLY,
+    compare_with_sync,
     failing_batch_error,
     insert_named,
     scratch_count,
@@ -130,11 +130,36 @@ async def test_failing_execute_many_batch_leaves_no_rows_behind(driver, scratch)
     assert rows_left == 0
 
 
-async def test_driver_declares_atomic_execute_many_when_pipelines_are_supported(driver):
+async def test_driver_declares_atomic_execute_many(driver):
     # when
     capabilities = driver.capabilities
     # then
-    assert capabilities.atomic_execute_many is psycopg.AsyncPipeline.is_supported()
+    assert capabilities.atomic_execute_many is True
+
+
+async def test_zero_column_select_returns_one_empty_row_from_fetch_all(driver):
+    # given
+    async with driver.connection() as conn:
+        # when
+        rows = await conn.fetch_all("SELECT", None)
+    # then
+    assert rows == [()]
+
+
+async def test_zero_column_select_returns_one_empty_row_from_execute(driver):
+    # given
+    async with driver.connection() as conn:
+        # when
+        result = await conn.execute("SELECT", None)
+    # then
+    assert result.rows == [()]
+
+
+async def test_zero_column_select_matches_the_sync_cursor(readonly_db, binding):
+    # when
+    result = await compare_with_sync("SELECT", None, options=binding.options)
+    # then
+    assert result.async_rows == result.sync_rows
 
 
 async def test_update_returning_without_match_yields_empty_rows(driver, scratch):

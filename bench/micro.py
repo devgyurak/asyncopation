@@ -4,9 +4,9 @@
 
 Asyncopation cases are reported as skipped until the API exists.
 
-``driver.*`` cases compare the PostgreSQL driver (``driver.connection()`` + ``fetch_all``) with a
-raw ``AsyncConnectionPool`` + ``AsyncClientCursor`` on the *same* pool at 1/8/64 concurrent tasks
-and report client CPU per operation (``cpu_us``). They measure driver overhead only (``SELECT 1``).
+``driver.*`` cases (see ``bench/driver_micro.py``) compare the PostgreSQL driver with the raw
+psycopg_pool calls it wraps at 1/8/64 tasks and report client CPU per operation and the paired
+ratio vs the baseline.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import datetime as dt
 import json
 import os
 import platform
-import statistics
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from bench import driver_micro
 from bench.db import BENCH_DB, ROOT, ensure_bench_db
 from bench.stats import summarize
 
@@ -79,99 +79,24 @@ async def measure(case: Case, iterations: int, warmup: int) -> dict[str, Any]:
     return {"status": "ok", "iterations": iterations, **summarize(samples)}
 
 
-DRIVER_TASKS = (1, 8, 64)
-DRIVER_SQL = "SELECT 1::int"
-
-
-async def _throughput(op: Case, tasks: int, seconds: float) -> tuple[float, ...]:
-    """Run ``tasks`` workers for ``seconds``: (ops/s, p50 us, p95 us, p99 us, client CPU us/op)."""
-    stop = time.perf_counter() + seconds
-    latencies: list[int] = []
-
-    async def worker() -> None:
-        while time.perf_counter() < stop:
-            start = time.perf_counter_ns()
-            await op()
-            latencies.append(time.perf_counter_ns() - start)
-
-    cpu_start = time.process_time()
-    await asyncio.gather(*(worker() for _ in range(tasks)))
-    cpu = time.process_time() - cpu_start
-    latencies.sort()
-    count = len(latencies)
-    return (
-        count / seconds,
-        latencies[count // 2] / 1000,
-        latencies[int(count * 0.95)] / 1000,
-        latencies[int(count * 0.99)] / 1000,
-        cpu / count * 1e6,
-    )
-
-
-async def driver_results(seconds: float, rounds: int, only: set[str]) -> dict[str, Any]:
-    """Raw pool vs ``PostgresDriver`` on the same pool, interleaved rounds, median per metric."""
-    from django.conf import settings
-
-    if os.environ.get("ASYNCOPATION_DB", "postgresql") != "postgresql":
-        return {}
-    from asyncopation.drivers.postgresql import PostgresDriver
-
-    driver = PostgresDriver.from_settings(
-        "default",
-        settings.DATABASES["default"],
-        use_tz=settings.USE_TZ,
-        time_zone=settings.TIME_ZONE,
-    )
-    await driver.open()
-    pool = driver._pool  # the raw baseline must use the driver's own pool
-    assert pool is not None
-
-    async def raw() -> Any:
-        async with pool.connection() as conn, conn.cursor() as cursor:
-            await cursor.execute(DRIVER_SQL)
-            return await cursor.fetchall()
-
-    async def via_driver() -> Any:
-        async with driver.connection() as conn:
-            return await conn.fetch_all(DRIVER_SQL, None)
-
-    results: dict[str, Any] = {}
-    try:
-        for tasks in DRIVER_TASKS:
-            names = {f"driver.raw.t{tasks}": raw, f"driver.asyncopation.t{tasks}": via_driver}
-            names = {n: c for n, c in names.items() if not only or n.split(".", 1)[1] in only}
-            if not names:
-                continue
-            for case in names.values():
-                await _throughput(case, tasks, 0.3)  # warm-up
-            samples: dict[str, list[tuple[float, ...]]] = {n: [] for n in names}
-            for index in range(rounds):
-                ordered = list(names.items())
-                for name, case in ordered if index % 2 == 0 else ordered[::-1]:
-                    samples[name].append(await _throughput(case, tasks, seconds))
-            for name, rows in samples.items():
-                ops, p50, p95, p99, cpu = (statistics.median(r[i] for r in rows) for i in range(5))
-                results[name] = {
-                    "status": "ok",
-                    "tasks": tasks,
-                    "ops_per_s": ops,
-                    "p50_us": p50,
-                    "p95_us": p95,
-                    "p99_us": p99,
-                    "cpu_us": cpu,
-                }
-    finally:
-        await driver.close()
-    return results
-
-
 async def main_async(
-    pk: int, iterations: int, warmup: int, only: set[str], driver_seconds: float, driver_rounds: int
+    pk: int,
+    iterations: int,
+    warmup: int,
+    only: set[str],
+    driver: tuple[Any, Any] | None,
+    driver_seconds: float,
+    driver_rounds: int,
 ) -> dict[str, Any]:
     cases = build_cases(pk)
     selected = {k: v for k, v in cases.items() if not only or k.split(".", 1)[1] in only}
     results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
-    return results | await driver_results(driver_seconds, driver_rounds, only)
+    if driver is not None:
+        names = driver_micro.selected(only)
+        results |= await driver_micro.run(
+            driver[0], driver[1], names, driver_seconds, driver_rounds
+        )
+    return results
 
 
 def main() -> None:
@@ -188,7 +113,7 @@ def main() -> None:
     parser.add_argument(
         "--driver-seconds", type=float, default=1.0, help="seconds per driver.* round"
     )
-    parser.add_argument("--driver-rounds", type=int, default=5, help="interleaved driver.* rounds")
+    parser.add_argument("--driver-rounds", type=int, default=7, help="interleaved driver.* rounds")
     parser.add_argument("--skip-seed", action="store_true")
     args = parser.parse_args()
 
@@ -203,8 +128,11 @@ def main() -> None:
 
     pk = Book.objects.order_by("pk").values_list("pk", flat=True)[0]  # sync, before the loop starts
     only = {s for s in args.only.split(",") if s}
+    driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
     results = asyncio.run(
-        main_async(pk, args.iterations, args.warmup, only, args.driver_seconds, args.driver_rounds)
+        main_async(
+            pk, args.iterations, args.warmup, only, driver, args.driver_seconds, args.driver_rounds
+        )
     )
     payload = {
         "kind": "micro",
@@ -222,19 +150,49 @@ def main() -> None:
     print(f"\nwritten: {out.relative_to(ROOT)}")
 
 
+def build_driver(only: set[str]) -> tuple[Any, Any] | None:
+    """``(driver, config)`` when a ``driver.*`` case is selected on PostgreSQL, else ``None``."""
+    if os.environ.get("ASYNCOPATION_DB", "postgresql") != "postgresql":
+        return None
+    if not driver_micro.selected(only):
+        return None
+    from django.conf import settings
+
+    from asyncopation.drivers.postgresql import PostgresDriver
+    from asyncopation.drivers.postgresql.settings import build_config
+
+    config = build_config(
+        "default",
+        settings.DATABASES["default"],
+        use_tz=settings.USE_TZ,
+        time_zone=settings.TIME_ZONE,
+    )
+    return PostgresDriver(config), config
+
+
 def render(payload: dict[str, Any]) -> str:
     lines = [
-        "| case | status | p50 µs | p95 µs | p99 µs | ops/s | CPU µs/op |",
-        "|---|---|---|---|---|---|---|",
+        "| case | status | p50 µs | p95 µs | p99 µs | ops/s | CPU µs/op | paired ratio (IQR) | load |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for row in payload["results"]:
         if row["status"] != "ok":
-            lines.append(f"| {row['case']} | skipped | - | - | - | - | - |")
+            lines.append(f"| {row['case']} | skipped | - | - | - | - | - | - | - |")
             continue
         cpu = f"{row['cpu_us']:.1f}" if "cpu_us" in row else "-"
+        ratios = [
+            f"{row[key]['median']:.2f}x [{row[key]['q1']:.2f}-{row[key]['q3']:.2f}] vs {key[6:]}"
+            for key in ("ratio_raw", "ratio_getconn")
+            if key in row
+        ]
+        load = (
+            f"{row['load_avg_1m_min']:.0f}-{row['load_avg_1m']:.0f}"
+            if "load_avg_1m" in row
+            else "-"
+        )
         lines.append(
             f"| {row['case']} | ok | {row['p50_us']:.0f} | {row['p95_us']:.0f} | {row['p99_us']:.0f} "
-            f"| {row['ops_per_s']:.0f} | {cpu} |"
+            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {load} |"
         )
     return "\n".join(lines)
 

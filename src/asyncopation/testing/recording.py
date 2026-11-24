@@ -10,6 +10,8 @@ from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, NamedTuple
 
+from django.db import InterfaceError
+
 from asyncopation.drivers.base import Capabilities, ExecResult, Params
 
 type Row = tuple[Any, ...]
@@ -36,18 +38,28 @@ class RecordingConnection:
     def __init__(self, driver: RecordingDriver) -> None:
         self._driver = driver
         self.in_transaction = False
+        self.released = False  # set when the borrow ends; later calls raise InterfaceError
+
+    def _check(self) -> None:
+        if self.released:
+            raise InterfaceError(
+                "the connection was returned to the driver and can no longer be used"
+            )
 
     async def fetch_all(self, sql: str, params: Params) -> list[Row]:
+        self._check()
         item = self._driver._take("fetch_all", sql, params)
         return (item.rows or []) if isinstance(item, ExecResult) else item
 
     async def execute(self, sql: str, params: Params) -> ExecResult:
+        self._check()
         item = self._driver._take("execute", sql, params)
         if isinstance(item, ExecResult):
             return item
         return ExecResult(rowcount=len(item), rows=item)
 
     async def execute_many(self, sql: str, batch: Sequence[Params]) -> ExecResult:
+        self._check()
         item = self._driver._take("execute_many", sql, batch)
         return item if isinstance(item, ExecResult) else ExecResult(rowcount=len(item))
 
@@ -55,31 +67,43 @@ class RecordingConnection:
     async def stream(
         self, sql: str, params: Params, chunk: int
     ) -> AsyncGenerator[AsyncIterator[list[Row]]]:
+        self._check()
         item = self._driver._take("stream", sql, params)
         rows = (item.rows or []) if isinstance(item, ExecResult) else item
-        yield _chunks(rows, chunk)
+        yield self._guarded_chunks(rows, chunk)
+
+    async def _guarded_chunks(self, rows: list[Row], size: int) -> AsyncIterator[list[Row]]:
+        for start in range(0, len(rows), size):
+            self._check()  # an iterator kept after the borrow ends must not keep working
+            yield rows[start : start + size]
 
     async def begin(self) -> None:
+        self._check()
         self._driver._log(Statement("begin"))
         self.in_transaction = True
 
     async def commit(self) -> None:
+        self._check()
         self._driver._log(Statement("commit"))
         self.in_transaction = False
         self._driver._raise_queued_error()
 
     async def rollback(self) -> None:
+        self._check()
         self._driver._log(Statement("rollback"))
         self.in_transaction = False
         self._driver._raise_queued_error()
 
     async def savepoint(self, sid: str) -> None:
+        self._check()
         self._driver._log(Statement("savepoint", sid))
 
     async def release_savepoint(self, sid: str) -> None:
+        self._check()
         self._driver._log(Statement("release_savepoint", sid))
 
     async def rollback_to_savepoint(self, sid: str) -> None:
+        self._check()
         self._driver._log(Statement("rollback_to_savepoint", sid))
 
 
@@ -89,7 +113,7 @@ class RecordingDriver:
     def __init__(self, capabilities: Capabilities | None = None) -> None:
         self._capabilities = capabilities or DEFAULT_CAPABILITIES
         self._queue: list[Queued] = []
-        self.statements: list[Statement] = []
+        self._statements: list[Statement] = []
         self.opened = False
         self.closed = False
         self.disconnect_errors: tuple[type[BaseException], ...] = ()
@@ -100,6 +124,11 @@ class RecordingDriver:
         if not self.opened:
             raise RuntimeError("RecordingDriver is not open: capabilities are known after open()")
         return self._capabilities
+
+    @property
+    def statements(self) -> list[Statement]:
+        """Snapshot of the statement log (a new list on every read)."""
+        return list(self._statements)
 
     def queue(self, *results: Queued) -> None:
         """Append results; each statement that returns data pops the next one."""
@@ -121,12 +150,13 @@ class RecordingDriver:
         finally:
             if connection.in_transaction:  # a real driver rolls back before pooling the connection
                 self._log(Statement("rollback"))
+            connection.released = True
 
     def is_disconnect(self, exc: BaseException) -> bool:
         return isinstance(exc, self.disconnect_errors)
 
     def _log(self, statement: Statement) -> None:
-        self.statements.append(statement)
+        self._statements.append(statement)
 
     def _raise_queued_error(self) -> None:
         """``commit()`` / ``rollback()`` consume a queued exception (e.g. an ``IntegrityError`` that
@@ -146,11 +176,6 @@ class RecordingDriver:
         if isinstance(item, BaseException):
             raise item
         return item
-
-
-async def _chunks(rows: list[Row], size: int) -> AsyncIterator[list[Row]]:
-    for start in range(0, len(rows), size):
-        yield rows[start : start + size]
 
 
 def _frozen(params: Any) -> Any:

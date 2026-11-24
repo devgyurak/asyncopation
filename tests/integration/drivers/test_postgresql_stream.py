@@ -1,15 +1,24 @@
 """Streams: chunking, server-side cursor options and cleanup."""
 
+import pytest
+from django.db import DataError, InterfaceError
+
 from tests.support.drivers import (
     POSTGRES_ONLY,
     flatten,
+    held_cursors_after_close_failed_in_error_state,
     holdable_flags,
+    nested_streams_left_cursors,
     observe_failed_stream,
     observe_stream,
     open_cursors,
+    raw_begin_then_failing_stream,
+    release_with_open_stream,
     scrollable_flags,
     sizes,
     stream_chunks,
+    stream_failure_then_savepoint_rollback,
+    use_stale_stream,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -173,3 +182,92 @@ async def test_capabilities_report_disabled_server_side_cursors(no_cursor_driver
     capabilities = no_cursor_driver.capabilities
     # then
     assert capabilities.server_side_cursors is False
+
+
+@pytest.mark.parametrize("transactional", [False, True], ids=["autocommit-withhold", "transaction"])
+async def test_stream_left_open_at_release_leaves_no_cursor_for_the_next_borrower(
+    single_driver, transactional
+):
+    # when
+    cursors = await release_with_open_stream(single_driver, transactional=transactional)
+    # then
+    assert cursors == []
+
+
+async def test_iterating_a_stream_after_its_borrow_ended_raises_interface_error(single_driver):
+    # when
+    outcome = await use_stale_stream(single_driver, close=False)
+    # then
+    assert type(outcome.stale_error) is InterfaceError
+
+
+async def test_closing_a_stream_after_its_borrow_ended_is_a_no_op(single_driver):
+    # when
+    outcome = await use_stale_stream(single_driver, close=True)
+    # then
+    assert outcome.stale_error is None
+
+
+@pytest.mark.parametrize("close", [False, True], ids=["iterate", "close"])
+async def test_stale_stream_does_not_disturb_the_next_borrowers_transaction(single_driver, close):
+    # when
+    outcome = await use_stale_stream(single_driver, close=close)
+    # then
+    assert outcome.b_error is None
+    assert outcome.b_rows == [(2,)]
+
+
+@pytest.mark.parametrize("close", [False, True], ids=["iterate", "close"])
+async def test_stale_stream_does_not_change_the_next_borrowers_backend(single_driver, close):
+    # when
+    outcome = await use_stale_stream(single_driver, close=close)
+    # then
+    assert outcome.pid_after == outcome.pid_before
+
+
+async def test_failed_close_of_a_held_cursor_leaves_none_for_the_next_borrower(single_driver):
+    # when
+    cursors = await held_cursors_after_close_failed_in_error_state(single_driver)
+    # then
+    assert cursors == []
+
+
+async def test_stream_failing_under_a_savepoint_recovers_after_rollback_to_savepoint(
+    single_driver,
+):
+    # when
+    outcome = await stream_failure_then_savepoint_rollback(single_driver)
+    # then
+    assert type(outcome.error) is DataError
+    assert outcome.second_rows == [(1,), (2,), (3,)]
+
+
+@pytest.mark.parametrize("exit_inner_first", [True, False], ids=["inner-first", "outer-first"])
+async def test_second_stream_on_one_connection_does_not_leak_the_first_cursor(
+    single_driver, exit_inner_first
+):
+    # when
+    cursors = await nested_streams_left_cursors(single_driver, exit_inner_first=exit_inner_first)
+    # then
+    assert cursors == []
+
+
+async def test_stream_error_after_a_raw_begin_maps_to_data_error(single_driver):
+    # when
+    outcome = await raw_begin_then_failing_stream(single_driver)
+    # then
+    assert type(outcome.error) is DataError
+
+
+async def test_stream_error_after_a_raw_begin_keeps_the_healthy_connection(single_driver):
+    # when
+    outcome = await raw_begin_then_failing_stream(single_driver)
+    # then
+    assert outcome.pid_after == outcome.pid_before
+
+
+async def test_stream_error_after_a_raw_begin_leaves_no_held_cursor(single_driver):
+    # when
+    outcome = await raw_begin_then_failing_stream(single_driver)
+    # then
+    assert outcome.cursors_after == []

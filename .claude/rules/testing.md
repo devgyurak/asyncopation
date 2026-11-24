@@ -49,9 +49,11 @@ Async connections cannot see the sync test transaction, so pytest-django's defau
 - Allowed alternative for write tests: a **scratch-table fixture**. The test creates and drops
   its own table through a `tests/support` helper (e.g. `create_scratch_table` /
   `drop_scratch_table` in `tests/support/drivers/admin.py`, wrapped by the `scratch` fixture in
-  `tests/integration/drivers/conftest.py`). The schema is private to the test and the committed
-  seed is never touched, so no re-seed is needed. Use it for driver-level tests that execute raw
-  SQL; ORM-level tests keep `readonly_db` / `writable_db`.
+  `tests/integration/drivers/conftest.py`). The committed seed is never touched, so no re-seed is
+  needed. Table names carry a per-run random suffix so that concurrent checkouts sharing one test
+  database cannot collide; they are not isolated from other connections to the same database.
+  Use it for driver-level tests that execute raw SQL; ORM-level tests keep `readonly_db` /
+  `writable_db`.
 
 ## Differential testing is the default for read APIs
 For every read API compare against the sync ORM with the `differential` fixture

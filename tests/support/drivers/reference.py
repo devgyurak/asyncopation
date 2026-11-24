@@ -13,7 +13,14 @@ from asgiref.sync import sync_to_async
 from django.test import override_settings
 from psycopg.types.json import Jsonb
 
-from tests.support.drivers.admin import UTC_CASE, Row, TzCase, open_driver, pg_settings
+from tests.support.drivers.admin import (
+    UTC_CASE,
+    Row,
+    TzCase,
+    backend_ends,
+    open_driver,
+    pg_settings,
+)
 
 
 @dataclass(frozen=True)
@@ -118,6 +125,38 @@ async def sync_connect_error(
             return None
 
     return await sync_to_async(run)()
+
+
+async def sync_idle_timeout_error_name() -> str:
+    """Class Django's sync backend raises on a session the server ended (idle in transaction)."""
+    from django.db.backends.postgresql.base import DatabaseWrapper
+
+    options = {"options": "-c idle_in_transaction_session_timeout=300ms"}
+    wrapper = DatabaseWrapper(pg_settings(options=options), alias="drivers_reference")
+
+    def start() -> int:
+        wrapper.set_autocommit(False)
+        with wrapper.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            return cursor.fetchall()[0][0]
+
+    def use_again() -> str:
+        try:
+            with wrapper.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        except Exception as exc:
+            return error_name(exc)
+        return "no error"
+
+    def close() -> None:
+        wrapper.close()
+
+    try:
+        pid = await sync_to_async(start)()
+        await backend_ends(pid)  # the server terminates the idle session
+        return await sync_to_async(use_again)()
+    finally:
+        await sync_to_async(close)()
 
 
 # --------------------------------------------------------------------------- comparisons

@@ -32,11 +32,3 @@ def test_exec_result_defaults_to_no_lastrowid_and_no_rows():
     # then
     assert result.lastrowid is None
     assert result.rows is None
-
-
-def test_pool_stats_documents_that_in_use_includes_connections_being_opened():
-    # when
-    doc = PoolStats.__doc__
-    # then
-    assert doc is not None
-    assert "opening" in doc

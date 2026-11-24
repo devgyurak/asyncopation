@@ -254,6 +254,12 @@ async def error_of_call(driver: Any, operation: str) -> BaseException | None:
         return await error_of_operation(conn, operation)
 
 
+def logged_params(driver: Any, index: int = 0) -> Any:
+    """The params of the `index`-th logged statement as a plain list or dict."""
+    params = driver.statements[index].params
+    return dict(params) if hasattr(params, "keys") else list(params)
+
+
 async def kinds_after_leaving(driver: Any, *operations: str) -> list[str]:
     """Statement kinds logged after the given operations ran and the connection was released."""
     async with driver.connection() as conn:

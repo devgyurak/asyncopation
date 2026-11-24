@@ -52,7 +52,8 @@ class PostgresDriver:
         if self._pool is not None:
             return
         config = self._config
-        server_version = await self._probe()
+        # Constructing the pool first validates its sizes (psycopg_pool raises ``ValueError`` for
+        # min_size > max_size) before any connection is made; nothing runs until it is opened.
         pool = AsyncConnectionPool(
             "",
             kwargs=config.conn_kwargs,
@@ -61,6 +62,7 @@ class PostgresDriver:
             open=False,
             **config.pool_kwargs,
         )
+        server_version = await self._probe()
         try:
             with translate_errors():
                 await pool.open(wait=True)
@@ -78,6 +80,7 @@ class PostgresDriver:
 
     async def close(self) -> None:
         pool, self._pool = self._pool, None
+        self._capabilities = None  # known only while open
         if pool is not None:
             await pool.close()
 
@@ -111,7 +114,7 @@ class PostgresDriver:
     async def _configure(self, raw: psycopg.AsyncConnection) -> None:
         """Per physical connection; port of Django's ``get_new_connection`` + ``_configure_*``."""
         # Ported from django/db/backends/postgresql/base.py::_configure_timezone,
-        # _configure_role and get_new_connection @ 6.1.3
+        # _configure_role and get_new_connection, and operations.py::compose_sql @ 6.1.3
         # Changes: awaited calls; the connection is in autocommit mode so nothing is committed.
         config = self._config
         if config.isolation_level is not None:

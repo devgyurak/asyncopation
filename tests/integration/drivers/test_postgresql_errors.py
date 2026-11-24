@@ -16,11 +16,13 @@ from tests.support.drivers import (
     acquire_while_saturated,
     consume_failing_stream,
     fail_in_transaction_then_rollback,
+    failed_commit_aftermath,
     idle_timeout_then_query,
     is_pool_timeout,
     kill_backend_then_query,
     savepoint_after_integrity_error,
     scratch_names,
+    stream_error_after_kill,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -235,3 +237,40 @@ async def test_acquire_timeout_does_not_leak_a_connection(tight_driver):
     outcome = await acquire_while_saturated(tight_driver)
     # then
     assert outcome.after == PoolStats(in_use=0, idle=1, waiting=0)
+
+
+async def test_failed_commit_raises_integrity_error(single_driver, deferred):
+    # when
+    outcome = await failed_commit_aftermath(single_driver, deferred)
+    # then
+    assert type(outcome.error) is IntegrityError
+
+
+async def test_failed_commit_leaves_the_connection_in_autocommit(single_driver, deferred):
+    # when
+    outcome = await failed_commit_aftermath(single_driver, deferred)
+    # then
+    assert outcome.still_in_transaction is False
+
+
+async def test_statement_after_a_failed_commit_autocommits(single_driver, deferred):
+    # when
+    outcome = await failed_commit_aftermath(single_driver, deferred)
+    # then
+    assert outcome.visible_ids == [2]
+
+
+async def test_stream_without_server_side_cursors_on_a_dead_connection_raises_django_error(
+    no_cursor_driver,
+):
+    # when
+    error = await stream_error_after_kill(no_cursor_driver)
+    # then
+    assert type(error) is OperationalError
+
+
+async def test_stream_with_server_side_cursors_on_a_dead_connection_raises_django_error(driver):
+    # when
+    error = await stream_error_after_kill(driver)
+    # then
+    assert type(error) is OperationalError

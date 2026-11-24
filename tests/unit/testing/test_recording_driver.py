@@ -1,4 +1,5 @@
 import pytest
+from django.db import InterfaceError
 
 from asyncopation import testing
 from asyncopation.drivers.base import Capabilities, ExecResult
@@ -8,15 +9,31 @@ from tests.support.drivers import (
     as_driver,
     error_of_call,
     kinds_after_leaving,
+    logged_params,
     next_rows_after_commit,
     perform_operation,
     queue_error_then_rows,
+    recording_stale_chunk_error,
+    recording_statements_snapshot,
+    released_connection_error,
     run_on_two_connections,
     statement_kinds,
     stream_chunks,
 )
 
 RESULT_OPERATIONS = ["fetch_all", "execute", "execute_many", "stream"]
+RELEASED_OPERATIONS = [
+    "fetch_all",
+    "execute",
+    "execute_many",
+    "stream",
+    "begin",
+    "commit",
+    "rollback",
+    "savepoint",
+    "release_savepoint",
+    "rollback_to_savepoint",
+]
 
 
 def test_recording_driver_satisfies_the_driver_protocol():
@@ -101,17 +118,29 @@ async def test_custom_capabilities_are_reported():
     assert driver.capabilities == custom
 
 
-async def test_open_and_close_flip_lifecycle_flags():
+def test_new_driver_is_neither_opened_nor_closed():
+    # when
+    driver = RecordingDriver()
+    # then
+    assert (driver.opened, driver.closed) == (False, False)
+
+
+async def test_open_marks_the_driver_opened():
     # given
     driver = RecordingDriver()
-    initial = (driver.opened, driver.closed)
     # when
     await driver.open()
-    opened = (driver.opened, driver.closed)
+    # then
+    assert (driver.opened, driver.closed) == (True, False)
+
+
+async def test_close_marks_the_driver_closed():
+    # given
+    driver = RecordingDriver()
+    await driver.open()
+    # when
     await driver.close()
     # then
-    assert initial == (False, False)
-    assert opened == (True, False)
     assert driver.closed is True
 
 
@@ -345,3 +374,54 @@ def test_is_disconnect_is_true_only_for_configured_types():
     results = (driver.is_disconnect(OSError("gone")), driver.is_disconnect(ValueError("x")))
     # then
     assert results == (True, False)
+
+
+@pytest.mark.parametrize("operation", RELEASED_OPERATIONS)
+async def test_released_connection_refuses_every_operation(driver, operation):
+    # when
+    error = await released_connection_error(driver, operation)
+    # then
+    assert type(error) is InterfaceError
+
+
+async def test_logged_params_do_not_change_when_the_caller_mutates_its_list():
+    # given
+    driver = RecordingDriver()
+    await driver.open()
+    driver.queue([(1,)])
+    params = [1]
+    async with driver.connection() as conn:
+        await conn.fetch_all("SELECT %s", params)
+    # when
+    params.append(2)
+    # then
+    assert logged_params(driver) == [1]
+
+
+async def test_logged_params_do_not_change_when_the_caller_mutates_its_dict():
+    # given
+    driver = RecordingDriver()
+    await driver.open()
+    driver.queue([(1,)])
+    params = {"a": 1}
+    async with driver.connection() as conn:
+        await conn.fetch_all("SELECT %(a)s", params)
+    # when
+    params["b"] = 2
+    # then
+    assert logged_params(driver) == {"a": 1}
+
+
+async def test_statements_returns_a_snapshot_the_caller_cannot_use_to_rewrite_history(driver):
+    # when
+    cleared, kinds_now = await recording_statements_snapshot(driver)
+    # then
+    assert cleared == ["begin"]
+    assert kinds_now == ["begin", "commit"]
+
+
+async def test_chunk_iterator_kept_after_the_borrow_raises_interface_error(driver):
+    # when
+    error = await recording_stale_chunk_error(driver)
+    # then
+    assert type(error) is InterfaceError

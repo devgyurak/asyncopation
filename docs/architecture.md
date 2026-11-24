@@ -28,14 +28,14 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 
 | Layer | Package | Responsibility | May not |
 |---|---|---|---|
-| 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver | - |
+| 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
 | 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
 | 6 | `asyncopation.deletion`, `asyncopation.prefetch` | async `Collector`, async `prefetch_related` as sans-I/O cores | import each other |
 | 5 | `asyncopation.fetch` | `afetch()`, async fetch modes, `FETCH_RAISE` default | - |
 | 4 | `asyncopation.engine` | `CompiledQuery`, materializer via `results_iter(results=...)`, sans-I/O runner ([ADR-0002](adr/0002-pipeline-contracts.md), [ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import the public facade |
 | 3 | `asyncopation.transaction` | `async_atomic`, savepoints, async `on_commit` | - |
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
-| 1 | `asyncopation.drivers` | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
+| 1 | `asyncopation.drivers` (internal, experimental) | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
 | 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
 | 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
@@ -78,37 +78,40 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named
   cursors are `scrollable=False` and `withhold` outside transactions. The SQL shape difference
   stays in the compile-only wrapper's `features.uses_server_side_binding`.
-- **Pool options.** The pool reuses `DATABASES[alias]["OPTIONS"]["pool"]` (`psycopg_pool` keyword
-  arguments such as `min_size`, `max_size`, `timeout`, `max_lifetime`; `True` means defaults).
-  Provisional defaults are `min_size=1`, `max_size=10` until the ADR-0004 implementation
-  benchmark fixes them. Django's own sync backend reads the same key, so it would also enable
-  *its* sync pool for that alias (and `CONN_MAX_AGE` must then stay 0, otherwise Django raises
-  `ImproperlyConfigured`). Keys that do not fit an async pool are rejected with
-  `ImproperlyConfigured`: `name`, `reconnect_failed`, `close_returns` (a discarded connection must not return to the pool), `open`, `kwargs`, `conninfo` (set by the driver), any callable value (`check`, `reset`,
-  `configure`, `connection_class`, ...; the driver installs its own) and `OPTIONS["cursor_factory"]`. When `CONN_HEALTH_CHECKS` is true the
-  driver passes `psycopg_pool`'s `check_connection`, which costs one extra round trip per borrow
-  (same meaning as Django's pool).
+- **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores `CONN_MAX_AGE`. Other types, unknown keys, any callable value, `close_returns=True` and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself) are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still rejected by name. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin `ValueError` is raised from `open()` before any connection is made (an explicit exception to ADR-0003 Decision 4, which covers database errors; this is a configuration error). Side effect: Django's own sync backend reads the same key and would
+  also enable *its* sync pool for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django
+  raises `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes
+  `psycopg_pool`'s `check_connection` (one extra round trip per borrow, as in Django's pool).
 - **Open fails fast.** `open()` first connects once directly, so bad credentials or a failing
-  `assume_role` raise the same Django exception as the sync backend and leave no pool behind; only
-  then is the pool opened.
-- **Capabilities** are owned by the driver: the same direct connection provides `server_version`
-  from its startup parameters (no query) and the driver builds the frozen `Capabilities`;
-  `driver.capabilities` is the single owner of runtime facts. The ADR-0004 probe (once per alias)
-  takes `server_version` from the first opened driver's `Capabilities` instead of running a second
-  source of truth, and the registry builds the alias-level server info from it.
+  `assume_role` raise the same Django exception as the sync backend and leave no pool behind;
+  only then is the pool opened (the pool object is constructed first, without opening, only to
+  validate its sizes).
+- **Capabilities** (PostgreSQL): the driver owns them. The direct connection of `open()` provides
+  `server_version` from its startup parameters (no query) and the driver builds the frozen
+  `Capabilities`; `driver.capabilities` is the single owner of runtime facts and is available
+  only while the driver is open (`RuntimeError` before `open()` and after `close()`). The
+  ADR-0004 probe (once per alias) reads `driver.capabilities` instead of running a second source of
+  truth, and the registry builds the alias-level server info from it. For MySQL/MariaDB the probe
+  keeps running the full `mysql_server_data` query; the future asyncmy driver's `open()` builds
+  `Capabilities` from its own connection and its `server_version` must equal what that probe
+  derives. The once-per-alias probe takes the first successfully opened driver's
+  `driver.capabilities` (`server_version` is loop-independent) and is retried if that open fails.
 - Connections are in autocommit outside `begin()`; a connection returned mid-transaction is rolled
-  back. Cancellation: a statement cancelled in autocommit is cancelled and rolled back (the
-  connection is discarded when its state is unknown). Inside a transaction (autocommit off) or
-  while a stream is open the connection is **discarded**: a held cursor survives a rollback, and a
-  silent rollback would continue in a new implicit transaction. A disconnected connection is
-  closed so the pool replaces it (`psycopg_pool` always replaces a discarded connection, even with
-  `min_size=0`: `pool_async.py::_return_connection` schedules `AddConnection` without a `min_size`
-  check, so a settled pool shows `PoolStats(in_use=0, idle=1, waiting=0)`). A released connection wrapper raises `InterfaceError` when used
-  afterwards.
+  back, and a failed `COMMIT` restores autocommit. Cancellation: a statement cancelled in
+  autocommit is cancelled and rolled back (the connection is discarded when its state is
+  unknown). Inside a transaction (autocommit off) or while a stream is open the connection is
+  **discarded**: a held cursor survives a rollback, and a silent rollback would continue in a new
+  implicit transaction. A stream still open when the borrow ends is `CLOSE`d on release (the
+  connection is discarded if `CLOSE` fails). A disconnected connection is closed so the pool
+  replaces it. A released connection wrapper, and any stream iterator it handed out, raise
+  `InterfaceError` when used afterwards.
 - `connection_created` is **not** sent for driver connections; hstore/citext registration is
   tracked in #43. The recording driver (`asyncopation.testing.RecordingDriver`) implements the same
-  protocol with queued results and a statement log for unit tests; `Capabilities` and `ExecResult`
-  are re-exported from `asyncopation.testing` so such tests need no import from `drivers`.
+  protocol with queued results and a statement log for unit tests (its connections also raise
+  `InterfaceError` after the borrow ends); `Capabilities` and `ExecResult` are re-exported from
+  `asyncopation.testing`.
+- `asyncopation.drivers` is **internal and experimental** (no stability promise); the supported
+  public surface for driver-level tests is `asyncopation.testing`.
 
 ## Connection ownership
 
@@ -118,9 +121,11 @@ connection from another task raises `ConcurrentQueryError`:
 
 ## Lifecycle
 
-Configure in `AppConfig.ready()` (no I/O) -> probe server info once per alias -> open pools per
-`(alias, loop)` in the ASGI lifespan (`asyncopation.connection.asgi.LifespanApp`) -> close on
-shutdown, with a lock-guarded lazy fallback: [ADR-0004](adr/0004-lifecycle-and-registry.md).
+Configure in `AppConfig.ready()` (no I/O) -> open drivers per `(alias, loop)` in the ASGI lifespan
+(`asyncopation.connection.asgi.LifespanApp`) -> probe server info once per alias (open -> probe:
+PostgreSQL reads `driver.capabilities`, MySQL/MariaDB run the full `mysql_server_data` query) ->
+close on shutdown, with a lock-guarded lazy fallback:
+[ADR-0004](adr/0004-lifecycle-and-registry.md).
 
 ## Harness
 

@@ -1,5 +1,8 @@
 """`build_config` validation and pool option handling (pure, no I/O)."""
 
+from collections import OrderedDict
+from types import MappingProxyType
+
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
@@ -13,45 +16,99 @@ from tests.support.drivers import (
 )
 
 
+class NoopClass:
+    """A class is callable too: connection_class style values."""
+
+
 @pytest.mark.parametrize(
-    "option",
+    "pool",
     [
-        pytest.param("name", id="name"),
-        pytest.param("check", id="check"),
-        pytest.param("reset", id="reset"),
-        pytest.param("configure", id="configure"),
-        pytest.param("connection_class", id="connection-class"),
-        pytest.param("reconnect_failed", id="reconnect-failed"),
+        pytest.param(None, id="none"),
+        pytest.param(True, id="true"),
+        pytest.param(False, id="false"),
+        pytest.param({}, id="empty-dict"),
+        pytest.param(MappingProxyType({"min_size": 2, "max_size": 4}), id="mapping-proxy"),
+        pytest.param(OrderedDict(min_size=1), id="ordered-dict"),
     ],
 )
-def test_pool_options_owned_by_the_driver_are_rejected(option):
+def test_pool_option_accepts_none_bool_and_any_mapping(pool):
     # when
-    error = config_error({"pool": {option: noop_hook}})
+    error = config_error({"pool": pool})
+    # then
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [pytest.param("min_size=2", id="str"), pytest.param(5, id="int"), pytest.param([1], id="list")],
+)
+def test_pool_option_of_any_other_type_is_rejected(pool):
+    # when
+    error = config_error({"pool": pool})
     # then
     assert isinstance(error, ImproperlyConfigured)
 
 
 @pytest.mark.parametrize(
-    ("option", "value"),
-    [
-        pytest.param("close_returns", True, id="close-returns"),
-        pytest.param("open", False, id="open"),
-        pytest.param("kwargs", {}, id="kwargs"),
-        pytest.param("conninfo", "dbname=x", id="conninfo"),
-    ],
+    "key",
+    ["check", "reset", "configure", "connection_class", "reconnect_failed"],
 )
-def test_pool_options_that_would_break_discarding_or_collide_with_the_driver_are_rejected(
-    option, value
-):
+@pytest.mark.parametrize("value", [noop_hook, NoopClass], ids=["function", "class"])
+def test_callable_pool_values_are_rejected(key, value):
     # when
-    error = config_error({"pool": {option: value}})
+    error = config_error({"pool": {key: value}})
     # then
     assert isinstance(error, ImproperlyConfigured)
 
 
-def test_callable_pool_option_values_are_rejected():
+def test_close_returns_true_is_rejected():
     # when
-    error = config_error({"pool": {"min_size": 1, "anything": noop_hook}})
+    error = config_error({"pool": {"close_returns": True}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param({"close_returns": False}, id="close-returns-false"),
+        pytest.param({"check": None}, id="check-none"),
+        pytest.param({"reconnect_failed": None}, id="reconnect-failed-none"),
+        pytest.param({"max_lifetime": 60}, id="max-lifetime"),
+        pytest.param({"max_idle": 30.0}, id="max-idle"),
+        pytest.param({"num_workers": 2}, id="num-workers"),
+        pytest.param({"timeout": 5}, id="timeout"),
+        pytest.param({"reconnect_timeout": 60}, id="reconnect-timeout"),
+        pytest.param({"max_waiting": 0}, id="max-waiting"),
+    ],
+)
+def test_plain_pool_parameters_are_accepted(pool):
+    # when
+    error = config_error({"pool": pool})
+    # then
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param({"name": "x"}, id="name"),
+        pytest.param({"configure": None}, id="configure"),
+        pytest.param({"kwargs": {}}, id="kwargs"),
+        pytest.param({"conninfo": "x"}, id="conninfo"),
+        pytest.param({"open": False}, id="open"),
+    ],
+)
+def test_pool_parameters_the_driver_passes_itself_are_rejected_by_name(pool):
+    # when
+    error = config_error({"pool": pool})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+def test_unknown_pool_key_is_rejected_before_any_connection():
+    # when
+    error = config_error({"pool": {"min_sise": 2}})
     # then
     assert isinstance(error, ImproperlyConfigured)
 
@@ -61,6 +118,48 @@ def test_cursor_factory_option_is_rejected():
     error = config_error({"cursor_factory": noop_hook})
     # then
     assert isinstance(error, ImproperlyConfigured)
+
+
+def test_pool_mapping_with_non_string_keys_is_rejected():
+    # when
+    error = config_error({"pool": {1: 2, "a": 3}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+def test_min_size_alone_is_accepted_and_the_default_max_size_follows_it():
+    # when
+    kwargs = pool_kwargs_for({}, {"min_size": 20})
+    # then
+    assert (kwargs["min_size"], kwargs["max_size"]) == (20, 20)
+
+
+def test_max_size_alone_keeps_the_default_min_size():
+    # when
+    kwargs = pool_kwargs_for({}, {"max_size": 3})
+    # then
+    assert (kwargs["min_size"], kwargs["max_size"]) == (1, 3)
+
+
+def test_pool_sizes_default_when_neither_is_given():
+    # when
+    kwargs = pool_kwargs_for({}, {"timeout": 5})
+    # then
+    assert (kwargs["min_size"], kwargs["max_size"]) == (1, 10)
+
+
+def test_explicit_check_none_is_respected_with_health_checks_on():
+    # when
+    kwargs = pool_kwargs_for({"CONN_HEALTH_CHECKS": True}, {"check": None})
+    # then
+    assert kwargs.get("check") is None
+
+
+def test_health_checks_provide_the_check_when_none_is_given_explicitly_absent():
+    # when
+    kwargs = pool_kwargs_for({"CONN_HEALTH_CHECKS": True}, {"timeout": 5})
+    # then
+    assert callable(kwargs["check"])
 
 
 def test_pool_true_means_default_pool_options():
@@ -84,15 +183,42 @@ def test_pool_has_no_check_callback_by_default():
     assert "check" not in kwargs
 
 
-def test_large_min_size_raises_max_size_with_it():
-    # when
-    kwargs = pool_kwargs_for({}, {"min_size": 20})
-    # then
-    assert kwargs["max_size"] >= 20
-
-
 def test_empty_time_zone_leaves_no_timezone_name_to_apply():
     # when
     name = timezone_name_for(TzCase(False, None, ""))
     # then
     assert not name
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param({"min_size": "5"}, id="min-str"),
+        pytest.param({"min_size": None}, id="min-none"),
+        pytest.param({"min_size": 2.5}, id="min-float"),
+        pytest.param({"max_size": "7"}, id="max-str"),
+        pytest.param({"min_size": True}, id="min-bool"),
+        pytest.param({"max_size": 2.5}, id="max-float"),
+    ],
+)
+def test_pool_sizes_of_the_wrong_type_are_rejected(pool):
+    # when
+    error = config_error({"pool": pool})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        pytest.param({"max_size": None}, id="max-none"),
+        pytest.param({"min_size": 0}, id="min-zero"),
+        pytest.param({"min_size": 3, "max_size": 3}, id="equal"),
+        pytest.param({"min_size": 2, "max_size": 8}, id="both"),
+    ],
+)
+def test_integer_pool_sizes_and_unset_max_size_are_accepted(pool):
+    # when
+    error = config_error({"pool": pool})
+    # then
+    assert error is None

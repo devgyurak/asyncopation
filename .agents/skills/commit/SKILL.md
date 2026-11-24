@@ -97,7 +97,25 @@ Agents append the attribution trailer their harness requires.
 main      released / releasable history. Receives PRs from develop only (merge commit).
 develop   integration branch. All work PRs target develop (squash merge).
 <prefix>/<kebab-summary>   work branches cut from develop
+v<X.Y.Z>  tags on main mark releases
 ```
+
+These rules are enforced by GitHub rulesets - agents cannot work around them:
+
+| Branch | Rule |
+|---|---|
+| `develop` | Changes only through PRs. Merging needs an approval from the code owner (@devgyurak, `.github/CODEOWNERS`). The maintainer may bypass-merge their own PR. Squash for work PRs, merge commit allowed for back-merges. No force pushes, no deletion. |
+| `main` | **No direct pushes for anyone, no bypass.** Only PRs whose head is `develop` (required check "main accepts PRs from develop only", `.github/workflows/branch-policy.yml`), merged with a merge commit. No force pushes, no deletion. |
+
+Consequences for agents: never push to `main` or `develop`; push a work branch and open a PR
+(`gh pr create --base develop`). Never approve or merge PRs - that is the maintainer's call.
+
+## Releases and versions
+
+Versions are **git tags** (`vX.Y.Z`) created on `main` after a `develop` -> `main` merge. Pushing
+a tag triggers the release CI (not built yet - issue #26). Do not bump `version` in
+`pyproject.toml` by hand; the release pipeline derives it from the tag. Tags are created by the
+maintainer only.
 
 Branch name: lower-case prefix + kebab summary.
 

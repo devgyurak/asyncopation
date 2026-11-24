@@ -65,6 +65,11 @@ branches `<prefix>/<kebab-summary>` are cut from `develop` and PR'd into `develo
 receives release merges from `develop`. Details: the `commit` skill. Do not commit or push unless
 asked.
 
+Branch protection (GitHub rulesets): `develop` changes only via PR with the code owner's
+(@devgyurak) approval - the maintainer may bypass-merge; `main` accepts no direct pushes from
+anyone, only PRs from `develop`. Releases are `vX.Y.Z` git tags on `main` (tag push -> release CI,
+issue #26). Agents never push to `main`/`develop`, approve, merge or tag.
+
 ## Agent-specific notes
 - **Claude Code**: rules auto-load from `.claude/rules/` by path; sub-agents in `.claude/agents/`;
   hooks in `.claude/settings.json` run the guards after each edit.

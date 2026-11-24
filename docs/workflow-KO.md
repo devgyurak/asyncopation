@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=38556b713150 -->
+<!-- i18n: source=docs/workflow.md source-sha256=944edaa8f522 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -63,7 +63,10 @@ AGENTS.md 인덱스 블록                               Codex, Pi (Claude는 CL
 사람이 결정하는 것: ADR 승인, 가드/규칙 변경, 벤치마크 기준선 갱신, 릴리스.
 
 브랜치: 작업은 `develop`에서 딴 `<prefix>/<kebab-summary>` 브랜치에서 하고 `develop`으로 PR을
-보낸다. `main`은 릴리스 머지만 받는다. 커밋/PR 제목은 접두사 하나를 쓴다:
+보낸다. `main`은 릴리스 머지만 받는다. GitHub ruleset으로 강제된다: `develop` 머지에는 코드 오너
+(@devgyurak)의 승인이 필요하고 메인테이너는 bypass 머지할 수 있다. `main`에는 누구도 직접 푸시할 수
+없고 `develop`에서 온 PR만 받는다. 릴리스는 `main`의 `vX.Y.Z` 태그이고, 태그를 푸시하면 릴리스 CI가
+돈다(아직 없음, #26). 커밋/PR 제목은 접두사 하나를 쓴다:
 `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (`commit` 스킬).
 
 ## 3. 서브 에이전트
@@ -95,6 +98,7 @@ AGENTS.md 인덱스 블록                               Codex, Pi (Claude는 CL
 | 정합성 | 3개 백엔드에서 pytest 차등 테스트 | `make test-int`, CI 매트릭스 |
 | E2E | uvicorn + httpx | `make test-e2e`, CI |
 | 성능 | micro + k6 하네스 | `make bench-micro` / `make bench`, CI (수동 / 야간) |
+| 브랜치 흐름 | GitHub ruleset + `branch-policy.yml` + `CODEOWNERS` | `develop`, `main`으로의 모든 푸시 / PR |
 
 가드에는 인라인 예외 처리(suppression)가 없다. 가드가 아니라 코드를 고친다. 가드를 바꾸려면 사람이
 결정해야 한다.

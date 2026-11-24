@@ -74,7 +74,8 @@ test-int-all: ## Integration tests on postgresql, mysql and mariadb
 
 test-compose-python: ## compose_sql / compile differential against the pure-Python psycopg (PostgreSQL, needs libpq + db-up)
 	PSYCOPG_IMPL=python ASYNCOPATION_DB=postgresql uv run pytest \
-		tests/integration/test_compose_sql_live.py tests/integration/test_compile_scope_differential.py $(PYTEST_ARGS)
+		tests/integration/test_compose_sql_live.py tests/integration/test_compile_scope_differential.py \
+		tests/integration/test_psycopg_implementation.py $(PYTEST_ARGS)
 
 test-e2e: ## End-to-end tests against uvicorn (needs db-up)
 	uv run pytest tests/e2e $(PYTEST_ARGS)

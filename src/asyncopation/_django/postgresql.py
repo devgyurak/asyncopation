@@ -40,9 +40,10 @@ class CompileOperations(DatabaseOperations):
     types that caller passes, byte for byte like Django's output on a live connection (checked in
     tests/integration against both the C and the pure-Python psycopg implementation): ``str``
     (quotes doubled; a string with a backslash becomes `` E'...'`` with doubled backslashes, which
-    is correct whatever ``standard_conforming_strings`` is), ``int``, ``float`` (``'NaN'::float8``
-    and ``'Infinity'::float8`` for the special values), finite ``Decimal``, ``bool`` and ``None``
-    (``NULL``). Negative numbers (``int``, ``float`` and ``Decimal``) get a leading space.
+    is correct whatever ``standard_conforming_strings`` is), ``int``, ``float`` (``'NaN'::float8``,
+    ``'Infinity'::float8`` and ``'-Infinity'::float8`` for the special values), finite ``Decimal``,
+    ``bool`` and ``None`` (``NULL``). Finite negative numbers (``int``, ``float`` and ``Decimal``)
+    get a leading space.
 
     Only the *exact* built-in types are rendered. A subclass (``IntEnum``, ``TextChoices``, a
     Django ``Choices`` enum, ...) raises ``TypeError``: the C and the pure-Python psycopg
@@ -50,9 +51,10 @@ class CompileOperations(DatabaseOperations):
     or ``__str__`` of the subclass, or not), so no single rendering is the live one, and an
     overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays and ranges
     depend on the driver's adapters and raise ``TypeError`` too, at build time, and so does a
-    non-finite ``Decimal``: the C implementation renders ``-NaN`` as `` -NaN`` and ``NaN123`` as
-    ``NaN123`` while the pure-Python one renders every such value as ``'NaN'::numeric``, so there
-    is no single live rendering.
+    non-finite ``Decimal``: the two implementations render the NaN variants differently (the C one
+    ``-NaN`` as `` -NaN`` and ``NaN123`` as ``NaN123``, the pure-Python one every such value as
+    ``'NaN'::numeric``); ``±Infinity`` and plain NaN come out alike in both, and are rejected with
+    them to keep a single rule.
 
     ``sql`` is encoded first (a lone surrogate raises ``UnicodeEncodeError``, with or without
     ``params``). ``params`` must be exactly a list or a tuple (``None`` returns ``sql`` untouched).

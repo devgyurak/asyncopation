@@ -81,10 +81,14 @@ A-scoped, concretely:
    `connection` / `transaction`; the caller (engine) passes `not pinned`. The wrapper overrides
    `get_autocommit` to return the value; the only compile-time reader is `compiler.py:861`
    (`select_for_update`). `connect` / `ensure_connection` / `_cursor` / `cursor` / `chunked_cursor`
-   / `create_cursor` / `get_new_connection` raise. *Amended 2026-11-24 (#3, PR #45): `cursor`, `chunked_cursor`, `create_cursor` and `get_new_connection` are added to the raising set.* Server info is injected before first use
-   (`pg_version`; `mysql_server_data`). Concurrent tasks in different transaction modes
-   (`asyncio.gather`) and concurrent loop threads do not interfere. *Amended 2026-11-24 (#3, PR #45): the `compose_sql` override and its contract, the rest of this item.* The one Django code path found
-   that asks for a live connection while generating SQL, `ops.compose_sql` (reached by
+   / `create_cursor` / `get_new_connection` raise. *Amended 2026-11-24 (#3, PR #45): `cursor`,
+   `chunked_cursor`, `create_cursor` and `get_new_connection` are added to the raising set.* Server
+   info is injected before first use (`pg_version`; `mysql_server_data`). Concurrent tasks in
+   different transaction modes (`asyncio.gather`) and concurrent loop threads do not interfere.
+   *Amended 2026-11-24 (#3, PR #45): the `compose_sql` override and its contract, the rest of this
+   item.* One further Django code path
+   asks for a live connection while generating SQL (besides `get_autocommit` for
+   `select_for_update`, above), `ops.compose_sql` (reached by
    `contrib.postgres` `SearchHeadline` options through `mogrify` -> `connection.cursor()`), is
    overridden by the compile-only operations with a plain-Python renderer: no driver (psycopg stays
    confined to `drivers/`) and no dependence on server settings. It supports exactly the types that
@@ -92,8 +96,10 @@ A-scoped, concretely:
    `Decimal`, byte for byte like Django on a live connection (checked in the integration tests
    against both the C and the pure-Python psycopg implementation: `make test-compose-python`, run
    in CI). Every other type raises `TypeError` at build time: dates, `bytes`, arrays, ranges and
-   the like, non-finite `Decimal` (the C implementation renders `-NaN` as ` -NaN` and `NaN123` as
-   `NaN123`, the pure-Python one every such value as `'NaN'::numeric`: no single live rendering),
+   the like, non-finite `Decimal` (the two implementations render the NaN variants differently: the C one
+   `-NaN` as ` -NaN` and `NaN123` as `NaN123`, the pure-Python one every such value as
+   `'NaN'::numeric`; `±Infinity` and plain NaN are rendered alike by both, and are rejected
+   together to keep a single rule),
    and every *subclass* (`IntEnum`, `TextChoices`, Django `Choices`, ...), because the two psycopg
    implementations disagree about subclasses (they call `__int__`, `encode`, `__contains__`,
    `__str__`, ... of the subclass or not) and an overridden `__str__` would put arbitrary text into
@@ -144,7 +150,8 @@ A-scoped, concretely:
    variable (`e = eval`), `gc`, `zipimport`. Those are known limits (listed in the `archlint`
    docstring, which has the full list; star imports are ruff F403) that architecture review
    covers, as are `BaseWrapper` handed on through `getattr(<asyncopation module>, "BaseWrapper")`,
-   a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, and a
+   a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, an
+   `asyncopation` module object assigned to a variable, and a
    class built with `type(...)`. The guard itself requires a class based on `BaseWrapper` to list
    `CompileOnlyMixin` before it and rejects calling `BaseWrapper(...)`, and a unit test checks the
    MRO of every Asyncopation subclass (of any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an
@@ -238,7 +245,7 @@ reused unchanged.
   `_django.postgresql` pulls psycopg in through Django (drivers remain the only direct importers).
 
 ### Django internals this decision rests on
-*Amended 2026-11-24 (#3, PR #45): the table below is updated: the `_connections` row, the `asgiref.local` row, the `base.base` row (more methods pinned, `ensure_connection` not pinned), the `postgresql.base` row and the `compose_sql` row.*
+*Amended 2026-11-24 (#3, PR #45): the table below is updated: the `asgiref.local` row (recorded in the `_connections` reason), the `sql.compiler` row (planned consumer `_django/*`), the `base.base` row (more methods pinned, `ensure_connection` not pinned) and the new `postgresql.operations` (`compose_sql`) row.*
 
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
 (unless marked `ported = true`) and `[[attribute]]` entries never accessed in `src/`, so these enter
@@ -284,7 +291,8 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
   wrapper on the differential suite (the spike's 770-statement sweep); ledger symbols exist; asgiref
   per-context `Local` semantics pinned (swap invisible to siblings, parent and executor threads).
 - unit (`compile_scope`): restores when the previous wrapper was present, absent, on exception and
-  nested; no sync connect inside; wrapper `connect` / `ensure_connection` / `_cursor` raise;
+  nested (*Amended 2026-11-24 (#3, PR #45): except a scope exited from another Context inside a
+  running loop, Decision 1*); no sync connect inside; wrapper `connect` / `ensure_connection` / `_cursor` raise (*Amended 2026-11-24 (#3, PR #45): and `cursor`, `chunked_cursor`, `create_cursor`, `get_new_connection`*);
   `get_autocommit` answers from the scope argument.
 - concurrency: `asyncio.gather` with one task in `async_atomic` doing a `select_for_update` compile
   and one outside; cancellation around compile.

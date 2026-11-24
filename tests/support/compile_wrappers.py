@@ -65,28 +65,52 @@ def default_wrapper_packages() -> list[str]:
     return ["asyncopation.compile", "asyncopation._django"]
 
 
-def import_every_wrapper_module(packages: list[str] | None = None) -> None:
-    """Import every module of the packages (they register their wrapper classes). A module whose
-    driver library is missing (ImportError, ImproperlyConfigured) is skipped; any other error is
-    not hidden."""
+DRIVER_LIBRARIES = frozenset({"psycopg", "psycopg2", "MySQLdb"})
+
+
+def _missing_driver(exc: BaseException) -> bool:
+    """Whether an import failed only because a database driver library is not installed."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    cause = exc.__cause__ if isinstance(exc, ImproperlyConfigured) else exc
+    if not isinstance(cause, ModuleNotFoundError):  # e.g. `from psycopg import missing_name`
+        return False
+    return (cause.name or "").split(".")[0] in DRIVER_LIBRARIES
+
+
+def import_every_wrapper_module(packages: list[str] | None = None) -> list[str]:
+    """Import every module of the packages, sub-packages included (they register their wrapper
+    classes); returns the modules skipped because a database driver library is missing. Any
+    other import error is raised."""
     import importlib
     import pkgutil
 
     from django.core.exceptions import ImproperlyConfigured
 
+    skipped: list[str] = []
     for name in default_wrapper_packages() if packages is None else packages:
-        package = importlib.import_module(name)
-        for info in pkgutil.iter_modules(package.__path__, name + "."):
-            try:
+        package = importlib.import_module(name)  # a default package itself needs no driver
+        for info in pkgutil.walk_packages(package.__path__, name + "."):
+            try:  # walk_packages yields a sub-package before importing it: this import decides
                 importlib.import_module(info.name)
-            except (ImportError, ImproperlyConfigured):
-                continue
+            except (ImportError, ImproperlyConfigured) as exc:
+                if not _missing_driver(exc):
+                    raise
+                skipped.append(info.name)
+    return skipped
+
+
+def skipped_in_this_environment() -> list[str]:
+    """The modules of the default packages the scan skips here (none while no backend module
+    needs a driver this environment lacks)."""
+    return import_every_wrapper_module()
 
 
 def _write_scanned_package(directory: Any, name: str | None = None) -> str:
-    """A throwaway package (unique name) with wrapper classes of several Django backends and two
-    modules whose driver is missing. Its classes stay registered as `BaseDatabaseWrapper`
-    subclasses for the rest of the process; the production check ignores them (module prefix)."""
+    """A throwaway package (unique name) with wrapper classes of several Django backends, a
+    sub-package, two modules whose driver is missing. Its classes stay registered (until
+    garbage-collected) as `BaseDatabaseWrapper` subclasses; the production check ignores them
+    (module prefix)."""
     name = name or f"scanned_{uuid.uuid4().hex}"
     package = directory / name
     package.mkdir()
@@ -99,10 +123,36 @@ def _write_scanned_package(directory: Any, name: str | None = None) -> str:
         "class OnSqlite(Sqlite):\n    pass\n\n\n"
         "class Safe(CompileOnlyMixin, Sqlite):\n    pass\n"
     )
-    (package / "no_driver.py").write_text("raise ImportError('no driver')\n")
+    (package / "a_wrappers.py").write_text(
+        "from django.db.backends.base.base import BaseDatabaseWrapper\n"
+        "from django.db.backends.sqlite3.base import DatabaseWrapper as Sqlite\n"
+        "from asyncopation.compile.wrapper import CompileOnlyMixin\n\n\n"
+        "class Between(Sqlite, CompileOnlyMixin, BaseDatabaseWrapper):\n    pass\n"
+    )
+    (package / "sub").mkdir()
+    (package / "sub" / "__init__.py").write_text("")
+    (package / "sub" / "deep.py").write_text(
+        "from django.db.backends.base.base import BaseDatabaseWrapper\n\n\n"
+        "class Deep(BaseDatabaseWrapper):\n    pass\n"
+    )
+    for module, library in (
+        ("no_driver", "MySQLdb"),
+        ("no_psycopg", "psycopg"),
+        ("no_psycopg2", "psycopg2"),
+        ("no_dotted", "MySQLdb._mysql"),
+    ):
+        (package / f"{module}.py").write_text(
+            f"raise ModuleNotFoundError('no driver', name={library!r})\n"
+        )
+    (package / "driverless").mkdir()
+    (package / "driverless" / "__init__.py").write_text(
+        "raise ModuleNotFoundError('no driver', name='MySQLdb')\n"
+    )
     (package / "bad_config.py").write_text(
         "from django.core.exceptions import ImproperlyConfigured\n"
-        "raise ImproperlyConfigured('no driver')\n"
+        "try:\n    raise ModuleNotFoundError('no driver', name='MySQLdb')\n"
+        "except ModuleNotFoundError as exc:\n"
+        "    raise ImproperlyConfigured('Error loading MySQLdb') from exc\n"
     )
     return name
 
@@ -114,55 +164,89 @@ def _forget(name: str) -> None:
         del sys.modules[loaded]
 
 
-def scanned_package_report(directory: Any) -> tuple[list[str], list[str], list[str]]:
-    """Scan a throwaway package: (classes that can connect, classes found, error kinds raised)."""
+# (path in the throwaway package, source): modules that fail for a reason other than a missing
+# driver library, so scanning them must raise.
+FAILING_MODULES = [
+    ("crash.py", "raise RuntimeError('boom')\n"),
+    ("typo.py", "raise ImportError('typo', name='asyncopation.nothing')\n"),
+    ("nameless.py", "raise ImportError('boom')\n"),
+    ("missing_dep.py", "raise ModuleNotFoundError('x', name='asyncopation.nothing')\n"),
+    ("unnamed_missing.py", "raise ModuleNotFoundError('x')\n"),
+    ("wrong_symbol.py", "raise ImportError('cannot import name', name='psycopg')\n"),
+    (
+        "no_from.py",
+        "from django.core.exceptions import ImproperlyConfigured\n"
+        "try:\n    raise ModuleNotFoundError('x', name='MySQLdb')\n"
+        "except ModuleNotFoundError:\n    raise ImproperlyConfigured('implicit chain only')\n",
+    ),
+    ("broken/__init__.py", "raise ImportError('typo', name='asyncopation.nothing')\n"),
+]
+
+
+def scanned_package_report(
+    directory: Any,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Scan a throwaway package: (classes that can connect, classes found, modules skipped, error
+    kinds raised by modules that fail for another reason)."""
     import importlib
     import sys
 
     name = _write_scanned_package(directory)
     sys.path.insert(0, str(directory))
+    raised: list[str] = []
     try:
-        import_every_wrapper_module([name])
+        skipped = import_every_wrapper_module([name])
         reported = wrapper_classes_that_can_connect(name, scan=False)
         found = wrapper_classes_found(name, scan=False)
-        (directory / name / "crash.py").write_text("raise RuntimeError('boom')\n")
-        importlib.invalidate_caches()
-        try:
-            import_every_wrapper_module([name])
-        except RuntimeError:
-            raised = ["RuntimeError"]
-        else:
-            raised = []
+        for relative, body in FAILING_MODULES:
+            path = directory / name / relative
+            path.parent.mkdir(exist_ok=True)
+            path.write_text(body)
+            importlib.invalidate_caches()
+            try:
+                import_every_wrapper_module([name])
+            except Exception as exc:
+                raised.append(type(exc).__name__)
+            path.unlink()
+            _forget(name + "." + relative.removesuffix(".py").removesuffix("/__init__"))
     finally:
         sys.path.remove(str(directory))
         _forget(name)
-    strip = name + ".wrappers."
+    strip = name + "."
     return (
         [entry.removeprefix(strip) for entry in reported],
         sorted(entry.removeprefix(strip) for entry in found),
+        [entry.removeprefix(strip) for entry in skipped],
         raised,
     )
 
 
-def default_scan_report(directory: Any) -> tuple[list[str], list[str], list[str]]:
-    """The default scan covering two throwaway packages: (classes listed before any scan, classes
-    listed after it, throwaway modules left in `sys.modules` afterwards)."""
+def _short(entries: list[str], tag: str) -> list[str]:
+    return sorted(entry.replace(tag + "_", "", 1) for entry in entries)
+
+
+def default_scan_report(directory: Any, mode: str) -> tuple[list[str], list[str], list[str]]:
+    """The default scan covering two throwaway packages. `mode` picks the function that scans:
+    "connect" (`wrapper_classes_that_can_connect`) or "found" (`wrapper_classes_found`). Returns
+    (classes listed before any scan, classes listed by that function, throwaway modules left in
+    `sys.modules` afterwards)."""
     import sys
     from unittest import mock
 
     tag = f"scanned_{uuid.uuid4().hex}"
     names = [_write_scanned_package(directory, f"{tag}_{suffix}") for suffix in ("a", "b")]
     sys.path.insert(0, str(directory))
+    scan = wrapper_classes_that_can_connect if mode == "connect" else wrapper_classes_found
     try:
         with mock.patch(f"{__name__}.default_wrapper_packages", return_value=names):
             before = wrapper_classes_found(tag, scan=False)
-            after = wrapper_classes_found(tag)
+            listed = scan(tag)
     finally:
         sys.path.remove(str(directory))
         for name in names:
             _forget(name)
     left = [m for m in sys.modules if m.startswith(tag)]
-    return before, sorted(entry.replace(tag + "_", "") for entry in after), left
+    return before, _short(listed, tag), left
 
 
 def wrapper_classes_that_can_connect(
@@ -210,8 +294,8 @@ def _mixin_first(cls: type, mixin: type) -> bool:
 def throwaway_wrapper_report() -> list[str]:
     """What the MRO check reports for a few deliberately built classes.
 
-    The classes live in a module name unique to the call and stay registered as `BaseWrapper`
-    subclasses for the rest of the process; the production check ignores them (it only looks at
+    The classes live in a module name unique to the call and are registered as `BaseWrapper`
+    subclasses until garbage-collected; the production check ignores them (it only looks at
     `asyncopation.` modules).
     """
     from asyncopation._django.postgresql import BaseWrapper

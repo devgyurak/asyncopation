@@ -273,3 +273,55 @@ def test_the_bare_adapter_boundary_module_is_an_adapter_import_too():
     outcome = rule_outcome(source, DJANGO, "A104", "may only be used by asyncopation/drivers")
     # then
     assert outcome == (["A104"], True)
+
+
+GETATTR_CONN = (
+    'import asyncopation\n\ndef f():\n    return getattr(asyncopation, "_django").connections.x\n'
+)
+GETATTR_ADAPTER = (
+    'import asyncopation\n\ndef f():\n    return getattr(asyncopation._django, "postgresql_adapters")'
+    ".adapters_template\n"
+)
+GETATTR_ADAPTER_OUTSIDE = 'import asyncopation\n\ndef f():\n    return getattr(asyncopation, "_django").postgresql_adapters.x\n'
+
+
+@pytest.mark.parametrize(
+    ("source", "path", "code", "fragment", "codes", "flagged"),
+    [
+        P(GETATTR_CONN, DJANGO, "A102", "reachable only from compile/scope.py", ["A102"], True,
+          id="connections-in-the-django-package"),
+        P(GETATTR_ADAPTER, DJANGO, "A104", "may only be used by", ["A104"], True,
+          id="adapters-in-the-django-package"),
+        P(GETATTR_CONN, ENGINE, "A102", "reachable only from compile/scope.py", ["A102"], True,
+          id="connections-outside"),
+        P(GETATTR_ADAPTER_OUTSIDE, ENGINE, "A104", "may only be used by", ["A102", "A104"], True,
+          id="adapters-outside"),
+        P(GETATTR_CONN, "src/asyncopation/compile/scope.py", "A102", "reachable only from compile/scope.py",
+          ["A102"], False, id="connections-in-the-scope-module-is-no-boundary-hit"),
+        P(GETATTR_ADAPTER, "src/asyncopation/drivers/postgresql/x.py", "A104", "may only be used by",
+          ["A102"], False, id="adapters-in-the-driver-is-no-a104"),
+    ],
+)  # fmt: skip
+def test_constant_getattr_steps_reach_the_boundary_modules_like_attributes(
+    source, path, code, fragment, codes, flagged
+):
+    # when
+    outcome = rule_outcome(source, path, code, fragment)
+    # then
+    assert outcome == (codes, flagged)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        P('import asyncopation\n\ndef f():\n    return hasattr(asyncopation, "_django")\n',
+          id="hasattr"),
+        P('import asyncopation\n\ndef f():\n    return getattr(asyncopation, "_django")\n',
+          id="no-chain"),
+    ],
+)  # fmt: skip
+def test_the_package_object_alone_is_not_a_boundary_module_in_the_django_package(source):
+    # when
+    codes = distinct_codes(source, DJANGO)
+    # then
+    assert codes == []

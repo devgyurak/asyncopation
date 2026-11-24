@@ -20,7 +20,7 @@ Read before non-trivial work: `docs/design/plan.md` (plan and roadmap), `docs/ar
 | Fast gate | `make check` (ruff format check, ruff lint, ty, import-linter, guards, agents-check, unit tests) |
 | Format | `make fmt` (ruff format + ruff check --fix) |
 | Integration | `make test-int` (`ASYNCOPATION_DB=postgresql\|mysql\|mariadb`) |
-| Pure-Python psycopg | `make test-compose-python` (PostgreSQL; `compose_sql` live tests with `PSYCOPG_IMPL=python`, needs libpq) |
+| Pure-Python psycopg | `make test-compose-python` (PostgreSQL; `compose_sql` live and compile differential tests with `PSYCOPG_IMPL=python`; needs libpq and `make db-up`) |
 | E2E | `make test-e2e` |
 | Everything | `make check-all` |
 | Benchmarks | `make bench-micro`, `make bench` |

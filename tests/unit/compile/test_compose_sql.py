@@ -1,6 +1,7 @@
 """`CompileOperations.compose_sql`: plain-Python literal rendering, no connection (ADR-0008)."""
 
 import datetime
+import fractions
 import uuid
 
 import pytest
@@ -37,6 +38,7 @@ def test_compose_sql_rejects_what_it_cannot_render_exactly(alias, sql, params, e
         pytest.param(b"x", "no note", id="bytes"),
         pytest.param(datetime.date(2024, 1, 1), "no note", id="date"),
         pytest.param(uuid.UUID(int=1), "no note", id="uuid"),
+        pytest.param(fractions.Fraction(1, 2), "no note", id="fraction"),
         pytest.param(Number.THREE, "exact-type note", id="int-enum"),
         pytest.param(Money("1"), "exact-type note", id="decimal-subclass"),
         pytest.param(5, "not rejected", id="an-exact-int-is-not-rejected"),

@@ -362,21 +362,27 @@ class _Checker:
             )
         if node.attr in {"__dict__", "__getattribute__"} and _root(node) in self.roots:
             self.flag(node, f"`.{node.attr}` reaches Django's connection machinery")
-        if _dotted(node) == CONNECTIONS_TARGET and not (self.importer or self.exempt):
+        self._boundary_module(node)
+        if node.attr in SWAP_NAMES and not (self.importer or self.exempt):
+            self.flag(node, f"`.{node.attr}` is private to compile/scope.py (ADR-0008, Decision 6)")
+        if node.attr == "BaseWrapper" and not (self.in_compile or self.in_django):
+            self.flag(node, "Django's real PostgreSQL wrapper class is for compile/ only")
+
+    def _boundary_module(self, node: ast.Attribute | ast.Call) -> None:
+        """The module objects `_django.connections` / `_django.postgresql_adapters`, however named
+        (attribute chain or constant ``getattr`` steps on an ``asyncopation`` name)."""
+        path = _asyncopation_path(node, self.package_roots)
+        if path == CONNECTIONS_TARGET and not (self.importer or self.exempt):
             self.flag(
                 node, "`asyncopation._django.connections` is reachable only from compile/scope.py"
             )
-        if _dotted(node) == ADAPTER_TARGET and not self.in_pg_driver:
+        if path == ADAPTER_TARGET and not self.in_pg_driver:
             self.flag(
                 node,
                 "`asyncopation._django.postgresql_adapters` may only be used by "
                 "asyncopation/drivers/postgresql",
                 "A104",
             )
-        if node.attr in SWAP_NAMES and not (self.importer or self.exempt):
-            self.flag(node, f"`.{node.attr}` is private to compile/scope.py (ADR-0008, Decision 6)")
-        if node.attr == "BaseWrapper" and not (self.in_compile or self.in_django):
-            self.flag(node, "Django's real PostgreSQL wrapper class is for compile/ only")
 
     def _module_getattr_as_value(self, node: ast.Call) -> None:
         """``getattr(models, "base")`` is a Django module object just like ``models.base``."""
@@ -413,6 +419,7 @@ class _Checker:
                 self.flag(node, "`getattr` with a computed name on an `asyncopation` object")
             return
         name = node.args[1].value
+        self._boundary_module(node)
         if name == "_django" and _root(node.args[0]) in self.package_roots and not self.in_django:
             self.flag(
                 node,
@@ -717,12 +724,25 @@ def _root(node: ast.AST) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
-def _dotted(node: ast.AST) -> str:
+def _asyncopation_path(node: ast.AST, roots: frozenset[str]) -> str:
+    """``asyncopation.a.b`` for a chain of attributes and constant ``getattr`` steps whose root is
+    a name bound by ``import asyncopation``; ``""`` otherwise."""
     if isinstance(node, ast.Name):
-        return node.id
+        return "asyncopation" if node.id in roots else ""
     if isinstance(node, ast.Attribute):
-        return f"{_dotted(node.value)}.{node.attr}"
-    return ""
+        base, name = _asyncopation_path(node.value, roots), node.attr
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        base, name = _asyncopation_path(node.args[0], roots), node.args[1].value
+    else:
+        return ""
+    return f"{base}.{name}" if base else ""
 
 
 def _is_name(node: ast.AST, name: str) -> bool:

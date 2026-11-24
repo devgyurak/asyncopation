@@ -28,7 +28,52 @@ from bench.stats import summarize
 type Case = Callable[[], Awaitable[Any]]
 
 
-def build_cases(pk: int) -> dict[str, Case]:
+def compile_cases(pg_version: int | None, settings_dict: dict[str, Any] | None) -> dict[str, Case]:
+    """`compile_scope` enter/restore cost, and a scoped `as_sql()` against an unscoped one
+    (`get_compiler(connection=wrapper)`, which skips the `connections[...]` lookup).
+
+    PostgreSQL only (the MySQL composed wrapper arrives with #6); other backends report skipped.
+    """
+    from harness.catalog.models import Book
+
+    wrapper: Any = None
+    if pg_version is not None and settings_dict is not None:
+        from asyncopation.compile.postgresql import wrapper_for
+        from asyncopation.compile.server_info import PostgreSQLServerInfo
+
+        wrapper = wrapper_for("default", settings_dict, PostgreSQLServerInfo(pg_version))
+
+    def prepare() -> Any:
+        if wrapper is None:
+            raise NotImplementedError("compile-only wrapper exists for PostgreSQL only")
+        return wrapper
+
+    async def scope_enter_exit() -> Any:
+        from asyncopation.compile.scope import compile_scope
+
+        with compile_scope("default", prepare(), autocommit=True):
+            return None
+
+    async def scoped_as_sql() -> Any:
+        from asyncopation.compile.scope import compile_scope
+
+        with compile_scope("default", prepare(), autocommit=True):
+            return Book.objects.filter(published=True).query.get_compiler(using="default").as_sql()
+
+    async def unscoped_as_sql() -> Any:
+        wrapper = prepare()
+        return Book.objects.filter(published=True).query.get_compiler(connection=wrapper).as_sql()
+
+    return {
+        "asyncopation.compile_scope": scope_enter_exit,
+        "asyncopation.as_sql_scoped": scoped_as_sql,
+        "asyncopation.as_sql_unscoped": unscoped_as_sql,
+    }
+
+
+def build_cases(
+    pk: int, pg_version: int | None = None, settings_dict: dict[str, Any] | None = None
+) -> dict[str, Case]:
     from harness.catalog.models import Author, Book, Tag
 
     async def core_aget() -> Any:
@@ -62,6 +107,7 @@ def build_cases(pk: int) -> dict[str, Case]:
         "asyncopation.aget": aopt_aget,
         "asyncopation.gather3": aopt_gather3,
         "asyncopation.list20": aopt_list20,
+        **compile_cases(pg_version, settings_dict),
     }
 
 
@@ -81,6 +127,8 @@ async def measure(case: Case, iterations: int, warmup: int) -> dict[str, Any]:
 
 async def main_async(
     pk: int,
+    pg_version: int | None,
+    settings_dict: dict[str, Any] | None,
     iterations: int,
     warmup: int,
     only: set[str],
@@ -88,7 +136,7 @@ async def main_async(
     driver_seconds: float,
     driver_rounds: int,
 ) -> dict[str, Any]:
-    cases = build_cases(pk)
+    cases = build_cases(pk, pg_version, settings_dict)
     selected = {k: v for k, v in cases.items() if not only or k.split(".", 1)[1] in only}
     results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
     if driver is not None:
@@ -109,8 +157,9 @@ def main() -> None:
         "--only",
         default="",
         help=(
-            "comma separated case suffixes: aget,gather3,list20 or driver cases such as "
-            "select1.driver.t8 (the baselines of a selected driver case are added automatically)"
+            "comma separated case suffixes: aget,gather3,list20,compile_scope,as_sql_scoped,"
+            "as_sql_unscoped or driver cases such as select1.driver.t8 (the baselines of a "
+            "selected driver case are added automatically)"
         ),
     )
     parser.add_argument(
@@ -130,14 +179,26 @@ def main() -> None:
     from harness.catalog.models import Book
 
     pk = Book.objects.order_by("pk").values_list("pk", flat=True)[0]  # sync, before the loop starts
+    from django.db import connection
+
+    pg_version = connection.pg_version if connection.vendor == "postgresql" else None  # sync probe
     only = {s for s in args.only.split(",") if s}
-    unknown = sorted(only - {"aget", "gather3", "list20"} - driver_micro.known_suffixes())
+    known = {"aget", "gather3", "list20", "compile_scope", "as_sql_scoped", "as_sql_unscoped"}
+    unknown = sorted(only - known - driver_micro.known_suffixes())
     if unknown:
         parser.error(f"--only matches no case: {', '.join(unknown)}")
     driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
     results = asyncio.run(
         main_async(
-            pk, args.iterations, args.warmup, only, driver, args.driver_seconds, args.driver_rounds
+            pk,
+            pg_version,
+            connection.settings_dict,
+            args.iterations,
+            args.warmup,
+            only,
+            driver,
+            args.driver_seconds,
+            args.driver_rounds,
         )
     )
     payload = {

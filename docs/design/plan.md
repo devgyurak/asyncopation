@@ -274,6 +274,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 - [ ] `alist` working with `as_sql()` + psycopg `AsyncClientCursor`
 - [ ] Port `ModelIterable` logic (converters -> `Model.from_db`)
 - [x] Detect paths that open a sync connection during `as_sql()` (record where `SynchronousOnlyOperation` is raised) - spike results in ADR-0008 (#29, ADR-0008 Accepted)
+- [x] Compile-only `DatabaseWrapper` (PostgreSQL) + synchronous `compile_scope` swap (#3, ADR-0008); MySQL/MariaDB composed wrapper -> #6
 - [ ] Preload server info asynchronously -> inject into the compile-only connection
 - [ ] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, currently a strict xfail)
 - [ ] Reproduce the same flow on asyncmy

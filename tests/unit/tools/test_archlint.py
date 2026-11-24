@@ -91,7 +91,7 @@ def test_ledgered_internal_import_is_allowed():
         ("import django\n", EMPTY_LEDGER, ["A201", "A203"]),
         ("from django.db.models import sql\n", EMPTY_LEDGER, ["A201", "A203"]),
         ("from django.db.models import sql as s\n", SQL_QUERY_LEDGER, ["A201", "A203"]),
-        ("from django import db\n", EMPTY_LEDGER, []),
+        ("from django import db\n", EMPTY_LEDGER, ["A102"]),
         ("from django.db.models.query import QuerySet\n", EMPTY_LEDGER, ["A201", "A203"]),
         ("from django.db.models.sql import QUERY\n", SQL_QUERY_LEDGER, ["A201", "A203"]),
         ("from django.db.models import query\n", EMPTY_LEDGER, ["A201", "A203"]),

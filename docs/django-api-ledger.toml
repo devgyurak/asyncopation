@@ -53,11 +53,11 @@ modules = [
 ]
 
 # --------------------------------------------------------------------------- PostgreSQL driver (#2)
-# Reused (imported at runtime through _django.postgresql.adapters_template).
+# Reused (imported at runtime through _django.postgresql_adapters.adapters_template).
 [[internal]]
 module = "django.db.backends.postgresql.psycopg_any"
 names = ["get_adapters_template"]
-used_by = ["src/asyncopation/_django/postgresql.py", "src/asyncopation/drivers/postgresql/settings.py"]
+used_by = ["src/asyncopation/_django/postgresql_adapters.py", "src/asyncopation/drivers/postgresql/settings.py"]
 reason = "Adapters template (jsonb/inet as text, range dumper, tz-aware timestamptz loader) passed as the connection `context`, exactly like Django's get_connection_params"
 verified_against = "6.1.3"
 signatures = { get_adapters_template = "(use_tz, timezone)" }
@@ -123,3 +123,62 @@ used_by = [
 reason = "Ported: quote_name for savepoint ids (connection._quote; compared with Django in test_postgresql_ports.py::test_quote_matches_django_quote_name); max_name_length (the 63-character NAME limit in settings.build_config; covered by test_build_config.py, not compared with Django); compose_sql (SET ROLE literal via AsyncClientCursor.mogrify in driver._configure; no direct comparison test - only the integration test test_assume_role_option_matches_sync_backend exercises its effect)"
 verified_against = "6.1.3"
 ported = true
+
+# --- ADR-0008: compile-only wrapper and compile_scope ---------------------------------------
+
+[[internal]]
+module = "django.db.backends.postgresql.base"
+names = ["DatabaseWrapper"]
+used_by = ["src/asyncopation/_django/postgresql.py"]
+reason = """Base class of the compile-only PostgreSQL wrapper, re-exported to compile/postgresql.py (no I/O \
+in construction; server info injected into the instance `__dict__`). The wrapper redefines `chunked_cursor`, \
+`get_new_connection` and `create_cursor`, which `CompileOnlyMixin` overrides again; the \
+signatures are pinned as an alarm."""
+verified_against = "6.1.3"
+signatures = { "DatabaseWrapper.chunked_cursor" = "(self)", "DatabaseWrapper.get_new_connection" = "(self, conn_params)", "DatabaseWrapper.create_cursor" = "(self, name=None)" }
+
+[[internal]]
+module = "django.db.backends.postgresql.operations"
+names = ["DatabaseOperations"]
+used_by = ["src/asyncopation/_django/postgresql.py"]
+reason = """`CompileOperations` overrides `compose_sql`: Django's version calls `mogrify` -> \
+`connection.cursor()`, which `contrib.postgres` `SearchHeadline` options reach while the SQL is \
+generated (contrib/postgres/search.py, its only caller there). The override is plain Python, \
+with no driver and no server settings involved: it renders the exact types str / int / float / \
+bool / None and finite Decimal byte for byte like Django's output on a live connection (C and \
+pure-Python psycopg alike) and rejects every other type at build time: non-finite Decimal and \
+every subclass, since the two psycopg implementations disagree about subclasses and an overridden \
+__str__ would put arbitrary text into the SQL; a NUL character is a ValueError (live: DataError); \
+tests/integration compares both."""
+verified_against = "6.1.3"
+signatures = { "DatabaseOperations.compose_sql" = "(self, sql, params)" }
+
+[[internal]]
+module = "django.db.backends.base.base"
+names = ["BaseDatabaseWrapper"]
+used_by = ["src/asyncopation/_django/postgresql.py"]
+reason = """`CompileOnlyMixin` (compile/wrapper.py) overrides these methods to make the wrapper incapable of I/O \
+(SQLCompiler.as_sql reaches `get_autocommit` -> `ensure_connection` -> `connect` for \
+select_for_update); the signatures are pinned so a changed upstream signature fails the drift \
+test instead of silently diverging. (`ensure_connection` is not pinned: pytest-django's DB \
+blocker replaces it with `(*args, **kwargs)` during tests.)"""
+verified_against = "6.1.3"
+signatures = { "BaseDatabaseWrapper.get_autocommit" = "(self)", "BaseDatabaseWrapper.connect" = "(self)", "BaseDatabaseWrapper._cursor" = "(self, name=None)", "BaseDatabaseWrapper.cursor" = "(self)", "BaseDatabaseWrapper.chunked_cursor" = "(self)", "BaseDatabaseWrapper.get_new_connection" = "(self, conn_params)", "BaseDatabaseWrapper.create_cursor" = "(self, name=None)" }
+
+[[attribute]]
+owner = "django.utils.connection.BaseConnectionHandler"
+names = ["_connections"]
+used_by = ["src/asyncopation/_django/connections.py"]
+reason = """The handler's `Local(thread_critical=True)`; `getattr(connections._connections, \
+alias, default)` peeks the current context's wrapper without creating a real one. Its asgiref \
+3.13.0 per-context semantics (storage is a contextvar inside a running loop: a swap is invisible \
+to siblings, the parent and other threads) are what `compile_scope` relies on; \
+tests/unit/django_drift pins them (asgiref is not imported by src, so it has no [[internal]] row)."""
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.backends.postgresql.base.DatabaseWrapper"
+names = ["pg_version"]
+used_by = ["src/asyncopation/_django/postgresql.py"]
+reason = "A cached_property that connects on first read; server info is injected into the instance `__dict__` instead."
+verified_against = "6.1.3"

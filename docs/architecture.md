@@ -36,8 +36,8 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | 3 | `asyncopation.transaction` | `async_atomic`, savepoints, async `on_commit` | - |
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
 | 1 | `asyncopation.drivers` (internal, experimental) | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
-| 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
-| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
+| 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` (`CompileOnlyMixin` + per-backend composition such as `compile.postgresql`, imported lazily; frozen `ServerInfo`) and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
+| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
 ## Evaluation pipeline
 
@@ -72,7 +72,8 @@ types; `drivers/errors.py` ports Django's `DatabaseErrorWrapper` mapping. A driv
 behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contract.md)):
 
 - **PostgreSQL** (`drivers/postgresql`): `psycopg_pool.AsyncConnectionPool` created `open=False` and
-  opened in `open()`; every physical connection gets Django's adapters template, `client_encoding`,
+  opened in `open()`; every physical connection gets Django's adapters template (via
+  `_django/postgresql_adapters.py`), `client_encoding`,
   isolation level, `TimeZone` and `assume_role`; rows are tuples. Cursor selection mirrors Django:
   by default `AsyncClientCursor` and, for streams, `ClientCursorMixin` + `AsyncServerCursor`; with
   `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named

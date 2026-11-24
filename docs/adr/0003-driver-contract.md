@@ -117,7 +117,17 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 ## Consequences
 + `engine`/`query` stay backend-agnostic; a new backend is one driver module.
 - Drivers must track Django's connection setup; every non-public helper they reuse
-(`get_adapters_template`, server-side cursor classes) is ledgered and drift-tested.
+(`get_adapters_template`, server-side cursor classes) is ledgered and drift-tested. The psycopg
+  names Django's modules re-export (`psycopg_any`: `adapt`, `sql`, `ClientCursor`, `errors`, `Jsonb`,
+  ranges, ...; `postgresql.base.Database`, ...) are driver API and may be used only in `drivers/`
+  (guard A104, table in `tools/guards/reexports.py`, pinned against the installed Django). Django's
+  own adapter helpers in those modules (`get_adapters_template`, `register_tzloader`) are imported
+  by one `_django` boundary module, `_django/postgresql_adapters.py` (the psycopg driver's
+  `adapters_template`), which only `drivers/postgresql` may import (guard A104); Django's `mogrify`
+  (it renders through a cursor) is used nowhere; a driver cursor's own `.mogrify` is driver API.
+  Drivers do not export psycopg objects under public names of their own
+  (`from asyncopation.drivers.postgresql import sql`): a convention enforced by review, the guards
+  do not follow that route.
 - Exception mapping tables need maintenance when drivers add exception classes.
 
 ## Validation

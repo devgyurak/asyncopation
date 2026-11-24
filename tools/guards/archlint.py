@@ -3,10 +3,22 @@
 Complements import-linter (layering, see pyproject.toml) with rules import-linter cannot express.
 
 Codes
-    A101  banned module import (sync bridges, threads, sync drivers, sync transaction API)
-    A102  importing Django's thread-local connection handlers or sync transaction API
-    A103  banned blocking / loop-management call
-    A104  driver library imported outside ``asyncopation.drivers``
+    A101  banned module import (sync bridges, threads, sync drivers, sync transaction API,
+          dynamic-import helpers: ``importlib`` / ``importlib.util`` / ``importlib.machinery`` /
+          ``importlib.abc`` / ``pkgutil`` / ``runpy`` / ``pydoc`` / ``builtins``)
+    A102  Django's thread-local connection handlers or sync transaction API, however reached;
+          the single exception and the importer restriction are described in ``connlint``
+    A103  banned blocking / loop-management call, ``__import__`` / ``eval`` / ``exec`` /
+          ``compile``, ``__builtins__`` and the introspection attributes ``__globals__`` /
+          ``__closure__`` / ``__wrapped__`` / ``__self__`` / ``__import__`` / ``__builtins__``
+    A104  driver library imported outside ``asyncopation.drivers``, including the psycopg names
+          Django's modules re-export (table in ``reexports``: ``psycopg_any``, ``postgresql.base``
+          ``Database`` / ``sql`` / ``adapters``, ...), whether imported (``from M import n``) or
+          reached as an attribute (``M.n``, ``getattr(M, "n")``) - one ``reexports.verdict`` rule -
+          and the ``.Database`` / ``.psycopg`` / ... attributes of any object; Django's adapter
+          helpers only via ``_django/postgresql_adapters.py`` (importable only by
+          ``drivers/postgresql``); ``mogrify`` of a Django module nowhere, a driver cursor's own
+          ``.mogrify`` only in ``drivers/``
     A105  async code inside the compile-only layer
     A201  Django import not covered by docs/django-api-ledger.toml
     A202  stale ledger entry (full scans only): an [[internal]] item (not marked ``ported``)
@@ -20,8 +32,23 @@ register them as ledger [[attribute]] entries; the drift test protects them and 
 catches the unregistered ones. The attribute staleness check is best-effort: it matches the
 attribute name (or a string constant, for ``getattr``) anywhere in src, regardless of owner.
 ``from M import n`` counts as an import of ``M.n`` when that is a Django submodule.
-Known limits: dynamic imports (``import_module("django...")``) and ``_private`` names taken from
-a public module are not detected by A203.
+Threat model: the guards stop code written by accident - ordinary imports, attribute access,
+``getattr`` with a constant name, routes through Django or ``asyncopation`` public names - not
+deliberate evasion (ADR-0008, Decision 6). Known limits, covered by architecture review:
+introspection and dunder walks (``__bases__`` / ``__mro__`` / ``__subclasses__`` / ``__loader__`` /
+``__spec__``, ``__dict__`` / ``vars()`` of a module, ``getattr(x, "__globals__")``,
+``operator.attrgetter``, ``object.__getattribute__``, ``inspect``), ``sys.modules`` and
+``from sys import modules``, ``gc`` / ``zipimport``, strings assembled at run time, calling a
+guarded function through a variable (``e = eval``), ``super(CompileOnlyMixin, w).cursor()`` and
+``BaseWrapper.cursor(w)`` inside ``compile/``, a connection reached through a non-Django name
+(``qs.query.get_compiler().connection.cursor()``; Django's async guards stop it at runtime),
+``_private`` names taken from a public module (A203), ``BaseWrapper`` handed on through
+``getattr(<asyncopation module>, "BaseWrapper")``, a star import, a call argument, ``return`` /
+``yield`` or a lambda body inside ``compile/`` / ``_django/``, psycopg objects that an
+``asyncopation.drivers`` module re-exports under a public name (``from
+asyncopation.drivers.postgresql import sql``; ADR-0003: drivers do not do that). Django-name
+tracking in ``connlint`` is per module, not per scope, so a parameter that shadows a Django name
+(``def f(models)``) is treated as the Django name.
 """
 
 from __future__ import annotations
@@ -34,6 +61,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from tools.guards import connlint, reexports
 from tools.guards.core import ROOT, Violation, parse
 
 LEDGER_PATH = "docs/django-api-ledger.toml"
@@ -47,14 +75,34 @@ BANNED_MODULES = {
     "MySQLdb": "sync driver",
     "pymysql": "sync driver",
     "django.db.transaction": "sync transaction API - use asyncopation.transaction",
+    "pkgutil": "dynamic imports (resolve_name) bypass the import guards",
+    "runpy": "dynamic imports bypass the import guards",
+    "pydoc": "pydoc.locate imports by name and bypasses the import guards",
+    "builtins": "reaching __import__ through builtins bypasses the import guards",
 }
-BANNED_DJANGO_DB_NAMES = {"connection", "connections", "transaction", "router"}
+# `importlib` itself and its code-loading submodules; `importlib.metadata` / `.resources` are fine.
+BANNED_IMPORTLIB = {"importlib", "importlib.util", "importlib.machinery", "importlib.abc"}
+IMPORTLIB_ALLOWED_NAMES = {"metadata", "resources"}
 BANNED_CALLS = {
     "time.sleep": "blocks the event loop",
     "asyncio.run": "the library never owns the event loop",
     "asyncio.get_event_loop": "use asyncio.get_running_loop()",
     "asyncio.new_event_loop": "the library never owns the event loop",
+    "__import__": "dynamic imports bypass the import guards - use import statements",
+    "eval": "evaluating strings bypasses the import guards",
+    "exec": "executing strings bypasses the import guards",
+    "compile": "compiling strings bypasses the import guards",
 }
+# Introspection that reaches module globals / builtins from any function or class.
+BANNED_ATTRIBUTES = {
+    "__globals__",
+    "__closure__",
+    "__wrapped__",
+    "__self__",
+    "__import__",
+    "__builtins__",
+}
+
 BANNED_METHODS = {"run_until_complete": "the library never drives the event loop"}
 DRIVER_LIBS = ("psycopg", "psycopg_pool", "asyncmy")
 _ASYNC_NODES = (ast.AsyncFunctionDef, ast.Await, ast.AsyncWith, ast.AsyncFor)
@@ -232,7 +280,7 @@ def django_imports(tree: ast.Module) -> list[tuple[int, str, str]]:
 
 def _resolve_from_import(line: int, module: str, name: str) -> tuple[int, str, str]:
     """``from M import n`` where ``M.n`` is a Django submodule is an import of ``M.n``."""
-    banned_db_name = module == "django.db" and name in BANNED_DJANGO_DB_NAMES  # A102 reports these
+    banned_db_name = module == "django.db" and name in connlint.BANNED_NAMES  # A102 reports these
     if not banned_db_name and _is_django_submodule(module, name):
         return (line, f"{module}.{name}", "*")
     return (line, module, name)
@@ -271,6 +319,8 @@ def check(path: str, source: str, ledger: Ledger | None = None) -> list[Violatio
     in_drivers = PurePosixPath(path).parts[2:3] == ("drivers",)
     in_compile = PurePosixPath(path).parts[2:3] == ("compile",)
     in_django = _in_django_package(path)
+    out += connlint.check(path, tree, _is_django_submodule)
+    module_paths = connlint.module_paths(tree, _is_django_submodule)
 
     for node in ast.walk(tree):
         for line, module, names in _imports(node):
@@ -280,14 +330,14 @@ def check(path: str, source: str, ledger: Ledger | None = None) -> list[Violatio
                         path, line, "A101", f"`{module}` is banned in src: {BANNED_MODULES[hit]}"
                     )
                 )
-            if module == "django.db" and (bad := BANNED_DJANGO_DB_NAMES & set(names)):
+            if _banned_importlib(module, names):
                 out.append(
                     Violation(
-                        path, line, "A102",
-                        f"`from django.db import {', '.join(sorted(bad))}` - Django's sync "
-                        "connection/transaction machinery must not be used; go through asyncopation.connection",
+                        path, line, "A101",
+                        f"`{module}` is banned in src: dynamic imports bypass the import guards",
                     )
                 )  # fmt: skip
+            out += _driver_import(path, line, module, names, in_drivers, node)
             if not in_drivers and module.split(".")[0] in DRIVER_LIBS:
                 out.append(
                     Violation(
@@ -297,6 +347,35 @@ def check(path: str, source: str, ledger: Ledger | None = None) -> list[Violatio
                         f"`{module}` may only be imported in asyncopation/drivers/",
                     )
                 )
+        if isinstance(node, ast.Import):
+            out += [
+                Violation(
+                    path,
+                    node.lineno,
+                    "A101",
+                    f"`import {a.name}` also binds `importlib`; use `from importlib import "
+                    f"{a.name.split('.')[-1]}`",
+                )
+                for a in node.names
+                if a.name in ("importlib.metadata", "importlib.resources") and not a.asname
+            ]
+        out += _driver_attribute(path, node, module_paths, in_drivers)
+        if isinstance(node, ast.Attribute) and node.attr in BANNED_ATTRIBUTES:
+            out.append(
+                Violation(
+                    path,
+                    node.lineno,
+                    "A103",
+                    f"`.{node.attr}` reaches module globals / builtins and bypasses the import "
+                    "guards",
+                )
+            )
+        if isinstance(node, ast.Name) and node.id == "__builtins__":
+            out.append(
+                Violation(
+                    path, node.lineno, "A103", "`__builtins__` reaches `__import__` dynamically"
+                )
+            )
         if isinstance(node, ast.Call):
             name = _dotted(node.func)
             if name in BANNED_CALLS:
@@ -380,6 +459,89 @@ def _imports(node: ast.AST) -> list[tuple[int, str, list[str]]]:
     if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
         return [(node.lineno, node.module, [a.name for a in node.names])]
     return []
+
+
+def _driver_import(
+    path: str, line: int, module: str, names: list[str], in_drivers: bool, node: ast.AST
+) -> list[Violation]:
+    """A104 for ``import M`` / ``from M import n``: the (module, name) verdict of ``reexports``."""
+    if isinstance(node, ast.Import):  # only the psycopg_any module itself is a driver name
+        names = ["*"] if module.startswith(reexports.PSYCOPG_ANY) else []
+    return [
+        v
+        for name in names
+        if (v := _driver_violation(path, line, module, name, in_drivers, attribute=False))
+    ]
+
+
+def _driver_attribute(
+    path: str, node: ast.AST, module_paths: dict[str, str], in_drivers: bool
+) -> list[Violation]:
+    """A104 for ``M.n`` and ``getattr(M, "n")``: the same verdict as the import form."""
+    getattr_name = _const_getattr_name(node)
+    if isinstance(node, ast.Attribute):
+        base, name = node.value, node.attr
+    elif isinstance(node, ast.Call) and getattr_name is not None:
+        base, name = node.args[0], getattr_name
+    else:
+        return []
+    module = connlint.module_path_of(base, module_paths, _is_django_submodule) or ""
+    found = _driver_violation(
+        path, getattr(node, "lineno", 1), module, name, in_drivers, attribute=True
+    )
+    return [found] if found else []
+
+
+def _driver_violation(
+    path: str, line: int, module: str, name: str, in_drivers: bool, *, attribute: bool
+) -> Violation | None:
+    kind = reexports.verdict(module, name, attribute=attribute)
+    if kind == reexports.EVERYWHERE:
+        message = (
+            f"`{name}` of a Django module renders through a cursor (I/O); "
+            "it is forbidden everywhere"
+        )
+    elif kind == reexports.DRIVER and name in reexports.FORBIDDEN_EVERYWHERE and not in_drivers:
+        message = (
+            f"`.{name}` is a driver cursor method; it may only be used in asyncopation/drivers/"
+        )
+    elif kind == reexports.DRIVER and not in_drivers:
+        message = (
+            f"`.{name}` reaches the psycopg driver (the psycopg module itself or a name Django "
+            "re-exports from it); it may only be used in asyncopation/drivers/"
+            if attribute
+            else f"`{module}` re-exports the psycopg driver ({name}); it may only be used in "
+            "asyncopation/drivers/"
+        )
+    elif kind == reexports.HELPER and path != reexports.ADAPTER_BOUNDARY:
+        message = (
+            f"`{name}` may only be imported by {reexports.ADAPTER_BOUNDARY} "
+            "(drivers use it from there)"
+        )
+    else:
+        return None
+    return Violation(path, line, "A104", message)
+
+
+def _const_getattr_name(node: ast.AST) -> str | None:
+    """``name`` in ``getattr(x, "name"[, default])``, else ``None``."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and isinstance(node.args[1].value, str)
+    ):
+        return node.args[1].value
+    return None
+
+
+def _banned_importlib(module: str, names: list[str]) -> bool:
+    if module in BANNED_IMPORTLIB:
+        # `from importlib import metadata` is fine; `import importlib` / `import_module` are not
+        return module != "importlib" or not names or not set(names) <= IMPORTLIB_ALLOWED_NAMES
+    return False
 
 
 def _banned_module(module: str) -> str | None:

@@ -11,7 +11,9 @@ uv run python -m bench.micro --iterations 2000 --only aget
 ```
 Measures per-call latency of core async vs Asyncopation for single lookups, gathered lookups
 and list evaluation against the seeded DB. Writes `bench/results/micro-<ts>.json`.
-Asyncopation cases are reported as `skipped` until the API exists.
+Asyncopation cases are reported as `skipped` until the API exists. Compile cases
+(`compile_scope`, `as_sql_scoped`, `as_sql_unscoped`; PostgreSQL only) measure the cost of the
+synchronous `compile_scope` swap and need no database round trip.
 
 ### Driver cases
 `bench/micro.py` also runs PostgreSQL driver cases (implementation in `bench/driver_micro.py`)

@@ -60,7 +60,12 @@ A-scoped, concretely:
    entry when there was none) in `finally`; scopes nest as a stack (`get_compiler` inside
    `as_sql`). Nothing inside a scope may `await`, so no other task can observe the swap, and a
    cancellation cannot land inside it. It is entered per synchronous prepare phase, never for the
-   lifetime of a loop thread or task.
+   lifetime of a loop thread or task. A scope must be exited in the `contextvars` Context that
+   entered it: inside a running loop, exiting from another Context (a generator handed to
+   another task) would overwrite that Context's own swap and autocommit, so it is detected, the
+   entry is left untouched and `ScopeContextError` is raised (an exception from the body wins,
+   except a `GeneratorExit`: the generator closed from another Context); without a running loop
+   (plain threads) the previous entry is restored.
 2. **Contract: every Django call that reads `connections[...]` must run inside a scope.** That is
    the whole prepare phase of each core step (building the compiler with
    `get_compiler(using=alias)`, `as_sql`, and ported helpers such as the `bulk_create` option
@@ -69,13 +74,34 @@ A-scoped, concretely:
    (`results_iter` / converters) uses the connection the compiler was built with and needs no
    scope; the sweep could not confirm this without rows, so #3 verifies it with the differential
    suite's "zero sync connections" assertion.
-3. The wrapper's `autocommit` state is a scope argument, set on the wrapper at entry (safe because
-   nothing awaits inside); `compile` does not import `connection` / `transaction`, the caller
-   (engine) passes `not pinned`. The wrapper overrides `get_autocommit` to return it; the only
-   compile-time reader is `compiler.py:861` (`select_for_update`). `connect` / `ensure_connection` /
-   `_cursor` raise. Server info is injected before first use (`pg_version`; `mysql_server_data`).
-   A single wrapper per alias is shared; because state is set at scope entry, concurrent tasks in
-   different transaction modes (`asyncio.gather`) do not interfere.
+3. The wrapper's `autocommit` state is a scope argument, held in a `ContextVar` that the scope
+   sets at entry and restores on exit; it is not an attribute of the wrapper, because a single
+   wrapper per alias is shared across tasks *and threads* (amended in #3 after a four-thread
+   experiment showed an instance attribute is read across threads). `compile` does not import
+   `connection` / `transaction`; the caller (engine) passes `not pinned`. The wrapper overrides
+   `get_autocommit` to return the value; the only compile-time reader is `compiler.py:861`
+   (`select_for_update`). `connect` / `ensure_connection` / `_cursor` / `cursor` / `chunked_cursor`
+   / `create_cursor` / `get_new_connection` raise. Server info is injected before first use
+   (`pg_version`; `mysql_server_data`). Concurrent tasks in different transaction modes
+   (`asyncio.gather`) and concurrent loop threads do not interfere. The one Django code path found
+   that asks for a live connection while generating SQL, `ops.compose_sql` (reached by
+   `contrib.postgres` `SearchHeadline` options through `mogrify` -> `connection.cursor()`), is
+   overridden by the compile-only operations with a plain-Python renderer: no driver (psycopg stays
+   confined to `drivers/`) and no dependence on server settings. It supports exactly the types that
+   caller passes: the *exact* built-in types `str`, `int`, `float`, `bool`, `None` and finite
+   `Decimal`, byte for byte like Django on a live connection (checked in the integration tests
+   against both the C and the pure-Python psycopg implementation). Every other type raises
+   `TypeError` at build time: non-finite `Decimal`, dates, `bytes`, arrays, ranges and the like,
+   and every *subclass* (`IntEnum`, `TextChoices`, Django `Choices`, ...), because the two psycopg
+   implementations disagree about subclasses (they call `__int__`, `encode`, `__contains__`,
+   `__str__`, ... of the subclass or not) and an overridden `__str__` would put arbitrary text into
+   the SQL. `params` must be exactly a `list` or `tuple`. For the exact types the rendering is
+   the live one; the errors are not always: a NUL character in a string is a `ValueError` (live:
+   psycopg's `DataError`), a lone surrogate in `sql` or a value a `UnicodeEncodeError` like live
+   (a string with both reports the surrogate first, as the C implementation does; the pure-Python
+   one reports the NUL, so its exception class differs from ours), wrong counts and unsupported
+   placeholders are `ValueError` (live: `ProgrammingError`, and `%b` / `%t` render live).
+   Placeholder shapes and the parameter count are checked before any value is rendered.
 4. I/O-bearing Django steps are ported as ADR-0007 cores, not reached through the wrapper:
    `Query.get_aggregation` (compile outer query, `Execute`, convert), `QuerySet.exists` /
    `has_results`, and `SQLUpdateCompiler.pre_sql_setup` + `execute_sql` related updates (Phase 5).
@@ -96,9 +122,31 @@ A-scoped, concretely:
    `connections._connections` (which avoids creating a real wrapper per task context just to
    remember it). Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
    `ensure_connection`, `connect`, `django.db.transaction`, and any other use of a sync
-   connection. `compile.scope` calls the module. This narrows the issue's "`compile` module"
+   connection. `compile.scope` calls the module, through the single context manager
+   `swapped(alias, wrapper)` that the module exposes (it yields nothing, so the previous wrapper
+   is never handed out by any name the guard lets other code use); the guard lets only
+   `compile/scope.py` import it, and also rejects dynamic imports (`importlib`, `builtins`,
+   `__import__`). This narrows the issue's "`compile` module"
    wording to the Django boundary module and to these operations. The guard implementation is
    done in #3, not in this ADR.
+
+   **Threat model of the guards (A101-A104).** They stop the code a contributor can write by
+   accident: ordinary imports, attribute access, `getattr` with a constant name, and every route
+   through Django or `asyncopation` *public* names (re-exports such as
+   `django.db.models.base.connections`, `ConnectionHandler`, `psycopg_any`, `Database`,
+   `BaseWrapper` aliases). They do not stop deliberate evasion: introspection and dunder walks
+   (`__bases__`, `__mro__`, `__subclasses__`, `__loader__`, `__spec__`, `__dict__` / `vars()` of a
+   module), `inspect`, `sys.modules`, strings assembled at run time, calling a function through a
+   variable (`e = eval`), `gc`, `zipimport`. Those are known limits (listed in the `archlint`
+   docstring, which has the full list; star imports are ruff F403) that architecture review
+   covers, as are `BaseWrapper` handed on through `getattr(<asyncopation module>, "BaseWrapper")`,
+   a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, and a
+   class built with `type(...)`. The guard itself requires a class based on `BaseWrapper` to list
+   `CompileOnlyMixin` before it and rejects calling `BaseWrapper(...)`, and a unit test checks the
+   MRO of every Asyncopation subclass at run time. Also known: psycopg objects that an
+   `asyncopation.drivers` module re-exports under a public name
+   (`from asyncopation.drivers.postgresql import sql`): ADR-0003 forbids that as a convention
+   that review enforces, not the guards.
 7. **Amendments applied with this acceptance:** AGENTS.md non-negotiable 2, `architecture.md`
    invariant 2 and `.agents/rules/architecture.md` / `async-correctness.md` gain the
    `compile_scope` exception (the synchronous swap in `_django.connections`; no `await` inside it);
@@ -194,13 +242,14 @@ in the PR that first uses them (#3 / #6 / Phase 5):
 | Module | Names | Planned consumer | Why |
 |---|---|---|---|
 | `django.utils.connection` | `BaseConnectionHandler._connections` (an `[[attribute]]` entry) | `_django/connections.py` | peek at the context's wrapper without creating one |
-| `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on (drift test) |
+| `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on; not imported by `src`, so it is recorded in the `reason` of the `_connections` `[[attribute]]` row and pinned by `tests/unit/django_drift` |
 | `django.db.models.sql.query` | `Query.get_aggregation`, `get_count`, `get_compiler`, `has_results`, `exists` | `_django/aggregation.py` | `acount()` / `aexists()` ports |
-| `django.db.models.sql.compiler` | `SQLAggregateCompiler.as_sql`, `SQLCompiler.get_combinator_sql`, `get_qualify_sql`, `as_sql`, `SQLUpdateCompiler.pre_sql_setup`, `execute_sql` | `compile/scope.py`, `_django/update.py` | re-resolution, `get_autocommit` in `as_sql`, I/O in `pre_sql_setup` |
-| `django.db.backends.base.base` | `BaseDatabaseWrapper.get_autocommit`, `ensure_connection` | `compile/wrapper.py` | overridden in the compile-only wrapper |
+| `django.db.models.sql.compiler` | `SQLAggregateCompiler.as_sql`, `SQLCompiler.get_combinator_sql`, `get_qualify_sql`, `as_sql`, `SQLUpdateCompiler.pre_sql_setup`, `execute_sql` | `_django/*` (`compile/` cannot import private Django modules), `_django/update.py` | re-resolution, `get_autocommit` in `as_sql`, I/O in `pre_sql_setup` |
+| `django.db.backends.base.base` | `BaseDatabaseWrapper.get_autocommit`, `connect`, `_cursor`, `cursor`, `chunked_cursor`, `get_new_connection`, `create_cursor` (signatures pinned; `ensure_connection` is not, because pytest-django replaces it during tests) | `_django/postgresql.py` (overridden by `compile/wrapper.py`) | overridden in the compile-only wrapper |
 | `django.db.backends.mysql.base` | `DatabaseWrapper._data_types`, `operators`, `pattern_esc`, `pattern_ops`, `isolation_levels`, `mysql_server_data` | `_django/mysql.py` | ported, not imported (it imports MySQLdb): `ported = true`, the drift test reads the source |
 | `django.db.backends.mysql.{features,operations,compiler}` | `DatabaseFeatures`, `DatabaseOperations`, compiler classes | `_django/mysql.py` | composed into the wrapper; none imports MySQLdb |
 | `django.db.backends.postgresql.base` | `DatabaseWrapper.pg_version` (an `[[attribute]]` entry) | `_django/postgresql.py` | injected into `__dict__` |
+| `django.db.backends.postgresql.operations` | `DatabaseOperations.compose_sql` | `_django/postgresql.py` | driver-free, connection-less `compose_sql` for `SearchHeadline` options |
 
 ### Deviations from the working hypothesis
 1. `connections` is per async context inside a loop, not per loop thread (above).

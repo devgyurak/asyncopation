@@ -1,0 +1,35 @@
+---
+name: differential-testing
+description: Sync-vs-async differential testing harness - snapshots, the differential fixture, Hypothesis QuerySet strategies and how to extend them for new QuerySet features. Use when adding read APIs or debugging result mismatches.
+---
+# Differential testing
+
+The correctness oracle is Django's own sync ORM: the same QuerySet evaluated sync and through
+Asyncopation must give identical snapshots on every backend.
+
+## Pieces (tests/support/)
+- `snapshot.py` - `snapshot(obj)` turns a model instance into a hashable tuple
+  `(app_label.Model, (attname, type_name, value)...)`; `snapshot_rows(rows)` keeps order.
+  Types are part of the snapshot on purpose: drivers differ (Decimal vs float, naive vs aware
+  datetime, `memoryview` vs `bytes`, JSON decoding).
+- `differential.py` - `Outcome(rows, error)` and `run_differential(build, evaluator)`.
+  `build` is a zero-arg callable returning a **fresh** QuerySet (never share a QuerySet between
+  the two sides: result caches would leak). Exceptions are captured by type, so
+  `DoesNotExist` on one side and a row on the other is a mismatch.
+- `evaluators.py` - `asyncopation_evaluator` (the subject) and `reference_evaluator`
+  (Django core async API; used for the harness self-check).
+- `strategies.py` - Hypothesis strategies producing `QuerySetSpec`s (filters, excludes,
+  ordering, slicing, select_related, values/values_list) and `build_queryset(spec)`.
+
+## Adding coverage for a new QuerySet feature
+1. Extend `QuerySetSpec` + `queryset_specs()` with the new dimension (keep generation
+   deterministic and bounded: small lists, fields from the catalog models only).
+2. Teach `build_queryset` to apply it.
+3. Add targeted example-based tests for edge cases Hypothesis is unlikely to hit.
+4. Run `uv run pytest tests/integration -k differential` on all three backends.
+
+## Debugging a mismatch
+- Re-run with `--hypothesis-seed=<seed>` from the failure output; the shrunk spec is printed.
+- `str(build().query)` shows the SQL Django generates; compare with the captured async SQL.
+- Type-only mismatch -> driver conversion issue: check `get_converters` and the driver's
+  type adapters before touching query code.

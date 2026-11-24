@@ -1,0 +1,27 @@
+# Django API ledger
+#
+# Every Django import under src/ must be covered here (enforced by tools/guards, code A201).
+#   [public]     modules we treat as stable public API - no entry needed per symbol.
+#   [[internal]] anything else: private helpers, internal modules, ported code we depend on.
+#                These are what break when Django changes; the CI "django-main canary" job and
+#                the `verified_against` field tell us when to re-check them.
+#
+# Entry template:
+#   [[internal]]
+#   module = "django.db.models.query"
+#   names = ["ModelIterable", "RelatedPopulator"]
+#   used_by = ["src/asyncopation/query/iterables.py"]
+#   reason = "Instance construction logic ported from ModelIterable.__iter__"
+#   verified_against = "6.1.3"
+
+[public]
+modules = [
+    "django",
+    "django.apps",
+    "django.conf",
+    "django.core.exceptions",
+    "django.db",
+    "django.db.models",
+    "django.dispatch",
+    "django.utils.functional",
+]

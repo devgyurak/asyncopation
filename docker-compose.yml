@@ -1,0 +1,68 @@
+# Databases for tests, e2e and benchmarks. Data lives on tmpfs, so a restart wipes it.
+#   make db-up                    # postgres + mysql + mariadb
+#   make db-up SERVICES=postgres  # just one
+# Host ports use the 5xxxx range to avoid clashing with locally installed databases.
+name: asyncopation
+
+x-healthcheck: &healthcheck
+  interval: 2s
+  timeout: 3s
+  retries: 30
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: asyncopation
+      POSTGRES_PASSWORD: asyncopation
+      POSTGRES_DB: asyncopation
+    command: >
+      postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+               -c max_connections=500 -c shared_buffers=256MB
+    ports: ["56432:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD-SHELL", "pg_isready -U asyncopation -d asyncopation"]
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: asyncopation
+      MYSQL_USER: asyncopation
+      MYSQL_PASSWORD: asyncopation
+      MYSQL_DATABASE: asyncopation
+    command: >
+      --max-connections=500 --innodb-flush-log-at-trx-commit=0 --skip-log-bin
+      --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
+    ports: ["53306:3306"]
+    tmpfs: [/var/lib/mysql]
+    volumes: [./docker/mysql-init:/docker-entrypoint-initdb.d:ro]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pasyncopation"]
+
+  # MariaDB supports RETURNING, so it exercises a different code path than MySQL.
+  mariadb:
+    image: mariadb:11.8
+    environment:
+      MARIADB_ROOT_PASSWORD: asyncopation
+      MARIADB_USER: asyncopation
+      MARIADB_PASSWORD: asyncopation
+      MARIADB_DATABASE: asyncopation
+    command: --max-connections=500 --innodb-flush-log-at-trx-commit=0
+    ports: ["53307:3306"]
+    tmpfs: [/var/lib/mysql]
+    volumes: [./docker/mysql-init:/docker-entrypoint-initdb.d:ro]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+
+  # Load generator, driven by bench/run.py (`make bench`).
+  k6:
+    image: grafana/k6:1.8.3
+    profiles: [bench]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./bench/k6:/scripts:ro
+      - ./bench/results:/results

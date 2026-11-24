@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint, types, guards, unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: make check
+
+  integration:
+    name: integration (${{ matrix.db }}, py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [postgresql, mysql, mariadb]
+        python: ["3.12", "3.14"]
+    env:
+      ASYNCOPATION_DB: ${{ matrix.db }}
+      HYPOTHESIS_PROFILE: ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev pkg-config
+      - run: uv sync --locked --group mysql-sync
+      - name: start database
+        run: |
+          case "${{ matrix.db }}" in
+            postgresql) make db-up SERVICES=postgres ;;
+            *) make db-up SERVICES=${{ matrix.db }} ;;
+          esac
+      - run: make test-int
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: make db-up SERVICES=postgres
+      - run: make test-e2e
+
+  django-main:
+    name: canary - Django main
+    runs-on: ubuntu-latest
+    needs: check
+    continue-on-error: true  # signals upstream drift in ported internals (docs/django-api-ledger.toml)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --locked
+      - run: uv pip install "django @ git+https://github.com/django/django@main"
+      - run: make db-up SERVICES=postgres
+      - run: uv run --no-sync pytest tests/integration

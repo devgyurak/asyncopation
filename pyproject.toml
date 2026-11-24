@@ -1,0 +1,132 @@
+[project]
+name = "django-asyncopation"
+version = "0.0.0"
+description = "Truly asynchronous execution layer for the Django ORM (psycopg3 / asyncmy)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "BSD-3-Clause"
+classifiers = [
+    "Framework :: Django",
+    "Framework :: Django :: 6.1",
+    "Framework :: AsyncIO",
+    "Programming Language :: Python :: 3 :: Only",
+]
+# We port Django internals (ModelIterable, prefetch_one_level, fetch modes ...), so the
+# minor version is pinned. Widening the range requires re-validating docs/django-api-ledger.toml.
+dependencies = ["django>=6.1,<6.2"]
+
+[project.optional-dependencies]
+postgresql = ["psycopg[pool]>=3.3"]
+mysql = ["asyncmy>=0.2.18"]
+
+[dependency-groups]
+dev = [
+    "psycopg[binary,pool]>=3.3",
+    "asyncmy>=0.2.18",
+    "pytest>=9.0",
+    "pytest-asyncio>=1.5",
+    "pytest-django>=4.14",
+    "hypothesis>=6.170",
+    "ruff>=0.17",
+    "ty>=0.0.109",
+    "import-linter>=2.17",
+    "pyyaml>=6.0",
+    "django-types>=0.24.0",
+]
+e2e = ["uvicorn[standard]>=0.54", "gunicorn>=27.0", "httpx>=0.28", "psutil>=7.2"]
+# Sync reference driver for MySQL differential tests (the driver Django officially targets).
+# Needs native client libraries:
+#   macOS: brew install mysql-client pkg-config   /   Ubuntu: apt install libmysqlclient-dev
+mysql-sync = ["mysqlclient>=2.3"]
+
+[tool.uv]
+default-groups = ["dev", "e2e"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "asyncopation"
+
+# --------------------------------------------------------------------------- ruff
+# Formatting and linting: `uv run ruff format` / `uv run ruff check`.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [".claude", ".codex", ".pi", "harness/catalog/migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "ASYNC", "RUF", "PT", "TID", "DJ"]
+ignore = [
+    "RUF001", # test data intentionally contains non-ASCII strings
+    "E501",   # ruff format owns line length; what remains is unbreakable strings
+]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asgiref.sync.sync_to_async".msg = "Forbidden in src: real async I/O only (tests/tools/bench/harness are exempt)."
+"asgiref.sync.async_to_sync".msg = "Forbidden in src."
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TID251"]
+"tools/**" = ["TID251"]
+"bench/**" = ["TID251"]
+"harness/**" = ["TID251", "DJ001", "DJ008", "RUF012"]
+
+# --------------------------------------------------------------------------- ty
+# Type checking: `uv run ty check` (src, tools, harness, bench, tests).
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.ty.src]
+include = ["src", "tools", "harness", "bench", "tests"]
+
+[tool.ty.rules]
+possibly-unresolved-reference = "error"
+# Suppressions for the not-yet-implemented API must disappear once it exists.
+unused-ignore-comment = "error"
+
+# --------------------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+minversion = "9.0"
+DJANGO_SETTINGS_MODULE = "harness.settings"
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "--strict-config", "-ra", "--reuse-db"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "integration: needs a real database (auto-applied under tests/integration)",
+    "e2e: boots a real server process (auto-applied under tests/e2e)",
+]
+filterwarnings = ["error", "ignore::DeprecationWarning:asyncmy.*"]
+
+# --------------------------------------------------------------------------- import-linter
+# Layers: imports may only point downwards. `|` separates independent sibling layers.
+[tool.importlinter]
+root_package = "asyncopation"
+
+[[tool.importlinter.contracts]]
+name = "asyncopation layers"
+type = "layers"
+layers = [
+    "asyncopation.testing",
+    "asyncopation.deletion | asyncopation.prefetch",
+    "asyncopation.fetch",
+    "asyncopation.query",
+    "asyncopation.transaction",
+    "asyncopation.connection",
+    "asyncopation.drivers | asyncopation.compile",
+]
+
+[[tool.importlinter.contracts]]
+name = "compile layer performs no I/O (no drivers / connection)"
+type = "forbidden"
+source_modules = ["asyncopation.compile"]
+forbidden_modules = ["asyncopation.drivers", "asyncopation.connection", "asyncopation.transaction"]
+
+[[tool.importlinter.contracts]]
+name = "postgresql and mysql drivers are independent"
+type = "independence"
+modules = ["asyncopation.drivers.postgresql", "asyncopation.drivers.mysql"]

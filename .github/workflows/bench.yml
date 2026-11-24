@@ -1,0 +1,29 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: k6 duration per scenario
+        default: 30s
+  schedule:
+    - cron: "0 18 * * *"  # nightly
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --locked
+      - run: make db-up SERVICES=postgres
+      - run: make bench-micro
+      - run: make bench BENCH_ARGS="--duration ${{ inputs.duration || '30s' }} --vus 50"
+      - name: compare with baseline (informational on shared runners)
+        if: hashFiles('bench/baseline/postgresql.json') != ''
+        continue-on-error: true
+        run: uv run python -m bench.compare bench/baseline/postgresql.json "$(ls -t bench/results/load-*.json | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench/results/

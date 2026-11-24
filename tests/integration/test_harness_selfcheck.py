@@ -11,7 +11,8 @@ from hypothesis import given
 
 from harness.catalog.models import Author, Book, FieldZoo
 from harness.seed import EXPECTED_COUNTS
-from tests.support.strategies import QuerySetSpec, build_queryset, queryset_specs
+from tests.support.snapshot import annotation_names
+from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
 
 
 @pytest.mark.parametrize(("model_name", "expected"), list(EXPECTED_COUNTS.items()))
@@ -89,7 +90,42 @@ async def test_reference_random_querysets_match_sync(
     # when
     result = await reference_differential(build)
     # then
+    assert result.sync_outcome.error is None
     assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param(annotated_spec(("n_tags",), ("-n_tags",)), id="count-distinct-ordered"),
+        pytest.param(annotated_spec(("tag_id_sum",), ("tag_id_sum",)), id="sum-null-and-values"),
+        pytest.param(annotated_spec(("author_pages",), ("-author_pages",)), id="sum-non-null"),
+        pytest.param(
+            annotated_spec(("author_avg_price",), ("author_avg_price",)), id="avg-decimal"
+        ),
+        pytest.param(
+            annotated_spec(("tag_id_sum_or_zero",), ("-tag_id_sum_or_zero",)),
+            id="coalesce-aggregate",
+        ),
+        pytest.param(annotated_spec(("double_pages",), ("-double_pages",)), id="f-expression"),
+        pytest.param(annotated_spec(("length",), ("length", "-pages")), id="case-when"),
+        pytest.param(
+            annotated_spec(("n_tags", "author_pages", "length"), ("-author_pages",)),
+            id="mixed-aggregates",
+        ),
+    ],
+)
+async def test_reference_annotated_querysets_match_sync(
+    readonly_db, reference_differential, spec: QuerySetSpec
+):
+    # given
+    build = partial(build_queryset, spec)
+    # when
+    result = await reference_differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert result.async_outcome == result.sync_outcome
+    assert annotation_names(result.sync_outcome.rows[0]) == spec.annotations
 
 
 @pytest.mark.xfail(strict=True, reason="Phase 1: asyncopation.aq() / alist() not implemented yet")

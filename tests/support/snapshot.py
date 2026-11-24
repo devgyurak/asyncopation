@@ -21,6 +21,8 @@ def snapshot_value(value: Any) -> tuple[str, Any]:
         return type_name, snapshot(value)
     if isinstance(value, memoryview):
         return type_name, value.tobytes()
+    if isinstance(value, list) and value and all(isinstance(v, Model) for v in value):
+        return type_name, tuple(snapshot(v) for v in value)  # e.g. Prefetch(to_attr=...)
     if isinstance(value, dict | list):
         return type_name, json.dumps(value, sort_keys=True, default=str)
     if isinstance(value, tuple):
@@ -29,13 +31,30 @@ def snapshot_value(value: Any) -> tuple[str, Any]:
 
 
 def snapshot(obj: Model) -> Snapshot:
-    """Model label + every concrete field as (attname, type name, value)."""
+    """Model label, every concrete field and every annotation as (name, type name, value).
+
+    Annotations (``qs.annotate(...)``) are stored as plain instance attributes: they are the public
+    attributes that are not concrete fields (``extra(select=...)`` values and
+    ``Prefetch(to_attr=...)`` lists count too). Private state (``_state``, caches) is ignored, so
+    annotation aliases starting with ``_`` are not compared - do not generate them.
+    """
+    fields = obj._meta.concrete_fields
+    attnames = {f.attname for f in fields}
+    annotations = sorted(
+        (name, value)
+        for name, value in vars(obj).items()
+        if not name.startswith("_") and name not in attnames
+    )
     return (
         obj._meta.label,
-        tuple(
-            (f.attname, *snapshot_value(getattr(obj, f.attname))) for f in obj._meta.concrete_fields
-        ),
+        tuple((f.attname, *snapshot_value(getattr(obj, f.attname))) for f in fields),
+        tuple((name, *snapshot_value(value)) for name, value in annotations),
     )
+
+
+def annotation_names(instance_snapshot: Snapshot) -> tuple[str, ...]:
+    """Names of the annotations captured in a ``snapshot()`` of one instance, sorted."""
+    return tuple(name for name, _type, _value in instance_snapshot[2])
 
 
 def snapshot_row(row: Any) -> Snapshot:

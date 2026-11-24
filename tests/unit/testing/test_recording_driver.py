@@ -13,6 +13,7 @@ from tests.support.drivers import (
     next_rows_after_commit,
     perform_operation,
     queue_error_then_rows,
+    recording_error_after_stream_exit,
     recording_stale_chunk_error,
     recording_statements_snapshot,
     released_connection_error,
@@ -439,5 +440,15 @@ async def test_empty_or_exhausted_chunk_iterator_kept_after_the_borrow_raises_in
 ):
     # when
     error = await recording_stale_chunk_error(driver, rows, exhaust=exhaust)
+    # then
+    assert type(error) is InterfaceError
+
+
+@pytest.mark.parametrize("exhaust", [False, True], ids=["half-read", "exhausted"])
+async def test_chunk_iterator_after_its_stream_block_raises_interface_error_in_the_same_borrow(
+    driver, exhaust
+):
+    # when
+    error = await recording_error_after_stream_exit(driver, [(1,), (2,)], exhaust=exhaust)
     # then
     assert type(error) is InterfaceError

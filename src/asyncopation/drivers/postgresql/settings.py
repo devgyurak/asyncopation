@@ -30,7 +30,8 @@ DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 # and `open` (the pool is opened by `PostgresDriver.open()`). Every other key is validated by
 # VALUE: callables are sync hooks (or classes) that do not fit an async pool, `close_returns`
 # must be False (True would make a discarded connection go back to the pool), the numeric options
-# must be numbers and `connection_class` an `AsyncConnection` subclass.
+# must be int/float (`max_waiting` int >= 0, `num_workers` int >= 1) and `connection_class`, when present,
+# an `AsyncConnection` subclass.
 _DRIVER_OWNED_POOL_KEYS = frozenset({"name", "configure", "kwargs", "conninfo", "open"})
 _POOL_PARAMETERS = frozenset(inspect.signature(AsyncConnectionPool.__init__).parameters) - {"self"}
 
@@ -178,7 +179,7 @@ def _pool_kwargs(option: Any) -> dict[str, Any]:
         problems = {
             "unknown keys": unknown,
             "keys the driver sets itself": owned,
-            "invalid values (callable hooks are managed by the driver; close_returns must be False; numbers; connection_class an AsyncConnection subclass)": by_value,
+            "invalid values (callable hooks are managed by the driver; close_returns must be False; max_waiting int >= 0 and num_workers int >= 1; timeout/max_lifetime/max_idle/reconnect_timeout int or float; connection_class an AsyncConnection subclass)": by_value,
         }
         raise ImproperlyConfigured(
             "OPTIONS['pool'] cannot be used with the async pool: "
@@ -198,9 +199,8 @@ def _pool_kwargs(option: Any) -> dict[str, Any]:
     return kwargs
 
 
-_NUMERIC_POOL_OPTIONS = frozenset(
-    {"timeout", "max_waiting", "max_lifetime", "max_idle", "reconnect_timeout", "num_workers"}
-)
+_INTEGER_POOL_OPTIONS = {"max_waiting": 0, "num_workers": 1}  # counts: int >= the minimum
+_NUMERIC_POOL_OPTIONS = frozenset({"timeout", "max_lifetime", "max_idle", "reconnect_timeout"})
 
 
 def _invalid_pool_value(key: Any, value: Any) -> bool:
@@ -208,8 +208,13 @@ def _invalid_pool_value(key: Any, value: Any) -> bool:
     if key == "close_returns":
         return value is not False  # True would return a discarded connection to the pool
     if key == "connection_class":
-        return value is not None and not (
-            isinstance(value, type) and issubclass(value, psycopg.AsyncConnection)
+        # the key must be absent or an AsyncConnection subclass: None is as wrong as a string
+        return not (isinstance(value, type) and issubclass(value, psycopg.AsyncConnection))
+    if key in _INTEGER_POOL_OPTIONS:
+        return (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < _INTEGER_POOL_OPTIONS[key]
         )
     if key in _NUMERIC_POOL_OPTIONS:
         return isinstance(value, bool) or not isinstance(value, int | float)

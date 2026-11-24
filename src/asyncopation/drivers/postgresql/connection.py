@@ -170,8 +170,8 @@ class PostgresConnection:
     async def _close_cursor(self, cursor: Any, *, quiet: bool = False) -> None:
         """CLOSE a stream cursor when its stream ends.
 
-        A CLOSE that fails inside a transaction is an error the caller must see (Django's
-        ``ServerSideCursor.close()`` raises it): e.g. the cursor vanished with a savepoint
+        A CLOSE that fails inside a transaction raises (as Django does), mapped to ``django.db``
+        per ADR-0003 D4 (Django leaves it unmapped): e.g. the cursor vanished with a savepoint
         rollback. ``quiet`` (an earlier error is already propagating) only marks it closed. In
         autocommit the error is swallowed and the cursor stays tracked: ``reset()`` retries.
         """
@@ -197,8 +197,12 @@ class PostgresConnection:
         except psycopg.Error as exc:
             if idle_autocommit:
                 return  # stays tracked: reset() retries
-            await _mark_closed(cursor)
-            self._forget(cursor)
+            if isinstance(exc, psycopg.errors.InvalidCursorName) or not getattr(
+                cursor, "withhold", False
+            ):
+                await _mark_closed(cursor)  # the server cursor is gone, or dies with the rollback
+                self._forget(cursor)
+            # else (e.g. QueryCanceled on a live held cursor): stays tracked, reset() closes it
             if not quiet:
                 await self._fail(exc)
             return

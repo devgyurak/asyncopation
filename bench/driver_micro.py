@@ -4,17 +4,19 @@ Cases are named ``driver.<group>.<impl>.t<tasks>``:
 
 * groups: ``select1`` (``SELECT 1``), ``wide`` (one 15-column row), ``execute`` (``execute()`` with
   rowcount), ``tx`` (begin / statement / commit), ``stream`` (200 rows in chunks of 50) and
-  ``noio`` (``SELECT 1`` against fake pool/connection/cursor objects: no network, no server)
+  ``noio`` (``SELECT 1`` against fake pool/connection/cursor objects: no network, no server) and
+  ``noio-yield`` (the same, but the fake ``execute`` yields to the event loop once). The two ``noio``
+  groups run with 1 task only and give a LOWER BOUND of the driver's own cost
 * impls: ``raw`` (``pool.connection()`` + cursor), ``getconn`` (``getconn``/``putconn``: the
   cheapest possible baseline, present in every group) and ``driver``
-* tasks: 1, 8 and 64 concurrent workers
+* tasks: 1, 8 and 64 concurrent workers (``noio`` groups: 1)
 
 Each round runs every impl of a group for ``seconds`` (interleaved; the order is rotated every
 round). The stable metric is client CPU per operation. The report adds the per-round *paired*
 ratios ``driver / raw`` and ``driver / getconn`` (median and inter-quartile range over the rounds,
 paired by round index), the paired difference ``driver - getconn`` in microseconds and the load
-average. Against a real server ratios within about +-5% are noise; the ``noio`` group removes the
-server and resolves the driver's own per-operation cost in microseconds.
+average. Against a real server ratios within about +-5% are noise; the ``noio`` groups remove the
+server and resolve the driver's own per-operation cost in microseconds (shown with its IQR).
 
 The raw baselines use their own pool built from the driver's own configuration (same sizes and
 connection kwargs). They do not run the driver's per-connection session setup (isolation level,
@@ -52,11 +54,23 @@ GROUPS = {
     "tx": ("raw", "getconn", "driver"),
     "stream": ("raw", "getconn", "driver"),
     "noio": ("getconn", "driver"),
+    "noio-yield": ("getconn", "driver"),
 }
+SINGLE_TASK_GROUPS = frozenset({"noio", "noio-yield"})
+
+
+def group_tasks(group: str) -> tuple[int, ...]:
+    return (1,) if group in SINGLE_TASK_GROUPS else TASKS
 
 
 def case_names() -> list[str]:
-    return [f"driver.{g}.{i}.t{t}" for t in TASKS for g, impls in GROUPS.items() for i in impls]
+    return [
+        f"driver.{g}.{i}.t{t}"
+        for t in TASKS
+        for g, impls in GROUPS.items()
+        if t in group_tasks(g)
+        for i in impls
+    ]
 
 
 def selected(only: set[str]) -> list[str]:
@@ -79,6 +93,9 @@ class _FakeCursor:
     pgresult = _FakeResult()
     rowcount = 1
 
+    def __init__(self, yielding: bool = False) -> None:
+        self._yielding = yielding
+
     async def __aenter__(self) -> _FakeCursor:
         return self
 
@@ -86,7 +103,8 @@ class _FakeCursor:
         return None
 
     async def execute(self, sql: str, params: Any = None) -> None:
-        return None
+        if self._yielding:
+            await asyncio.sleep(0)  # a real execute suspends the task at least once
 
     async def fetchall(self) -> list[tuple[int]]:
         return [(1,)]
@@ -98,13 +116,16 @@ class _FakeRaw:
     autocommit = True
     pgconn = SimpleNamespace(transaction_status=0)  # TransactionStatus.IDLE
 
+    def __init__(self, yielding: bool = False) -> None:
+        self._yielding = yielding
+
     def cursor(self) -> _FakeCursor:
-        return _FakeCursor()
+        return _FakeCursor(self._yielding)
 
 
 class _FakePool:
-    def __init__(self) -> None:
-        self._raw = _FakeRaw()
+    def __init__(self, yielding: bool = False) -> None:
+        self._raw = _FakeRaw(yielding)
 
     async def getconn(self) -> _FakeRaw:
         return self._raw
@@ -211,20 +232,21 @@ def make_ops(driver: Any, pool: Any, config: Any) -> dict[str, dict[str, Op]]:
         async with driver.connection() as conn, conn.stream(STREAM, None, STREAM_CHUNK) as chunks:
             return sum([len(rows) async for rows in chunks])
 
-    fake = _FakePool()
+    def noio(fake: _FakePool) -> dict[str, Op]:
+        async def via_driver() -> Any:
+            async with _Borrow(fake, config) as conn:  # ty: ignore[invalid-argument-type]
+                return await conn.fetch_all(SELECT1, None)
 
-    async def noio_driver() -> Any:
-        async with _Borrow(fake, config) as conn:  # ty: ignore[invalid-argument-type]
-            return await conn.fetch_all(SELECT1, None)
+        async def via_getconn() -> Any:
+            raw = await fake.getconn()
+            try:
+                async with raw.cursor() as cursor:
+                    await cursor.execute(SELECT1)
+                    return await cursor.fetchall()
+            finally:
+                await fake.putconn(raw)
 
-    async def noio_getconn() -> Any:
-        raw = await fake.getconn()
-        try:
-            async with raw.cursor() as cursor:
-                await cursor.execute(SELECT1)
-                return await cursor.fetchall()
-        finally:
-            await fake.putconn(raw)
+        return {"getconn": via_getconn, "driver": via_driver}
 
     bodies = _raw_bodies()
     ops: dict[str, dict[str, Op]] = {
@@ -239,7 +261,8 @@ def make_ops(driver: Any, pool: Any, config: Any) -> dict[str, dict[str, Op]]:
     ops["execute"]["driver"] = driver_execute
     ops["tx"]["driver"] = driver_tx
     ops["stream"]["driver"] = driver_stream
-    ops["noio"] = {"getconn": noio_getconn, "driver": noio_driver}
+    ops["noio"] = noio(_FakePool())
+    ops["noio-yield"] = noio(_FakePool(yielding=True))
     return ops
 
 
@@ -257,7 +280,9 @@ async def throughput(op: Op, tasks: int, seconds: float) -> dict[str, float] | N
             latencies.append(time.perf_counter_ns() - begin)
 
     cpu_started = time.process_time()
-    await asyncio.gather(*(worker() for _ in range(tasks)))
+    async with asyncio.TaskGroup() as group:  # one failing worker cancels the others
+        for _ in range(tasks):
+            group.create_task(worker())
     cpu = time.process_time() - cpu_started
     elapsed = time.perf_counter() - started
     latencies.sort()
@@ -324,7 +349,10 @@ async def _measure_group(
                 sample["load_1m"] = os.getloadavg()[0]
                 rounds_data[impl][index] = sample
     for impl, data in rounds_data.items():
-        if impl in failed or not data:
+        if impl in failed:
+            continue
+        if not data:
+            results[f"driver.{group}.{impl}.t{tasks}"] = {"status": "no-samples", "tasks": tasks}
             continue
         row: dict[str, Any] = {"status": "ok", "tasks": tasks}
         for key in ("ops_per_s", "p50_us", "p95_us", "p99_us", "cpu_us"):
@@ -335,8 +363,9 @@ async def _measure_group(
                 if pairs:
                     q1, q2, q3 = _quartiles([ratio for ratio, _ in pairs])
                     row[f"ratio_{baseline}"] = {"median": q2, "q1": q1, "q3": q3}
-                    if baseline == "getconn":
-                        row["diff_getconn_us"] = statistics.median(diff for _, diff in pairs)
+                    if baseline == "getconn" and group in SINGLE_TASK_GROUPS:
+                        d1, d2, d3 = _quartiles([diff for _, diff in pairs])
+                        row["diff_getconn_us"] = {"median": d2, "q1": d1, "q3": d3}
         loads = [r["load_1m"] for r in data.values()]
         row["load_avg_1m"] = max(loads)
         row["load_avg_1m_min"] = min(loads)
@@ -361,7 +390,7 @@ async def run(
         for tasks in TASKS:
             for group, impls in GROUPS.items():
                 wanted = [i for i in impls if f"driver.{group}.{i}.t{tasks}" in names]
-                if wanted:
+                if wanted and tasks in group_tasks(group):
                     results |= await _measure_group(
                         group, tasks, wanted, ops[group], seconds, rounds
                     )

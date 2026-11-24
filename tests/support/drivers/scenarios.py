@@ -1010,23 +1010,27 @@ async def raw_begin_then_failing_stream(driver: Any) -> RawBeginStreamFailure:
 class SavepointCloseOutcome:
     error: BaseException | None
     rollback_error: BaseException | None
+    resource_warnings: int
 
 
 async def stream_exit_after_savepoint_rollback(driver: Any) -> SavepointCloseOutcome:
     """The savepoint the stream was declared after is rolled back inside the body."""
     error: BaseException | None = None
     rollback_error: BaseException | None = None
-    async with driver.connection() as conn:
-        await conn.begin()
-        await conn.savepoint("s1")
-        try:
-            async with conn.stream(HUNDRED, None, 2) as chunks:
-                await anext(chunks)
-                await conn.rollback_to_savepoint("s1")
-        except Exception as exc:
-            error = exc
-        rollback_error = await error_of_operation(conn, "rollback")
-    return SavepointCloseOutcome(error, rollback_error)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with driver.connection() as conn:
+            await conn.begin()
+            await conn.savepoint("s1")
+            try:
+                async with conn.stream(HUNDRED, None, 2) as chunks:
+                    await anext(chunks)
+                    await conn.rollback_to_savepoint("s1")
+            except Exception as exc:
+                error = exc
+            rollback_error = await error_of_operation(conn, "rollback")
+        gc.collect()
+    return SavepointCloseOutcome(error, rollback_error, _resource_warnings(caught))
 
 
 @dataclass(frozen=True)
@@ -1036,6 +1040,7 @@ class CloseAllOutcome:
     pid_before: int
     pid_after: int
     cursors_after: list[CursorRow]
+    resource_warnings: int
 
 
 async def stream_with_close_all_in_body(
@@ -1044,59 +1049,76 @@ async def stream_with_close_all_in_body(
     """`CLOSE ALL` inside the stream body makes the stream's own CLOSE fail at exit."""
     error: BaseException | None = None
     rollback_error: BaseException | None = None
-    async with driver.connection() as conn:
-        pid_before = await backend_pid(conn)
-        if transactional:
-            await conn.begin()
-        try:
-            async with conn.stream(HUNDRED, None, 2) as chunks:
-                await anext(chunks)
-                await conn.execute("CLOSE ALL", None)
-                if body_error:
-                    raise RuntimeError("body")
-        except Exception as exc:
-            error = exc
-        if transactional:
-            rollback_error = await error_of_operation(conn, "rollback")
-    gc.collect()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with driver.connection() as conn:
+            pid_before = await backend_pid(conn)
+            if transactional:
+                await conn.begin()
+            try:
+                async with conn.stream(HUNDRED, None, 2) as chunks:
+                    await anext(chunks)
+                    await conn.execute("CLOSE ALL", None)
+                    if body_error:
+                        raise RuntimeError("body")
+            except Exception as exc:
+                error = exc
+            if transactional:
+                rollback_error = await error_of_operation(conn, "rollback")
+        gc.collect()
     async with driver.connection() as next_conn:
         pid_after = await backend_pid(next_conn)
         cursors = await open_cursors(next_conn)
-    return CloseAllOutcome(error, rollback_error, pid_before, pid_after, cursors)
+    return CloseAllOutcome(
+        error, rollback_error, pid_before, pid_after, cursors, _resource_warnings(caught)
+    )
 
 
 @dataclass(frozen=True)
 class SavepointRecoveryAfterClose:
     close_error: BaseException | None
     savepoint_error: BaseException | None
+    fetch_error: BaseException | None
     rows: list[Row] | None
     pid_before: int
     pid_after: int
+    resource_warnings: int
 
 
 async def recover_from_failed_close_with_savepoint(driver: Any) -> SavepointRecoveryAfterClose:
     """The stream's CLOSE fails inside a transaction; `rollback_to_savepoint` must recover it."""
     close_error: BaseException | None = None
+    fetch_error: BaseException | None = None
     rows: list[Row] | None = None
-    async with driver.connection() as conn:
-        pid_before = await backend_pid(conn)
-        await conn.begin()
-        await conn.savepoint("sp")
-        try:
-            async with conn.stream(HUNDRED, None, 2) as chunks:
-                await anext(chunks)
-                await conn.execute("CLOSE ALL", None)
-        except Exception as exc:
-            close_error = exc
-        savepoint_error = await rollback_to_sp_error(conn)
-        try:
-            rows = await conn.fetch_all("SELECT 1", None)
-        except Exception as exc:
-            rows = None
-            savepoint_error = savepoint_error or exc
-        pid_after = await backend_pid(conn)
-        await conn.rollback()
-    return SavepointRecoveryAfterClose(close_error, savepoint_error, rows, pid_before, pid_after)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with driver.connection() as conn:
+            pid_before = await backend_pid(conn)
+            await conn.begin()
+            await conn.savepoint("sp")
+            try:
+                async with conn.stream(HUNDRED, None, 2) as chunks:
+                    await anext(chunks)
+                    await conn.execute("CLOSE ALL", None)
+            except Exception as exc:
+                close_error = exc
+            savepoint_error = await rollback_to_sp_error(conn)
+            try:
+                rows = await conn.fetch_all("SELECT 1", None)
+            except Exception as exc:
+                fetch_error = exc
+            pid_after = await backend_pid(conn)
+            await conn.rollback()
+        gc.collect()
+    return SavepointRecoveryAfterClose(
+        close_error,
+        savepoint_error,
+        fetch_error,
+        rows,
+        pid_before,
+        pid_after,
+        _resource_warnings(caught),
+    )
 
 
 async def rollback_to_sp_error(conn: AsyncDbConnection) -> BaseException | None:
@@ -1120,9 +1142,74 @@ class CountingConnection(psycopg.AsyncConnection):
         return await super().connect(*args, **kwargs)
 
 
-async def connect_calls_during_open(options: dict[str, Any] | None = None) -> int:
+async def connect_calls_during_open() -> int:
     """How many times the pool's connection class connected while the driver opened."""
     CountingConnection.calls = 0
     pool = {"min_size": 1, "max_size": 1, "connection_class": CountingConnection}
-    async with open_driver(options=options, pool=pool):
+    async with open_driver(pool=pool):
         return CountingConnection.calls
+
+
+# --------------------------------------------------------------------------- failing CLOSE (once)
+def close_fails_once(error: Exception) -> AbstractContextManager[Any]:
+    """Patch the server cursor's `close` to raise `error` once, while the cursor still exists."""
+    original = psycopg.AsyncServerCursor.close
+
+    async def failing(self: Any) -> None:
+        psycopg.AsyncServerCursor.close = original  # later closes (e.g. by release) work
+        raise error
+
+    return mock.patch.object(psycopg.AsyncServerCursor, "close", failing)
+
+
+@dataclass(frozen=True)
+class FailingCloseOnce:
+    exit_error: BaseException | None
+    pid_before: int
+    pid_after: int
+    cursors_after: list[CursorRow]
+    resource_warnings: int
+
+
+async def stream_whose_close_fails_once(
+    driver: Any, error: Exception, *, transactional: bool
+) -> FailingCloseOnce:
+    """Exit a stream whose CLOSE fails once; what the next borrower of the connection sees."""
+    exit_error: BaseException | None = None
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with close_fails_once(error):
+            async with driver.connection() as conn:
+                pid_before = await backend_pid(conn)
+                try:
+                    async with conn.stream(HUNDRED, None, 2) as chunks:
+                        await anext(chunks)
+                        if transactional:
+                            await conn.begin()
+                            await conn.execute("SELECT 1", None)
+                except Exception as exc:
+                    exit_error = exc
+        gc.collect()
+    async with driver.connection() as next_conn:
+        pid_after = await backend_pid(next_conn)
+        cursors = await open_cursors(next_conn)
+    return FailingCloseOnce(exit_error, pid_before, pid_after, cursors, _resource_warnings(caught))
+
+
+async def recording_error_after_stream_exit(
+    driver: Any, rows: list[Row], *, exhaust: bool
+) -> BaseException | None:
+    """`anext()` on the chunk iterator after its stream block ended, borrow still open."""
+    driver.queue(rows)
+    async with driver.connection() as conn:
+        async with conn.stream("SELECT a", None, 1) as chunks:
+            if exhaust:
+                async for _ in chunks:
+                    pass
+            else:
+                await anext(chunks)
+        try:
+            await anext(chunks)
+        except Exception as exc:
+            return exc
+    return None

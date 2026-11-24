@@ -15,6 +15,7 @@ from tests.support.drivers import (
     cancel_waiting_borrower,
     concurrent_backend_pids,
     connect_calls_during_open,
+    open_driver,
     raw_error_in_stream_body,
     release_and_cancel_waiter_together,
     released_connection_error,
@@ -268,4 +269,16 @@ async def test_open_connects_with_the_configured_connection_class_for_probe_and_
     # when
     calls = await connect_calls_during_open()
     # then
-    assert calls >= 2
+    assert calls == 2
+
+
+async def test_pool_without_connection_class_opens_and_serves_queries(django_db_setup):
+    # given
+    async with (
+        open_driver(pool={"min_size": 1, "max_size": 1}) as driver,
+        driver.connection() as conn,
+    ):
+        # when
+        rows = await conn.fetch_all("SELECT 1", None)
+    # then
+    assert rows == [(1,)]

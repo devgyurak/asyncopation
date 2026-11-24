@@ -70,7 +70,11 @@ class RecordingConnection:
         self._check()
         item = self._driver._take("stream", sql, params)
         rows = (item.rows or []) if isinstance(item, ExecResult) else item
-        yield _GuardedChunks(self, rows, chunk)
+        chunks = _GuardedChunks(self, rows, chunk)
+        try:
+            yield chunks
+        finally:
+            chunks.closed = True
 
     async def begin(self) -> None:
         self._check()
@@ -190,12 +194,15 @@ class _GuardedChunks:
         self._rows = rows
         self._size = size
         self._position = 0
+        self.closed = False  # set when the stream block ends
 
     def __aiter__(self) -> _GuardedChunks:
         return self
 
     async def __anext__(self) -> list[Row]:
         self._connection._check()  # even an exhausted iterator reports a released connection
+        if self.closed:
+            raise InterfaceError("the stream was closed and its chunks can no longer be read")
         if self._position >= len(self._rows):
             raise StopAsyncIteration
         chunk = self._rows[self._position : self._position + self._size]

@@ -19,22 +19,26 @@ named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
 - groups: `select1` (`SELECT 1`), `wide` (one row with 15 columns), `execute` (`execute()` with
   rowcount), `tx` (`begin` / statement / `commit`), `stream` (200 rows in chunks of 50);
 - impls: `raw` (`pool.connection()` + cursor on a pool built from the driver's own
-  configuration: the baseline), `getconn` (raw `getconn` / `putconn`, the cheapest baseline,
-  present in every group), `driver` (`driver.connection()` + the driver API);
+  configuration), `getconn` (raw `getconn` / `putconn`, the cheapest baseline, present in every
+  group), `driver` (`driver.connection()` + the driver API);
 - flags (see `uv run python -m bench.micro --help`): `--driver-seconds` (seconds per
   `driver.*` round, default 1.0), `--driver-rounds` (interleaved rounds, default 7), `--only`
   (comma-separated case names with the first dot-separated part removed, e.g.
   `--only select1.driver.t8`; the same filter as for the other cases);
-- no-I/O cases `driver.noio.<impl>.t<N>` (impls `getconn` and `driver`, fake pool and cursor
-  objects) isolate the driver's own per-operation overhead; the report adds a
-  `driver - getconn (us)` column. Every group now has a `getconn` impl (`getconn` / `putconn`
-  based baseline);
+- no-I/O cases `driver.noio.<impl>.t1` and `driver.noio-yield.<impl>.t1` (impls `getconn` and
+  `driver`, run with 1 task only): fake pool and cursor objects take the database out, so the
+  difference measures the driver's own cost; `noio-yield` uses a fake that yields
+  (`await asyncio.sleep(0)`). Treat the result as a LOWER BOUND of the driver's own cost;
 - output columns: `CPU us/op` (client CPU per operation, the stable metric), `paired ratio
-  (IQR)` (per-round paired ratio vs the baseline, median and inter-quartile range over the
-  rounds) and `load` (min-max 1-minute load average over the rounds; the baselines of a selected
-  case are always run too, so its ratio can be computed). Compare ratios, not absolute times, and rerun when
-  the load is high. Real-DB ratios within about +-5% are noise; the driver's per-operation
-  overhead is about 1 us (driver minus `getconn` CPU) - see the no-I/O cases.
+  (IQR)` (per-round paired ratio vs the baseline: median and inter-quartile range over the
+  rounds), `driver-getconn µs` (driver minus `getconn` CPU per operation, shown with its IQR
+  only for the noio groups), `load` (min-max 1-minute load average over the rounds) and a
+  separate errors column. A case without samples has status `no-samples`. The baselines of a
+  selected case always run too, so its ratio can be computed.
+
+Compare ratios, not absolute times, and rerun when the load is high. Real-DB ratios within about
++-5% are noise. Measured driver overhead (driver minus `getconn`): about 0.5-0.7 us/op with a
+plain fake and 0.7-0.9 us/op with a fake that yields.
 
 ## Load (k6, minutes)
 ```bash

@@ -21,6 +21,7 @@ from tests.support.drivers import (
     stream_chunks,
     stream_exit_after_savepoint_rollback,
     stream_failure_then_savepoint_rollback,
+    stream_whose_close_fails_once,
     stream_with_close_all_in_body,
     use_stale_stream,
 )
@@ -326,6 +327,7 @@ async def test_rollback_after_a_failing_close_in_a_transaction_succeeds(single_d
     outcome = await stream_with_close_all_in_body(single_driver, transactional=True)
     # then
     assert outcome.rollback_error is None
+    assert outcome.resource_warnings == 0
 
 
 async def test_rollback_after_a_failing_close_and_a_savepoint_rollback_succeeds(single_driver):
@@ -333,6 +335,7 @@ async def test_rollback_after_a_failing_close_and_a_savepoint_rollback_succeeds(
     outcome = await stream_exit_after_savepoint_rollback(single_driver)
     # then
     assert outcome.rollback_error is None
+    assert outcome.resource_warnings == 0
 
 
 async def test_failing_close_in_transaction_leaves_it_recoverable_by_rollback_to_savepoint(
@@ -341,10 +344,12 @@ async def test_failing_close_in_transaction_leaves_it_recoverable_by_rollback_to
     # when
     outcome = await recover_from_failed_close_with_savepoint(single_driver)
     # then
-    assert outcome.close_error is not None
+    assert type(outcome.close_error) is ProgrammingError
     assert outcome.savepoint_error is None
+    assert outcome.fetch_error is None
     assert outcome.rows == [(1,)]
     assert outcome.pid_after == outcome.pid_before
+    assert outcome.resource_warnings == 0
 
 
 async def test_failing_close_in_autocommit_is_swallowed(single_driver):
@@ -362,6 +367,7 @@ async def test_failing_close_in_autocommit_keeps_the_connection_and_leaves_no_cu
     # then
     assert outcome.pid_after == outcome.pid_before
     assert outcome.cursors_after == []
+    assert outcome.resource_warnings == 0
 
 
 @TRANSACTIONAL
@@ -372,3 +378,34 @@ async def test_body_error_wins_over_a_failing_close(single_driver, transactional
     )
     # then
     assert type(outcome.error) is RuntimeError
+
+
+async def test_close_error_in_autocommit_is_retried_by_release_on_the_same_backend(single_driver):
+    # when
+    outcome = await stream_whose_close_fails_once(
+        single_driver, psycopg.errors.OperationalError("close failed"), transactional=False
+    )
+    # then
+    assert outcome.exit_error is None
+    assert outcome.pid_after == outcome.pid_before
+    assert outcome.cursors_after == []
+
+
+async def test_close_error_in_autocommit_leaks_no_cursor_object(single_driver):
+    # when
+    outcome = await stream_whose_close_fails_once(
+        single_driver, psycopg.errors.OperationalError("close failed"), transactional=False
+    )
+    # then
+    assert outcome.resource_warnings == 0
+
+
+async def test_non_cursor_close_error_on_a_held_cursor_in_a_transaction_leaves_no_cursor(
+    single_driver,
+):
+    # when
+    outcome = await stream_whose_close_fails_once(
+        single_driver, psycopg.errors.QueryCanceled("simulated"), transactional=True
+    )
+    # then
+    assert outcome.cursors_after == []

@@ -62,13 +62,12 @@ reason = "Adapters template (jsonb/inet as text, range dumper, tz-aware timestam
 verified_against = "6.1.3"
 signatures = { get_adapters_template = "(use_tz, timezone)" }
 
-# Ported (never imported at runtime, `ported = true`). tests/unit/django_drift checks that each
-# name still exists upstream. Behaviour comparisons against Django live in
-# tests/unit/django_drift/test_postgresql_ports.py (connection params, cursor bases, timezone,
-# quoting, configuration errors), tests/unit/drivers/test_errors.py (error mapping order) and the
-# integration tests tests/integration/drivers/test_postgresql_session.py (session state, assume_role,
-# isolation) compare session values with a sync Django wrapper; test_postgresql_stream.py does NOT
-# run a sync comparison: it asserts the cursor declarations Django's ServerSideCursor produces
+# Ported (never imported at runtime, `ported = true`). tests/unit/django_drift checks that each name
+# still exists upstream and compares behaviour in test_postgresql_ports.py (connection params, cursor
+# bases, timezone, quoting, configuration errors) and tests/unit/drivers/test_errors.py (error
+# mapping order). The integration tests compare with a sync Django wrapper only for session values
+# (test_postgresql_session.py: session state, assume_role, isolation); test_postgresql_stream.py runs
+# no sync comparison and asserts the cursor declarations Django's ServerSideCursor produces
 # (non-scrollable, withhold only in autocommit) by reading pg_cursors.
 [[internal]]
 module = "django.db.utils"

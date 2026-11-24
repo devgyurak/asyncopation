@@ -231,14 +231,9 @@ def test_integer_pool_sizes_and_unset_max_size_are_accepted(pool):
     assert error is None
 
 
-NUMERIC_OPTIONS = [
-    "timeout",
-    "max_waiting",
-    "max_lifetime",
-    "max_idle",
-    "reconnect_timeout",
-    "num_workers",
-]
+FLOAT_OPTIONS = ["timeout", "max_lifetime", "max_idle", "reconnect_timeout"]
+INT_OPTIONS = ["max_waiting", "num_workers"]
+NUMERIC_OPTIONS = [*FLOAT_OPTIONS, *INT_OPTIONS]
 
 
 @pytest.mark.parametrize("option", NUMERIC_OPTIONS)
@@ -255,8 +250,46 @@ def test_numeric_pool_options_of_the_wrong_type_are_rejected(option, value):
 
 
 @pytest.mark.parametrize("option", NUMERIC_OPTIONS)
-@pytest.mark.parametrize("value", [5, 2.5], ids=["int", "float"])
-def test_numeric_pool_options_accept_ints_and_floats(option, value):
+def test_numeric_pool_options_accept_ints(option):
+    # when
+    error = config_error({"pool": {option: 5}})
+    # then
+    assert error is None
+
+
+@pytest.mark.parametrize("option", FLOAT_OPTIONS)
+def test_float_pool_options_accept_floats(option):
+    # when
+    error = config_error({"pool": {option: 2.5}})
+    # then
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        pytest.param("num_workers", 0, id="num-workers-zero"),
+        pytest.param("num_workers", -1, id="num-workers-negative"),
+        pytest.param("num_workers", 2.5, id="num-workers-float"),
+        pytest.param("max_waiting", -1, id="max-waiting-negative"),
+        pytest.param("max_waiting", 2.5, id="max-waiting-float"),
+    ],
+)
+def test_count_pool_options_outside_their_range_are_rejected(option, value):
+    # when
+    error = config_error({"pool": {option: value}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        pytest.param("num_workers", 1, id="num-workers-one"),
+        pytest.param("max_waiting", 0, id="max-waiting-zero-is-unlimited"),
+    ],
+)
+def test_count_pool_options_at_their_lower_bound_are_accepted(option, value):
     # when
     error = config_error({"pool": {option: value}})
     # then
@@ -270,6 +303,7 @@ def test_numeric_pool_options_accept_ints_and_floats(option, value):
         pytest.param(noop_hook, id="function"),
         pytest.param(NoopClass, id="unrelated-class"),
         pytest.param("psycopg.AsyncConnection", id="dotted-string"),
+        pytest.param(None, id="none"),
     ],
 )
 def test_pool_connection_class_must_be_an_async_connection_subclass(connection_class):
@@ -284,7 +318,6 @@ def test_pool_connection_class_must_be_an_async_connection_subclass(connection_c
     [
         pytest.param(psycopg.AsyncConnection, id="async-connection"),
         pytest.param(SubclassedConnection, id="subclass"),
-        pytest.param(None, id="none"),
     ],
 )
 def test_pool_connection_class_accepts_async_connection_subclasses(connection_class):

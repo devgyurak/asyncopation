@@ -63,7 +63,10 @@ Work is tracked on GitHub: one milestone per phase, one issue per roadmap item, 
 Humans decide: accepting ADRs, changing guards/rules, updating benchmark baselines, releases.
 
 Branches: work happens on `<prefix>/<kebab-summary>` branches cut from `develop` and is PR'd
-into `develop`; `main` only receives release merges. Commit/PR titles use one prefix:
+into `develop`; `main` only receives release merges. GitHub rulesets enforce it: merging into
+`develop` needs the code owner's (@devgyurak) approval, which the maintainer may bypass;
+nobody can push to `main`, which only accepts PRs from `develop`. Releases are `vX.Y.Z` tags on
+`main`; pushing a tag runs the release CI (to be built, #26). Commit/PR titles use one prefix:
 `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (the `commit` skill).
 
 ## 3. Sub-agents
@@ -95,6 +98,7 @@ into `develop`; `main` only receives release merges. Commit/PR titles use one pr
 | Correctness | pytest differential tests on 3 backends | `make test-int`, CI matrix |
 | End to end | uvicorn + httpx | `make test-e2e`, CI |
 | Performance | micro + k6 harness | `make bench-micro` / `make bench`, CI (manual / nightly) |
+| Branch flow | GitHub rulesets + `branch-policy.yml` + `CODEOWNERS` | every push / PR to `develop` and `main` |
 
 Guards have no inline suppressions. Fix code, not guards; changing a guard needs the human.
 

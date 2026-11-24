@@ -63,6 +63,26 @@ behind these decisions: [design/software-architecture.md](design/software-archit
    `[[attribute]]` entry protected by the same drift test.
 6. Results are identical to the sync ORM on PostgreSQL, MySQL and MariaDB (differential tests).
 
+## Drivers
+
+`drivers/base.py` holds the `AsyncDriver` / `AsyncDbConnection` protocols and the frozen value
+types; `drivers/errors.py` ports Django's `DatabaseErrorWrapper` mapping. A driver connection
+behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contract.md)):
+
+- **PostgreSQL** (`drivers/postgresql`): `psycopg_pool.AsyncConnectionPool` created `open=False` and
+  opened in `open()`; every physical connection gets Django's adapters template, `client_encoding`,
+  isolation level, `TimeZone` and `assume_role`; rows are tuples. Cursor selection mirrors Django:
+  by default `AsyncClientCursor` and, for streams, `ClientCursorMixin` + `AsyncServerCursor`; with
+  `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named
+  cursors are `scrollable=False` and `withhold` outside transactions. The SQL shape difference
+  stays in the compile-only wrapper's `features.uses_server_side_binding`.
+- Connections are in autocommit outside `begin()`; a connection returned mid-transaction is rolled
+  back. A cancelled statement is cancelled and rolled back (or discarded when its state is unknown);
+  a disconnected connection is closed so the pool replaces it.
+- `connection_created` is **not** sent for driver connections; hstore/citext registration is
+  tracked in #43. The recording driver (`asyncopation.testing.RecordingDriver`) implements the same
+  protocol with queued results for unit tests.
+
 ## Connection ownership
 
 Per-query borrowing outside transactions, pinning inside `async_atomic`; use of a pinned

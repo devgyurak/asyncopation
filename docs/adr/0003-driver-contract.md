@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-24 (issue #2, architect review) - Decision 1 mirrors Django's `server_side_binding` cursor selection; Decision 2 (hstore/citext) is deferred to #43
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs
@@ -77,11 +78,17 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 1. **Normalization contract:** a driver connection returns the same values, the same
    `rowcount`/`lastrowid` semantics and the same session state as Django's sync backend
    connection for that alias - including the connection setup listed in Context. psycopg uses
-   Django's adapters template, `AsyncClientCursor`, and Django's server-side cursor mix
-   (`ClientCursorMixin` + `AsyncServerCursor`, `withhold` outside transactions). asyncmy gets a
-   decoder shim matching mysqlclient and `CLIENT.FOUND_ROWS`.
+   Django's adapters template and mirrors Django's cursor selection: by default
+   `AsyncClientCursor` for plain statements and Django's server-side cursor mix
+   (`ClientCursorMixin` + `AsyncServerCursor`) for streams; with `OPTIONS["server_side_binding"]
+   = True` psycopg's `AsyncCursor` / `AsyncServerCursor`. Named cursors are `scrollable=False` and
+   `withhold` while in autocommit (outside a transaction), as in Django's `create_cursor`. SQL
+   shape differences stay in the wrapper's `features.uses_server_side_binding`; the driver never
+   branches SQL on binding or vendor. asyncmy gets a decoder shim matching mysqlclient and
+   `CLIENT.FOUND_ROWS`.
 2. **contrib.postgres:** the PostgreSQL driver's connection-configure step registers hstore/citext
-   handlers asynchronously. `connection_created` is **not** sent for our connections (documented).
+   handlers asynchronously (**deferred to #43**: the harness has no `contrib.postgres` yet).
+   `connection_created` is **not** sent for our connections (documented).
 3. **Single source of truth for SQL shape:** the compile-only wrapper's `features`. `Capabilities`
    holds only driver/runtime facts. Core code never reads vendor strings; it reads `Capabilities`
    or the wrapper's `features`.

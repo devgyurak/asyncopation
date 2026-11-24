@@ -161,7 +161,7 @@ setup) and translates exceptions to `django.db`; SQL shape stays with Django's `
 
 | Item | PostgreSQL (psycopg3) | MySQL (asyncmy) |
 |---|---|---|
-| Binding | `AsyncConnection`'s default cursor binds server-side. Use **`AsyncClientCursor`** for Django compatibility | `%s` placeholders, compatible |
+| Binding | `AsyncConnection`'s default cursor binds server-side. Use **`AsyncClientCursor`** for Django compatibility (default; `OPTIONS["server_side_binding"] = True` switches to `AsyncCursor`, mirroring Django's sync backend) | `%s` placeholders, compatible |
 | `RETURNING` | Supported | MySQL lacks it, so use `lastrowid`. MariaDB supports it, so branch. `bulk_create` pk return also branches |
 | Server info | `pg_version` requires a connection | `mysql_server_data` etc. run real queries |
 | Type conversion | Almost identical to Django's expectations | Django targets mysqlclient. asyncmy (PyMySQL family) may return different types for datetime/Decimal/JSON -> verified with differential tests |

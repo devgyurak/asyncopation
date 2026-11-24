@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=75c5c056f08b -->
+<!-- i18n: source=docs/design/plan.md source-sha256=bcd24f39d261 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -161,7 +161,7 @@ AsyncDriver (protocol)                       AsyncDbConnection (protocol)
 
 | 항목 | PostgreSQL (psycopg3) | MySQL (asyncmy) |
 |---|---|---|
-| 바인딩 | `AsyncConnection` 기본 커서는 서버 사이드 바인딩이다. Django 호환성을 위해 **`AsyncClientCursor`**를 사용한다 | `%s` 플레이스홀더라 호환된다 |
+| 바인딩 | `AsyncConnection` 기본 커서는 서버 사이드 바인딩이다. Django 호환성을 위해 **`AsyncClientCursor`**를 사용한다(기본값. `OPTIONS["server_side_binding"] = True`이면 Django sync 백엔드처럼 `AsyncCursor`) | `%s` 플레이스홀더라 호환된다 |
 | `RETURNING` | 지원 | MySQL은 미지원이라 `lastrowid`로 처리한다. MariaDB는 지원하므로 분기가 필요하다. `bulk_create`의 pk 반환도 분기한다 |
 | 서버 정보 | `pg_version`이 커넥션을 요구한다 | `mysql_server_data` 등이 실제 쿼리를 날린다 |
 | 타입 변환 | Django 기준과 거의 같다 | Django는 mysqlclient 기준이다. asyncmy(PyMySQL 계열)와 datetime/Decimal/JSON 반환 타입이 다를 수 있다 → 차등 테스트로 검증한다 |

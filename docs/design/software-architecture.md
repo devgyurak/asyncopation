@@ -1,6 +1,6 @@
 # Software architecture proposal - contracts, seams and lifecycle
 
-- Status: **Research record.** The decisions are ADR-0001..0007 (Accepted) and ADR-0008 (Proposed).
+- Status: **Research record.** The decisions are ADR-0001..0007 (Accepted) and ADR-0008 (Accepted).
   Where this document and an ADR differ, the ADR wins; the architect review refined several points
   below (layer order, owner rule, observer style, `aobjects` shape, `_django` enforcement).
 - Date: 2026-11-24
@@ -217,7 +217,7 @@ facade. The facade sits at the top because evaluation runs prefetch and `adelete
 
 | ADR | Decision | Blocks |
 |---|---|---|
-| 0008 (Proposed) | How Django compilers that re-resolve `connections[using]` reach the compile-only wrapper; MySQL without mysqlclient | Phase 1 `acount`, writes |
+| 0008 (Accepted) | How Django compilers that re-resolve `connections[using]` reach the compile-only wrapper; MySQL without mysqlclient | Phase 1 `acount`, writes |
 | 0001 (update) | Reject concurrent use of a pinned connection; owner token; record divergence from Django core | Phase 5 |
 | 0002 | Pipeline contracts and the `results_iter(results=...)` seam | Phase 1 `alist` |
 | 0003 | Driver protocol, capabilities, type normalization + error translation in drivers | #4 |

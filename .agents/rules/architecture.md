@@ -27,7 +27,8 @@ _django        sole importer of non-public Django APIs
   Postgres and MySQL drivers never import each other.
 - `compile/` never performs I/O: no `async def`, no imports of drivers/connection/transaction.
   Server version/features are injected into it by `connection/` (ADR-0004); how Django's
-  compilers reach it is ADR-0008 (Proposed - do not merge code that depends on it).
+  compilers reach it is ADR-0008 (Accepted): a synchronous `compile_scope` swap
+  of `connections[alias]` implemented in `_django.connections`, the only A102 exception.
 - Upper layers talk to drivers only through the `AsyncDriver` protocol. Core code never reads
   vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
   `Capabilities` (ADR-0003).

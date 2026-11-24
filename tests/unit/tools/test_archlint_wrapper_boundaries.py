@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.support.guards import distinct_codes, rule_outcome
+from tests.support.guards import distinct_codes, has_violation, rule_outcome
 
 P = pytest.param
 QUERY = "src/asyncopation/query/x.py"
@@ -82,6 +82,9 @@ def test_rebinding_the_real_wrapper_class_is_reported(source, path):
         P(f"{PG_WRAPPER}\nfrom asyncopation.compile.wrapper import CompileOnlyMixin\n\n"
           "class X(CompileOnlyMixin, object, BaseWrapper):\n    pass\n", COMPILE,
           id="mixin-before-with-others-between"),
+        P(f"{PG_WRAPPER}\nfrom asyncopation.compile.wrapper import CompileOnlyMixin\nfrom other import Other\n\n"
+          "class X(Other, CompileOnlyMixin, BaseWrapper):\n    pass\n", COMPILE,
+          id="another-base-before-the-mixin"),
         P(f"{PG_WRAPPER}\n\ndef f(w):\n    return isinstance(w, BaseWrapper)\n", COMPILE,
           id="isinstance"),
         P(f"{PG_WRAPPER}\n\nok = isinstance(1, BaseWrapper)\n", COMPILE, id="isinstance-assigned"),
@@ -201,14 +204,26 @@ def test_the_adapter_boundary_module_is_importable_only_by_the_postgresql_driver
         P(f"{PG_WRAPPER}\n\nclass RealPG(BaseWrapper):\n    pass\n", DJANGO, id="no-mixin-in-django"),
         P("from asyncopation._django import postgresql as m\n\nclass RealPG(m.BaseWrapper):\n    pass\n",
           DJANGO, id="attribute-base"),
+    ],
+)  # fmt: skip
+def test_a_class_based_on_the_real_wrapper_must_list_the_mixin_first(source, path):
+    # when
+    outcome = rule_outcome(source, path, "A102", "must list `CompileOnlyMixin`")
+    # then
+    assert outcome == (["A102"], True)
+
+
+@pytest.mark.parametrize(
+    ("source", "path"),
+    [
         P(f"{PG_WRAPPER}\n\nSHARED = BaseWrapper({{}}, 'default')\n", COMPILE, id="instantiation"),
         P("from asyncopation._django import postgresql as m\n\ndef f():\n    return m.BaseWrapper({})\n",
           DJANGO, id="attribute-instantiation"),
     ],
 )  # fmt: skip
-def test_a_real_wrapper_that_can_connect_cannot_be_built(source, path):
+def test_the_real_wrapper_class_is_never_instantiated(source, path):
     # when
-    outcome = rule_outcome(source, path, "A102", "BaseWrapper")
+    outcome = rule_outcome(source, path, "A102", "do not instantiate")
     # then
     assert outcome == (["A102"], True)
 
@@ -227,3 +242,34 @@ def test_the_dotted_adapter_boundary_path_follows_the_importer_rule(source, path
     outcome = rule_outcome(source, path, "A104", "may only be used by asyncopation/drivers")
     # then
     assert outcome == (codes, flagged)
+
+
+@pytest.mark.parametrize(
+    ("source", "path", "flagged"),
+    [
+        P("import asyncopation\n\ndef f():\n    return getattr(asyncopation, '_django').postgresql_adapters\n",
+          "src/asyncopation/engine/x.py", True, id="getattr-of-the-package-object"),
+        P("import asyncopation\n\ndef f():\n    return getattr(asyncopation, '_django')\n",
+          "src/asyncopation/_django/x.py", False, id="allowed-inside-the-django-package"),
+        P("def f(thing):\n    return getattr(thing, '_django')\n",
+          "src/asyncopation/engine/x.py", False, id="an-unrelated-object"),
+        P("import asyncopation\n\ndef f():\n    return getattr(asyncopation, '_other')\n",
+          "src/asyncopation/engine/x.py", False, id="another-private-name"),
+    ],
+)  # fmt: skip
+def test_the_package_object_is_not_reachable_through_a_constant_getattr(source, path, flagged):
+    # when
+    found = has_violation(source, path, "A102", "reaching `asyncopation._django` through a bound")
+    # then
+    assert found is flagged
+
+
+def test_the_bare_adapter_boundary_module_is_an_adapter_import_too():
+    # given
+    source = (
+        "import asyncopation\n\ndef f():\n    return asyncopation._django.postgresql_adapters\n"
+    )
+    # when
+    outcome = rule_outcome(source, DJANGO, "A104", "may only be used by asyncopation/drivers")
+    # then
+    assert outcome == (["A104"], True)

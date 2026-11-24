@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=11cd4ce566a0 -->
+<!-- i18n: source=docs/workflow.md source-sha256=cd48be40b3a1 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -96,7 +96,7 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 테스트 규칙: GWT, 제어문 0개 (T1xx-T3xx) | `tools/guards` | 위와 동일 |
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
-| 정합성 | 3개 백엔드에서 pytest 차등 테스트 | `make test-int`, CI 매트릭스 |
+| 정합성 | 3개 백엔드에서 pytest 차등 테스트, `compose_sql`은 순수 Python psycopg로도 | `make test-int`, `make test-compose-python`, CI 매트릭스 |
 | E2E | uvicorn + httpx | `make test-e2e`, CI |
 | 성능 | micro + k6 하네스 | `make bench-micro` / `make bench`, CI (수동 / 야간) |
 | 브랜치 흐름 | GitHub ruleset + `branch-policy.yml` + `CODEOWNERS` | `develop`, `main`으로의 모든 푸시 / PR |

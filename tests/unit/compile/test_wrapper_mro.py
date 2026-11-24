@@ -1,9 +1,12 @@
 """Every Asyncopation class based on Django's real wrapper puts the compile-only mixin first."""
 
 from tests.support.compile_wrappers import (
+    default_scan_report,
+    default_wrapper_packages,
     diamond_subclass_report,
     indirect_subclass_report,
     lookalike_module_report,
+    scanned_package_report,
     throwaway_wrapper_report,
     wrapper_classes_found,
     wrapper_classes_that_can_connect,
@@ -58,3 +61,39 @@ def test_a_class_reachable_through_two_parents_is_reported_once():
     report = diamond_subclass_report()
     # then
     assert report == ["Both", "Left", "Right"]
+
+
+def test_the_scan_covers_the_compile_and_the_django_boundary_packages():
+    # when
+    packages = default_wrapper_packages()
+    # then
+    assert packages == ["asyncopation.compile", "asyncopation._django"]
+
+
+def test_wrappers_of_any_django_backend_are_checked_and_missing_drivers_are_skipped(tmp_path):
+    # when
+    reported, found, raised = scanned_package_report(tmp_path)
+    # then
+    assert (reported, found, raised) == (
+        ["Bare", "OnSqlite"],
+        ["Bare", "OnSqlite", "Safe"],
+        ["RuntimeError"],
+    )
+
+
+def test_the_default_scan_imports_the_modules_of_the_default_packages(tmp_path):
+    # when
+    before, after, left = default_scan_report(tmp_path)
+    # then
+    assert (before, after, left) == (
+        [],
+        [
+            "a.wrappers.Bare",
+            "a.wrappers.OnSqlite",
+            "a.wrappers.Safe",
+            "b.wrappers.Bare",
+            "b.wrappers.OnSqlite",
+            "b.wrappers.Safe",
+        ],
+        [],
+    )

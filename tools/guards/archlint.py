@@ -40,7 +40,8 @@ introspection and dunder walks (``__bases__`` / ``__mro__`` / ``__subclasses__``
 ``operator.attrgetter``, ``object.__getattribute__``, ``inspect``), ``sys.modules`` and
 ``from sys import modules``, ``gc`` / ``zipimport``, strings assembled at run time, calling a
 guarded function through a variable (``e = eval``), ``super(CompileOnlyMixin, w).cursor()`` and
-``BaseWrapper.cursor(w)`` inside ``compile/``, a connection reached through a non-Django name
+``BaseWrapper.cursor(w)`` (where the real wrapper class is importable), a class built with
+``type(...)``, ``for X in (BaseWrapper,)``, a connection reached through a non-Django name
 (``qs.query.get_compiler().connection.cursor()``; Django's async guards stop it at runtime),
 ``_private`` names taken from a public module (A203), ``BaseWrapper`` handed on through
 ``getattr(<asyncopation module>, "BaseWrapper")``, a star import, a call argument, ``return`` /

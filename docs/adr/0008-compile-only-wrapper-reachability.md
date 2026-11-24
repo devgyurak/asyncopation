@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak) - accepted 2026-11-24 after the Phase 1 spike (#29)
+- Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: to be confirmed in the PR review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -58,9 +59,9 @@ A-scoped, concretely:
    `compile_scope(alias, wrapper, *, autocommit)`. It remembers the current context's wrapper for
    `alias`, sets `connections[alias] = wrapper`, and restores the previous value (or deletes the
    entry when there was none) in `finally`; scopes nest as a stack (`get_compiler` inside
-   `as_sql`). Nothing inside a scope may `await`, so no other task can observe the swap, and a
+   `as_sql`). *Amended 2026-11-24 (#3, PR #45): the sentence "restores the previous value ... in `finally`" has one exception: a scope exited from another Context inside a running loop (below).* Nothing inside a scope may `await`, so no other task can observe the swap, and a
    cancellation cannot land inside it. It is entered per synchronous prepare phase, never for the
-   lifetime of a loop thread or task. A scope must be exited in the `contextvars` Context that
+   lifetime of a loop thread or task. *Amended 2026-11-24 (#3, PR #45): added.* A scope must be exited in the `contextvars` Context that
    entered it: inside a running loop, exiting from another Context (a generator handed to
    another task) would overwrite that Context's own swap and autocommit, so it is detected, the
    entry is left untouched and `ScopeContextError` is raised (an exception from the body wins,
@@ -76,22 +77,23 @@ A-scoped, concretely:
    suite's "zero sync connections" assertion.
 3. The wrapper's `autocommit` state is a scope argument, held in a `ContextVar` that the scope
    sets at entry and restores on exit; it is not an attribute of the wrapper, because a single
-   wrapper per alias is shared across tasks *and threads* (amended in #3 after a four-thread
-   experiment showed an instance attribute is read across threads). `compile` does not import
+   wrapper per alias is shared across tasks *and threads*. *Amended 2026-11-24 (#3, PR #45): autocommit is held in a `ContextVar` instead of an attribute of the wrapper, after a four-thread experiment showed an instance attribute is read across threads.* `compile` does not import
    `connection` / `transaction`; the caller (engine) passes `not pinned`. The wrapper overrides
    `get_autocommit` to return the value; the only compile-time reader is `compiler.py:861`
    (`select_for_update`). `connect` / `ensure_connection` / `_cursor` / `cursor` / `chunked_cursor`
-   / `create_cursor` / `get_new_connection` raise. Server info is injected before first use
+   / `create_cursor` / `get_new_connection` raise. *Amended 2026-11-24 (#3, PR #45): `cursor`, `chunked_cursor`, `create_cursor` and `get_new_connection` are added to the raising set.* Server info is injected before first use
    (`pg_version`; `mysql_server_data`). Concurrent tasks in different transaction modes
-   (`asyncio.gather`) and concurrent loop threads do not interfere. The one Django code path found
+   (`asyncio.gather`) and concurrent loop threads do not interfere. *Amended 2026-11-24 (#3, PR #45): the `compose_sql` override and its contract, the rest of this item.* The one Django code path found
    that asks for a live connection while generating SQL, `ops.compose_sql` (reached by
    `contrib.postgres` `SearchHeadline` options through `mogrify` -> `connection.cursor()`), is
    overridden by the compile-only operations with a plain-Python renderer: no driver (psycopg stays
    confined to `drivers/`) and no dependence on server settings. It supports exactly the types that
    caller passes: the *exact* built-in types `str`, `int`, `float`, `bool`, `None` and finite
    `Decimal`, byte for byte like Django on a live connection (checked in the integration tests
-   against both the C and the pure-Python psycopg implementation). Every other type raises
-   `TypeError` at build time: non-finite `Decimal`, dates, `bytes`, arrays, ranges and the like,
+   against both the C and the pure-Python psycopg implementation: `make test-compose-python`, run
+   in CI). Every other type raises `TypeError` at build time: dates, `bytes`, arrays, ranges and
+   the like, non-finite `Decimal` (the C implementation renders `-NaN` as ` -NaN` and `NaN123` as
+   `NaN123`, the pure-Python one every such value as `'NaN'::numeric`: no single live rendering),
    and every *subclass* (`IntEnum`, `TextChoices`, Django `Choices`, ...), because the two psycopg
    implementations disagree about subclasses (they call `__int__`, `encode`, `__contains__`,
    `__str__`, ... of the subclass or not) and an overridden `__str__` would put arbitrary text into
@@ -120,7 +122,7 @@ A-scoped, concretely:
    (ADR-0007), and within it only these operations: `connections.__setitem__` /
    `connections.__delitem__`, and the peek at the previous value through the private
    `connections._connections` (which avoids creating a real wrapper per task context just to
-   remember it). Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
+   remember it). *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
    `ensure_connection`, `connect`, `django.db.transaction`, and any other use of a sync
    connection. `compile.scope` calls the module, through the single context manager
    `swapped(alias, wrapper)` that the module exposes (it yields nothing, so the previous wrapper
@@ -129,6 +131,8 @@ A-scoped, concretely:
    `__import__`). This narrows the issue's "`compile` module"
    wording to the Django boundary module and to these operations. The guard implementation is
    done in #3, not in this ADR.
+
+   *Amended 2026-11-24 (#3, PR #45): the `swapped` form, the dynamic-import rejection, the `BaseWrapper` construction rules and the threat model below.*
 
    **Threat model of the guards (A101-A104).** They stop the code a contributor can write by
    accident: ordinary imports, attribute access, `getattr` with a constant name, and every route
@@ -143,7 +147,7 @@ A-scoped, concretely:
    a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, and a
    class built with `type(...)`. The guard itself requires a class based on `BaseWrapper` to list
    `CompileOnlyMixin` before it and rejects calling `BaseWrapper(...)`, and a unit test checks the
-   MRO of every Asyncopation subclass at run time. Also known: psycopg objects that an
+   MRO of every Asyncopation subclass (of any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an
    `asyncopation.drivers` module re-exports under a public name
    (`from asyncopation.drivers.postgresql import sql`): ADR-0003 forbids that as a convention
    that review enforces, not the guards.
@@ -151,7 +155,7 @@ A-scoped, concretely:
    invariant 2 and `.agents/rules/architecture.md` / `async-correctness.md` gain the
    `compile_scope` exception (the synchronous swap in `_django.connections`; no `await` inside it);
    ADR-0004's "never in a contextvar" is qualified: the swap uses asgiref's contextvar-backed
-   storage only transiently and carries no state across an `await`.
+   storage only transiently and carries no state across an `await`. *Amended 2026-11-24 (#3, PR #45): the `autocommit` `ContextVar` of Decision 3 is of the same kind: set and restored inside the synchronous scope, never read across an `await`, so ADR-0004's rule is qualified in the same way.*
 
 ## Spike results
 Method. **The sweep installed the compile-only wrapper permanently** as `connections["default"]` so that every reachable read is recorded (a superset of what a scope covers; which of them a scope must enclose is the contract in Decision item 2). One-off scripts, not committed; the same check is owned from now on by the "zero sync
@@ -234,6 +238,8 @@ reused unchanged.
   `_django.postgresql` pulls psycopg in through Django (drivers remain the only direct importers).
 
 ### Django internals this decision rests on
+*Amended 2026-11-24 (#3, PR #45): the table below is updated: the `_connections` row, the `asgiref.local` row, the `base.base` row (more methods pinned, `ensure_connection` not pinned), the `postgresql.base` row and the `compose_sql` row.*
+
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
 (unless marked `ported = true`) and `[[attribute]]` entries never accessed in `src/`, so these enter
 `docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
@@ -259,7 +265,8 @@ in the PR that first uses them (#3 / #6 / Phase 5):
 
 ## Consequences
 Unblocks Phase 1 `acount` / aggregate paths and the write compilers. Follow-ups: #3 adds the A102
-exception for `asyncopation._django.connections` (operations listed in Decision 6),
+exception for `asyncopation._django.connections` (operations listed in Decision 6, which run
+through `swapped`; *Amended 2026-11-24 (#3, PR #45): the parenthesis*),
 `compile_scope`, server-info injection and the "zero sync connections" assertion; #6 ports
 `get_aggregation` / `has_results` and the MySQL composed wrapper with its drift test; Phase 5 ports
 `pre_sql_setup` as a core. ADR-0002 and ADR-0004 refer to this ADR for how compilers reach the
@@ -285,3 +292,4 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
   `union()`; `aexists()`; materialization after the scope has exited.
 - Phase 5: `pre_sql_setup` core against MySQL related / multi-table updates; `bulk_create`,
   `bulk_update` prepare phases inside a scope.
+- *Amended 2026-11-24 (#3, PR #45): new Validation items (they tighten the list above):* a scope exited from another Context inside a running loop raises `ScopeContextError` and leaves that Context's swap and autocommit untouched (`GeneratorExit` is not counted as a failure); concurrent threads and tasks read their own `autocommit` (the four-thread race test); `compose_sql` equals Django's live output for the exact types on both psycopg implementations (`make test-compose-python`) and every other type raises `TypeError`; the guard rejects `BaseWrapper(...)` and a `BaseWrapper` subclass without `CompileOnlyMixin` first, and a unit test checks the MRO of every Asyncopation wrapper class.

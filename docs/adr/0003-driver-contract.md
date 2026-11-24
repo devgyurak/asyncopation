@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-24 (#3, PR #45) - Context (Django's `get_adapters_template` reaches the driver through the `_django/postgresql_adapters.py` boundary), Consequences (A104 confinement of psycopg re-exports, the adapter boundary module importable only by `drivers/postgresql`, Django's `mogrify` unused, drivers export no psycopg objects), new Validation items; approved by: to be confirmed in the PR review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs
@@ -13,7 +14,7 @@ than mysqlclient). It does not say how capabilities are expressed, where differe
 absorbed, or how driver exceptions reach users.
 
 Django's sync backends do more than pick a driver: PostgreSQL `get_connection_params` passes
-`context=get_adapters_template(use_tz, timezone)` (non-public `psycopg_any`), `prepare_threshold`,
+`context=get_adapters_template(use_tz, timezone)` (non-public `psycopg_any`; *Amended 2026-11-24 (#3, PR #45): the driver reaches it through `_django/postgresql_adapters.py`*), `prepare_threshold`,
 `client_encoding`, the cursor factory / `server_side_binding`; `_configure_connection` sets
 `TimeZone` and `assume_role`. MySQL connects with `client_flag=CLIENT.FOUND_ROWS`, `utf8mb4`,
 `init_command`, the isolation level and `SET SQL_AUTO_IS_NULL = 0`. `FOUND_ROWS` decides whether
@@ -117,12 +118,13 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 ## Consequences
 + `engine`/`query` stay backend-agnostic; a new backend is one driver module.
 - Drivers must track Django's connection setup; every non-public helper they reuse
-(`get_adapters_template`, server-side cursor classes) is ledgered and drift-tested. The psycopg
-  names Django's modules re-export (`psycopg_any`: `adapt`, `sql`, `ClientCursor`, `errors`, `Jsonb`,
-  ranges, ...; `postgresql.base.Database`, ...) are driver API and may be used only in `drivers/`
-  (guard A104, table in `tools/guards/reexports.py`, pinned against the installed Django). Django's
-  own adapter helpers in those modules (`get_adapters_template`, `register_tzloader`) are imported
-  by one `_django` boundary module, `_django/postgresql_adapters.py` (the psycopg driver's
+  (`get_adapters_template`, server-side cursor classes) is ledgered and drift-tested.
+  *Amended 2026-11-24 (#3, PR #45): the rest of this bullet is new.* The psycopg names Django's
+  modules re-export (`psycopg_any`: `adapt`, `sql`, `ClientCursor`, `errors`, `Jsonb`, ranges, ...;
+  `postgresql.base.Database`, ...) are driver API and may be used only in `drivers/` (guard A104,
+  table in `tools/guards/reexports.py`, pinned against the installed Django). Django's own adapter
+  helpers in those modules (`get_adapters_template`, `register_tzloader`) are imported by one
+  `_django` boundary module, `_django/postgresql_adapters.py` (the psycopg driver's
   `adapters_template`), which only `drivers/postgresql` may import (guard A104); Django's `mogrify`
   (it renders through a cursor) is used nowhere; a driver cursor's own `.mogrify` is driver API.
   Drivers do not export psycopg objects under public names of their own
@@ -138,4 +140,5 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
   a killed connection raises `OperationalError` and is not returned to the pool.
 - *Amended 2026-11-24 (#2, PR #46):* integration: `server_side_binding=True` statements and streams
   behave like the sync backend (values, cursors, withhold)
+- *Amended 2026-11-24 (#3, PR #45): new Validation items:* the A104 table in `tools/guards/reexports.py` lists every psycopg name the installed Django's PostgreSQL, MySQL and PostGIS modules bind (drift test), and `mogrify` of a Django module appears nowhere in `src`.
 - integration: `HStoreField` round-trip once `contrib.postgres` is in the harness.

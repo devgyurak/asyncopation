@@ -96,7 +96,7 @@ request and on pushes to `develop` and `main`, so back-merges and bypass merges 
 | Test rules: GWT, zero control flow (T1xx-T3xx) | `tools/guards` | same |
 | Language: English + translations (L1xx/L2xx) | `tools/guards` | same |
 | Agent config drift | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
-| Correctness | pytest differential tests on 3 backends | `make test-int`, CI matrix |
+| Correctness | pytest differential tests on 3 backends; `compose_sql` also against the pure-Python psycopg | `make test-int`, `make test-compose-python`, CI matrix |
 | End to end | uvicorn + httpx | `make test-e2e`, CI |
 | Performance | micro + k6 harness | `make bench-micro` / `make bench`, CI (manual / nightly) |
 | Branch flow | GitHub rulesets + `branch-policy.yml` + `CODEOWNERS` | every push / PR to `develop` and `main` |

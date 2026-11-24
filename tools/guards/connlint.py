@@ -413,6 +413,12 @@ class _Checker:
                 self.flag(node, "`getattr` with a computed name on an `asyncopation` object")
             return
         name = node.args[1].value
+        if name == "_django" and _root(node.args[0]) in self.package_roots and not self.in_django:
+            self.flag(
+                node,
+                "reaching `asyncopation._django` through a bound `asyncopation` name hides the "
+                "boundary rules - use `from asyncopation._django.<module> import <name>`",
+            )
         if name in BANNED_NAMES and _root(node.args[0]) in self.roots:
             self.flag(node, f"`getattr(..., {name!r})` reaches Django's connection machinery")
         if name in SWAP_NAMES and not (self.importer or self.exempt):

@@ -60,7 +60,7 @@ agents-check: ## Fail if generated agent files drifted from .agents/
 	uv run python -m tools.agentsync --check
 
 # ------------------------------------------------------------------ tests
-.PHONY: test-unit test-int test-int-all test-e2e test
+.PHONY: test-unit test-int test-int-all test-compose-python test-e2e test
 test-unit: ## Unit tests (no DB)
 	uv run pytest tests/unit $(PYTEST_ARGS)
 
@@ -71,6 +71,10 @@ test-int-all: ## Integration tests on postgresql, mysql and mariadb
 	$(MAKE) test-int ASYNCOPATION_DB=postgresql
 	$(MAKE) test-int ASYNCOPATION_DB=mysql
 	$(MAKE) test-int ASYNCOPATION_DB=mariadb
+
+test-compose-python: ## compose_sql / compile differential against the pure-Python psycopg (PostgreSQL, needs libpq + db-up)
+	PSYCOPG_IMPL=python ASYNCOPATION_DB=postgresql uv run pytest \
+		tests/integration/test_compose_sql_live.py tests/integration/test_compile_scope_differential.py $(PYTEST_ARGS)
 
 test-e2e: ## End-to-end tests against uvicorn (needs db-up)
 	uv run pytest tests/e2e $(PYTEST_ARGS)

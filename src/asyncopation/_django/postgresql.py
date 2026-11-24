@@ -41,24 +41,27 @@ class CompileOperations(DatabaseOperations):
     tests/integration against both the C and the pure-Python psycopg implementation): ``str``
     (quotes doubled; a string with a backslash becomes `` E'...'`` with doubled backslashes, which
     is correct whatever ``standard_conforming_strings`` is), ``int``, ``float`` (``'NaN'::float8``
-    and ``'Infinity'::float8`` for the special values), finite ``Decimal`` (a leading space for
-    negative numbers), ``bool`` and ``None`` (``NULL``).
+    and ``'Infinity'::float8`` for the special values), finite ``Decimal``, ``bool`` and ``None``
+    (``NULL``). Negative numbers (``int``, ``float`` and ``Decimal``) get a leading space.
 
     Only the *exact* built-in types are rendered. A subclass (``IntEnum``, ``TextChoices``, a
     Django ``Choices`` enum, ...) raises ``TypeError``: the C and the pure-Python psycopg
     implementations disagree about subclasses (they call ``__int__``, ``encode``, ``__contains__``
     or ``__str__`` of the subclass, or not), so no single rendering is the live one, and an
-    overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays, ranges,
-    non-finite ``Decimal`` and the like depend on the driver's adapters and raise ``TypeError`` too,
-    at build time.
+    overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays and ranges
+    depend on the driver's adapters and raise ``TypeError`` too, at build time, and so does a
+    non-finite ``Decimal``: the C implementation renders ``-NaN`` as `` -NaN`` and ``NaN123`` as
+    ``NaN123`` while the pure-Python one renders every such value as ``'NaN'::numeric``, so there
+    is no single live rendering.
 
     ``sql`` is encoded first (a lone surrogate raises ``UnicodeEncodeError``, with or without
     ``params``). ``params`` must be exactly a list or a tuple (``None`` returns ``sql`` untouched).
     Only ``%s`` and ``%%`` are understood; the placeholder shapes and the parameter count are
     checked before any value is rendered, as psycopg does. Other placeholders and wrong parameter
-    counts raise ``ValueError``, named placeholders ``TypeError`` (a live connection raises
-    psycopg's ``ProgrammingError`` for wrong counts and renders ``%b`` and ``%t``: the exception
-    classes differ, and these two placeholders are not supported). A NUL character in a string
+    counts raise ``ValueError``; ``Mapping`` params raise ``TypeError`` (``%(name)s`` with a list is
+    an unsupported placeholder, ``ValueError``). A live connection raises psycopg's
+    ``ProgrammingError`` for wrong counts and renders ``%b`` and ``%t``: the exception classes
+    differ, and these two placeholders are not supported. A NUL character in a string
     raises ``ValueError`` (a live connection raises psycopg's ``DataError``; matching it would need
     psycopg), a lone surrogate ``UnicodeEncodeError`` like a live connection. A string with both
     raises ``UnicodeEncodeError`` (the C implementation's order; the pure-Python one reports the
@@ -125,5 +128,6 @@ def _literal(value: object) -> str:
         if "\\" in quoted:
             return " E'" + quoted.replace("\\", "\\\\") + "'"
         return f"'{quoted}'"
-    note = " (only exact built-in types are rendered)" if kind.__module__ != "builtins" else ""
+    subclass = isinstance(value, str | int | float | Decimal)  # an exact type returned above
+    note = " (only exact built-in types are rendered)" if subclass else ""
     raise TypeError(f"compose_sql cannot render {kind.__name__}{note} without a driver")

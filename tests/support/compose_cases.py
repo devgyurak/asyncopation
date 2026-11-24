@@ -251,6 +251,7 @@ REJECTED_CASES = [
     P("%t", (1,), "ValueError", "unsupported placeholder %t", id="text-placeholder"),
     P("%x", (1,), "ValueError", "unsupported placeholder %x", id="unknown-placeholder"),
     P("100%", (), "ValueError", "unsupported placeholder %", id="dangling-percent"),
+    P("%\n", (1,), "ValueError", "unsupported placeholder %\n", id="percent-newline"),
     P("%s %s", (1,), "ValueError", "not enough parameters", id="too-few-params"),
     P("%s", (1, 2), "ValueError", "too many parameters", id="too-many-params"),
     P("%s", (1, None), "ValueError", "too many parameters", id="too-many-with-none"),

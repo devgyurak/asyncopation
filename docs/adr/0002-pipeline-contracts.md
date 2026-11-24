@@ -81,9 +81,11 @@ QuerySet (Django, lazy)
 - differential: `alist` / `acount` on `qs[:3]`, `distinct()`, `annotate()` + count (aggregate
   compiler); `extra(select=...)` + `order_by` (col_count trimming); `filter(pk__in=[])` issues zero
   queries; chunked `aiterator` under `FETCH_PEERS`.
-- differential: a composite-pk model - `BookEdition` (`CompositePrimaryKey("book", "number")`) is
-  in `harness/catalog` (migration, seed, `EXPECTED_COUNTS`) and has reference differential cases
-  (`all`, `values()`, `values_list("pk", flat=True)`, `select_related("book")`, `get`) in
-  `test_harness_selfcheck.py`. The asyncopation-side differential (`alist` / `aget`) is tracked in #6.
+- differential: a composite-pk model must produce the same rows, tuple pks included, through
+  asyncopation as through the sync ORM (`alist` / `aget`, tracked in #6). `BookEdition`
+  (`CompositePrimaryKey("book", "number")`) is in `harness/catalog` (migration, seed,
+  `EXPECTED_COUNTS`) with reference cases in `test_harness_selfcheck.py`; the cases that exercise
+  the tuple conversion path are those selecting `pk` explicitly (`values("pk", ...)`,
+  `values_list("pk", ...)`).
 - unit: materializer over a recording driver returns the same instances as `results_iter` on
   fixed rows.

@@ -53,6 +53,18 @@ async def test_seed_creates_expected_row_counts(readonly_db, model_name, expecte
             lambda: BookEdition.objects.select_related("book").order_by("pk")[:20],
             id="composite-pk-select-related",
         ),
+        pytest.param(
+            lambda: BookEdition.objects.values("pk", "isbn").order_by("pk"),
+            id="composite-pk-values-named-pk",
+        ),
+        pytest.param(
+            lambda: BookEdition.objects.values_list("isbn", "pk").order_by("pk"),
+            id="composite-pk-values-list-pk-last",
+        ),
+        pytest.param(
+            lambda: BookEdition.objects.values_list("pk", "released").order_by("pk"),
+            id="composite-pk-values-list-pk-released",
+        ),
     ],
 )
 async def test_reference_list_matches_sync(readonly_db, reference_differential, build):

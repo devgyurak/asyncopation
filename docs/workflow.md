@@ -66,7 +66,8 @@ Branches: work happens on `<prefix>/<kebab-summary>` branches cut from `develop`
 into `develop`; `main` only receives release merges. GitHub rulesets enforce it: merging into
 `develop` needs the code owner's (@devgyurak) approval, which the maintainer may bypass;
 nobody can push to `main`, which only accepts PRs from `develop`. Releases are `vX.Y.Z` tags on
-`main`; pushing a tag runs the release CI (to be built, #26). Commit/PR titles use one prefix:
+`main`; pushing a tag runs the release CI (to be built, #26). CI (`ci.yml`) runs on every pull
+request and on pushes to `develop` and `main`, so back-merges and bypass merges are checked too. Commit/PR titles use one prefix:
 `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (the `commit` skill).
 
 ## 3. Sub-agents

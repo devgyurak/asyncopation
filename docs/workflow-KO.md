@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=944edaa8f522 -->
+<!-- i18n: source=docs/workflow.md source-sha256=72cc98ef8776 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -66,7 +66,8 @@ AGENTS.md 인덱스 블록                               Codex, Pi (Claude는 CL
 보낸다. `main`은 릴리스 머지만 받는다. GitHub ruleset으로 강제된다: `develop` 머지에는 코드 오너
 (@devgyurak)의 승인이 필요하고 메인테이너는 bypass 머지할 수 있다. `main`에는 누구도 직접 푸시할 수
 없고 `develop`에서 온 PR만 받는다. 릴리스는 `main`의 `vX.Y.Z` 태그이고, 태그를 푸시하면 릴리스 CI가
-돈다(아직 없음, #26). 커밋/PR 제목은 접두사 하나를 쓴다:
+돈다(아직 없음, #26). CI(`ci.yml`)는 모든 PR과 `develop`·`main` 푸시에서 돌기 때문에 back-merge와
+bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (`commit` 스킬).
 
 ## 3. 서브 에이전트

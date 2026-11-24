@@ -6,9 +6,9 @@ description: Start, stop, reset and troubleshoot the docker-compose test databas
 
 | Backend | Service | Host port | `ASYNCOPATION_DB` |
 |---|---|---|---|
-| PostgreSQL 17 | `postgres` | 56432 | `postgresql` (default) |
-| MySQL 8.4 | `mysql` | 53306 | `mysql` |
-| MariaDB 11.8 | `mariadb` | 53307 | `mariadb` |
+| PostgreSQL 17 | `postgres` | 25432 | `postgresql` (default) |
+| MySQL 8.4 | `mysql` | 23306 | `mysql` |
+| MariaDB 11.8 | `mariadb` | 23307 | `mariadb` |
 
 User/password/database: `asyncopation` / `asyncopation` / `asyncopation`. Data lives on tmpfs.
 

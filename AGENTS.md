@@ -16,7 +16,7 @@ Read before non-trivial work: `docs/design/plan.md` (plan and roadmap), `docs/ar
 | Task | Command |
 |---|---|
 | Install | `uv sync` |
-| Databases | `make db-up` / `make db-down` (docker compose: postgres 56432, mysql 53306, mariadb 53307) |
+| Databases | `make db-up` / `make db-down` (docker compose: postgres 25432, mysql 23306, mariadb 23307) |
 | Fast gate | `make check` (ruff format check, ruff lint, ty, import-linter, guards, agents-check, unit tests) |
 | Format | `make fmt` (ruff format + ruff check --fix) |
 | Integration | `make test-int` (`ASYNCOPATION_DB=postgresql\|mysql\|mariadb`) |

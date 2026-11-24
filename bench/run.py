@@ -65,13 +65,13 @@ class ConnectionCounter:
             import psycopg
 
             self.conn = await psycopg.AsyncConnection.connect(
-                host="127.0.0.1", port=56432, user="asyncopation", password="asyncopation",
+                host="127.0.0.1", port=25432, user="asyncopation", password="asyncopation",
                 dbname="asyncopation", autocommit=True,
             )  # fmt: skip
         else:
             import asyncmy
 
-            port = 53306 if self.vendor == "mysql" else 53307
+            port = 23306 if self.vendor == "mysql" else 23307
             self.conn = await asyncmy.connect(
                 host="127.0.0.1",
                 port=port,

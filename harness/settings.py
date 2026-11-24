@@ -16,9 +16,9 @@ VENDOR = os.environ.get("ASYNCOPATION_DB", "postgresql")
 HOST = os.environ.get("ASYNCOPATION_DB_HOST", "127.0.0.1")
 
 _BACKENDS: dict[str, dict[str, Any]] = {
-    "postgresql": {"ENGINE": "django.db.backends.postgresql", "PORT": 56432},
-    "mysql": {"ENGINE": "django.db.backends.mysql", "PORT": 53306},
-    "mariadb": {"ENGINE": "django.db.backends.mysql", "PORT": 53307},
+    "postgresql": {"ENGINE": "django.db.backends.postgresql", "PORT": 25432},
+    "mysql": {"ENGINE": "django.db.backends.mysql", "PORT": 23306},
+    "mariadb": {"ENGINE": "django.db.backends.mysql", "PORT": 23307},
 }
 
 if VENDOR not in _BACKENDS:

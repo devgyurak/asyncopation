@@ -1,7 +1,8 @@
 # Databases for tests, e2e and benchmarks. Data lives on tmpfs, so a restart wipes it.
 #   make db-up                    # postgres + mysql + mariadb
 #   make db-up SERVICES=postgres  # just one
-# Host ports use the 5xxxx range to avoid clashing with locally installed databases.
+# Host ports avoid default DB ports (local installs) and stay below 32768, outside the OS
+# ephemeral port ranges (Linux 32768-60999, macOS 49152-65535) where random collisions happen.
 name: asyncopation
 
 x-healthcheck: &healthcheck
@@ -19,7 +20,7 @@ services:
     command: >
       postgres -c fsync=off -c synchronous_commit=off -c full_page_writes=off
                -c max_connections=500 -c shared_buffers=256MB
-    ports: ["56432:5432"]
+    ports: ["25432:5432"]
     tmpfs: [/var/lib/postgresql/data]
     healthcheck:
       <<: *healthcheck
@@ -35,7 +36,7 @@ services:
     command: >
       --max-connections=500 --innodb-flush-log-at-trx-commit=0 --skip-log-bin
       --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci
-    ports: ["53306:3306"]
+    ports: ["23306:3306"]
     tmpfs: [/var/lib/mysql]
     volumes: [./docker/mysql-init:/docker-entrypoint-initdb.d:ro]
     healthcheck:
@@ -51,7 +52,7 @@ services:
       MARIADB_PASSWORD: asyncopation
       MARIADB_DATABASE: asyncopation
     command: --max-connections=500 --innodb-flush-log-at-trx-commit=0
-    ports: ["53307:3306"]
+    ports: ["23307:3306"]
     tmpfs: [/var/lib/mysql]
     volumes: [./docker/mysql-init:/docker-entrypoint-initdb.d:ro]
     healthcheck:

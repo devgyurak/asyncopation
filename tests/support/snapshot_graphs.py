@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 from typing import Any, cast
 
@@ -42,7 +43,7 @@ def make_author(
 
 
 def make_book(author: Author | Unloaded | None = UNLOADED) -> Book:
-    book = Book(pk=1, title="t", pages=1, price=1, author_id=1)
+    book = Book(pk=1, title="t", pages=1, price=Decimal("1.00"), author_id=1)
     if author is not UNLOADED:
         cache_related(book, "author", author)
     return book

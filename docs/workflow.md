@@ -92,7 +92,7 @@ request and on pushes to `develop` and `main`, so back-merges and bypass merges 
 | Format, lint | ruff | edit hook, `make lint`, pre-commit, CI |
 | Types | ty | `make typecheck`, CI |
 | Layers | import-linter | `make guard`, pre-commit, CI |
-| Architecture rules (A1xx/A2xx) | `tools/guards` | edit hook, `make guard`, pre-commit, CI |
+| Architecture rules (A1xx/A2xx, incl. A203: private Django imports only in `asyncopation._django`) | `tools/guards` | edit hook, `make guard`, pre-commit, CI |
 | Test rules: GWT, zero control flow (T1xx-T3xx) | `tools/guards` | same |
 | Language: English + translations (L1xx/L2xx) | `tools/guards` | same |
 | Agent config drift | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |

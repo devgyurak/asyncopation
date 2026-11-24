@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=72cc98ef8776 -->
+<!-- i18n: source=docs/workflow.md source-sha256=ca6845867281 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -92,7 +92,7 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 포맷, 린트 | ruff | 편집 훅, `make lint`, pre-commit, CI |
 | 타입 | ty | `make typecheck`, CI |
 | 레이어 | import-linter | `make guard`, pre-commit, CI |
-| 아키텍처 규칙 (A1xx/A2xx) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
+| 아키텍처 규칙 (A1xx/A2xx, A203 포함: 비공개 Django import는 `asyncopation._django`에서만) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
 | 테스트 규칙: GWT, 제어문 0개 (T1xx-T3xx) | `tools/guards` | 위와 동일 |
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |

@@ -186,20 +186,21 @@ reused unchanged.
   `_django.postgresql` pulls psycopg in through Django (drivers remain the only direct importers).
 
 ### Django internals this decision rests on
-Guard A202 rejects ledger entries for code that is not in `src/` yet, so these enter
+Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
+(unless marked `ported = true`) and `[[attribute]]` entries never accessed in `src/`, so these enter
 `docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
 in the PR that first uses them (#3 / #6 / Phase 5):
 
 | Module | Names | Planned consumer | Why |
 |---|---|---|---|
-| `django.utils.connection` | `BaseConnectionHandler._connections` | `_django/connections.py` | peek at the context's wrapper without creating one |
+| `django.utils.connection` | `BaseConnectionHandler._connections` (an `[[attribute]]` entry) | `_django/connections.py` | peek at the context's wrapper without creating one |
 | `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on (drift test) |
 | `django.db.models.sql.query` | `Query.get_aggregation`, `get_count`, `get_compiler`, `has_results`, `exists` | `_django/aggregation.py` | `acount()` / `aexists()` ports |
 | `django.db.models.sql.compiler` | `SQLAggregateCompiler.as_sql`, `SQLCompiler.get_combinator_sql`, `get_qualify_sql`, `as_sql`, `SQLUpdateCompiler.pre_sql_setup`, `execute_sql` | `compile/scope.py`, `_django/update.py` | re-resolution, `get_autocommit` in `as_sql`, I/O in `pre_sql_setup` |
 | `django.db.backends.base.base` | `BaseDatabaseWrapper.get_autocommit`, `ensure_connection` | `compile/wrapper.py` | overridden in the compile-only wrapper |
-| `django.db.backends.mysql.base` | `DatabaseWrapper._data_types`, `operators`, `pattern_esc`, `pattern_ops`, `isolation_levels`, `mysql_server_data` | `_django/mysql.py` | ported, not imported (it imports MySQLdb); drift test reads the source |
+| `django.db.backends.mysql.base` | `DatabaseWrapper._data_types`, `operators`, `pattern_esc`, `pattern_ops`, `isolation_levels`, `mysql_server_data` | `_django/mysql.py` | ported, not imported (it imports MySQLdb): `ported = true`, the drift test reads the source |
 | `django.db.backends.mysql.{features,operations,compiler}` | `DatabaseFeatures`, `DatabaseOperations`, compiler classes | `_django/mysql.py` | composed into the wrapper; none imports MySQLdb |
-| `django.db.backends.postgresql.base` | `DatabaseWrapper.pg_version` | `_django/postgresql.py` | injected into `__dict__` |
+| `django.db.backends.postgresql.base` | `DatabaseWrapper.pg_version` (an `[[attribute]]` entry) | `_django/postgresql.py` | injected into `__dict__` |
 
 ### Deviations from the working hypothesis
 1. `connections` is per async context inside a loop, not per loop thread (above).

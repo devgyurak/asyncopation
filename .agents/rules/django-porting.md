@@ -19,7 +19,13 @@ paths:
    queries ContentType on a cache miss. Ported orchestration is a sans-I/O generator core
    (ADR-0007), not an `async def` copy.
 5. **Import internals only in `asyncopation._django`** and ledger every one in `docs/django-api-ledger.toml` (`module`, `names`,
-   `used_by` (the real consumers), `reason`, `verified_against`). The guard rejects unknown internals (A201) and
-   stale entries (A202).
+   `used_by` (the real consumers), `reason`, `verified_against`). The guard rejects unknown internals (A201),
+   private Django imports outside `_django` (A203) and stale entries (A202: an `[[internal]]` item not
+   imported under `_django`, an `[[attribute]]` never accessed). Add `signatures = { "Name.method" = "<str(inspect.signature)>" }`
+   (dotted keys must be quoted) for callables whose signature you depend on, mark code you only port and
+   never import (the MySQL backend) `ported = true`, and register every Django private attribute you access
+   directly, inside `_django` or not (`qs._fetch_mode`), as an `[[attribute]]` (`owner`, `names`, `used_by`,
+   `reason`, `verified_against`); the drift test (`tests/unit/django_drift`) checks all of it against installed Django.
+   The guard cannot detect private attribute access - arch review does.
 6. **Differential test every port** against the sync implementation on all backends.
 7. When the `django-main` CI canary breaks, update ports and bump `verified_against`.

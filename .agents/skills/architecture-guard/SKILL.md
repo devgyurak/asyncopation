@@ -8,7 +8,7 @@ description: Run, interpret and extend the mechanical architecture/test/language
 | Tool | Command | Enforces |
 |---|---|---|
 | import-linter | `uv run lint-imports` | layer order, compile purity, driver independence (`[tool.importlinter]` in pyproject.toml) |
-| tools/guards archlint | `uv run python -m tools.guards` | A101 banned modules, A102 Django sync connection/transaction, A103 blocking calls, A104 driver confinement, A105 async in compile, A201/A202 Django API ledger |
+| tools/guards archlint | `uv run python -m tools.guards` | A101 banned modules, A102 Django sync connection/transaction, A103 blocking calls, A104 driver confinement, A105 async in compile, A201 unledgered Django import, A202 stale ledger entry, A203 private Django import outside `_django` |
 | tools/guards testlint | same | T101 control flow, T201-T206 Given/When/Then, T301 sleep |
 | tools/guards langlint | same | L101/L102 English-only, L201-L203 translations |
 | ruff | `uv run ruff check` | style, bugbear, async pitfalls (ASYNC), banned `asgiref.sync` (TID251) |

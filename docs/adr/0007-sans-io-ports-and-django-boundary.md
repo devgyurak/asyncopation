@@ -60,14 +60,18 @@ differential tests of the core itself. - generator protocol is less familiar.
 4. **Helpers.** Django helpers are reused only after an I/O audit. Known hidden I/O: the
    ContentType cache (warmed by an async port before GFK prefetch).
 5. **`asyncopation._django`** (new bottom layer) is the only package that imports non-public Django
-   APIs; private attribute access (`qs._fetch_mode`, `compiler.klass_info`, `obj._state.peers`,
-   `_prefetch_related_lookups`, ...) goes through `_django` accessors or is listed in the drift
-   test. It is split per backend (`_django.postgresql`, `_django.mysql`, imported lazily) so
+   APIs. Private attribute access (`qs._fetch_mode`, `compiler.klass_info`, `obj._state.peers`,
+   `_prefetch_related_lookups`, ...) goes through `_django` accessors, and every such attribute is
+   registered in the ledger and drift-tested. It is split per backend (`_django.postgresql`, `_django.mysql`, imported lazily) so
    importing `_django` never requires both driver libraries. A drift test asserts every symbol
-   still exists with the expected signature on the pinned Django version. Enforcement is a
-   `tools/guards` check (follow-up issue); until then, arch-guardian enforces it in review.
+   still exists with the expected signature on the pinned Django version. Enforced by guard A203
+   (#30): a private Django import outside `asyncopation/_django/` is a violation. Direct private
+   attribute access cannot be detected without false positives, so arch-guardian reviews it.
 6. **Ledger semantics.** Ledger entries keep `used_by` listing the real consumers (not just
-   `_django`); A202 staleness is checked against `_django`'s imports plus the drift-test list.
+   `_django`); A202 flags an `[[internal]]` entry that nothing under `_django` imports (unless it is
+   `ported`) and an `[[attribute]]` never accessed in `src/`. The drift-test list is the ledger itself: `[[internal]]` entries (optionally with `signatures`) and
+   `[[attribute]]` entries (every private attribute we access directly, inside `_django` or not, with its owner class). Code that
+   is ported but never imported (e.g. the MySQL backend) is marked `ported = true`.
 7. The **sync runner** over Django's own cursor lives in `tests/support/` (`src/` cannot import
    `django.db.connections`).
 

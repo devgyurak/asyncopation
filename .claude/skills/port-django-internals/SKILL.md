@@ -17,9 +17,10 @@ description: Procedure for porting or reusing Django internals (ModelIterable, p
    ```
 4. **Ledger**: add or extend an `[[internal]]` entry in `docs/django-api-ledger.toml`
    (`module`, `names`, `used_by`, `reason`, `verified_against = "<django version>"`; optional
-   `signatures = { Name = "<str(inspect.signature(obj))>" }`). Import it only inside
-   `src/asyncopation/_django/` (A203). Private attributes you access directly (`qs._fetch_mode`)
-   get an `[[attribute]]` entry (`owner` dotted class path, `names`, `used_by`, `reason`,
+   `signatures = { "Name.method" = "<str(inspect.signature(obj))>" }` with dotted keys quoted;
+   `ported = true` when you port it without importing it). Import it only inside
+   `src/asyncopation/_django/` (A203). Every private attribute you access directly (`qs._fetch_mode`), inside `_django` or not,
+   gets an `[[attribute]]` entry (`owner` dotted class path, `names`, `used_by`, `reason`,
    `verified_against`). `tests/unit/django_drift` verifies every entry against installed Django.
 5. **Tests**: differential tests covering every branch you ported (backends included).
 6. **Verify**: `uv run python -m tools.guards` (no A201/A202/A203), `uv run lint-imports`.

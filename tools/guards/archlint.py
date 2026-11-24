@@ -9,8 +9,9 @@ Codes
     A104  driver library imported outside ``asyncopation.drivers``
     A105  async code inside the compile-only layer
     A201  Django import not covered by docs/django-api-ledger.toml
-    A202  stale ledger entry (full scans only): an [[internal]] item not imported under
-          ``asyncopation/_django/``, or an [[attribute]] name never accessed as ``.name`` in src
+    A202  stale ledger entry (full scans only): an [[internal]] item (not marked ``ported``)
+          not imported under ``asyncopation/_django/``, or an [[attribute]] name never accessed
+          as ``.name`` in src
     A203  private Django import (module not in the ledger's [public] list) outside
           ``asyncopation/_django/`` (ADR-0007 Decision 5); independent of A201
 
@@ -19,6 +20,8 @@ register them as ledger [[attribute]] entries; the drift test protects them and 
 catches the unregistered ones. The attribute staleness check is best-effort: it matches the
 attribute name (or a string constant, for ``getattr``) anywhere in src, regardless of owner.
 ``from M import n`` counts as an import of ``M.n`` when that is a Django submodule.
+Known limits: dynamic imports (``import_module("django...")``) and ``_private`` names taken from
+a public module are not detected by A203.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import importlib.util
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 from tools.guards.core import ROOT, Violation, parse
 
@@ -66,31 +70,50 @@ class Ledger:
     public: frozenset[str]
     internal: frozenset[tuple[str, str]]  # (module, name); name "*" covers `import module`
     attributes: frozenset[tuple[str, str]] = field(default_factory=frozenset)  # (owner path, name)
-    signatures: frozenset[tuple[str, str, str]] = field(  # (module, name, str(signature))
+    signatures: frozenset[tuple[str, str, str]] = field(  # (module, dotted name, str(signature))
         default_factory=frozenset
     )
+    attribute_signatures: frozenset[tuple[str, str, str]] = field(  # (owner path, name, signature)
+        default_factory=frozenset
+    )
+    ported: frozenset[tuple[str, str]] = field(
+        default_factory=frozenset
+    )  # (module, name) not imported
 
     @classmethod
     def load(cls) -> Ledger:
-        data = tomllib.loads((ROOT / LEDGER_PATH).read_text())
-        internal = {
-            (entry["module"], name)
-            for entry in data.get("internal", [])
-            for name in entry.get("names", ["*"])
-        }
-        signatures = {
-            (entry["module"], name, signature)
-            for entry in data.get("internal", [])
-            for name, signature in entry.get("signatures", {}).items()
-        }
-        attributes = {
-            (entry["owner"], name) for entry in data.get("attribute", []) for name in entry["names"]
-        }
+        return cls.from_toml((ROOT / LEDGER_PATH).read_text())
+
+    @classmethod
+    def from_toml(cls, text: str) -> Ledger:
+        data = tomllib.loads(text)
+        internal, signatures, ported = set(), set(), set()
+        for entry in data.get("internal", []):
+            module = _require(entry, "[[internal]]", "module", str)
+            names = _names(entry, "[[internal]]", default=["*"])
+            for name in names:
+                internal.add((module, name))
+                if entry.get("ported", False):
+                    ported.add((module, name))
+                if name != "*" and _is_django_submodule(module, name):
+                    raise ValueError(
+                        f"[[internal]] {module}: `{name}` is a submodule - "
+                        f'use module = "{module}.{name}" instead'
+                    )
+            signatures |= _signatures(entry, module, names, "[[internal]]")
+        attributes, attribute_signatures = set(), set()
+        for entry in data.get("attribute", []):
+            owner = _require(entry, "[[attribute]]", "owner", str)
+            names = _names(entry, "[[attribute]]")
+            attributes |= {(owner, name) for name in names}
+            attribute_signatures |= _signatures(entry, owner, names, "[[attribute]]")
         return cls(
             frozenset(data["public"]["modules"]),
             frozenset(internal),
             frozenset(attributes),
             frozenset(signatures),
+            frozenset(attribute_signatures),
+            frozenset(ported),
         )
 
     def covers(self, module: str, name: str) -> bool:
@@ -99,6 +122,34 @@ class Ledger:
             or (module, name) in self.internal
             or (module, "*") in self.internal
         )
+
+
+def _require(entry: dict, kind: str, key: str, expected: type) -> Any:
+    value = entry.get(key)
+    if not isinstance(value, expected):
+        raise ValueError(f"{kind} entry {entry!r}: `{key}` must be a {expected.__name__}")
+    return value
+
+
+def _names(entry: dict, kind: str, default: list[str] | None = None) -> list[str]:
+    names = entry.get("names", default)
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+        raise ValueError(f"{kind} entry {entry!r}: `names` must be a non-empty list of strings")
+    return names
+
+
+def _signatures(entry: dict, owner: str, names: list[str], kind: str) -> set[tuple[str, str, str]]:
+    found: set[tuple[str, str, str]] = set()
+    for name, signature in entry.get("signatures", {}).items():
+        if not isinstance(signature, str):
+            raise ValueError(
+                f"{kind} {owner}: signature of `{name}` must be a string - quote dotted keys: "
+                f'signatures = {{ "Query.get_compiler" = "(...)" }}'
+            )
+        if name.split(".")[0] not in names:
+            raise ValueError(f"{kind} {owner}: signature `{name}` is not covered by `names`")
+        found.add((owner, name, signature))
+    return found
 
 
 def django_imports(tree: ast.Module) -> list[tuple[int, str, str]]:
@@ -136,7 +187,9 @@ def _django_root() -> Path | None:
 
 def _is_django_submodule(module: str, name: str) -> bool:
     root = _django_root()
-    if root is None or name == "*":
+    if root is None:
+        raise RuntimeError("django is not importable - the A203 submodule check needs it")
+    if name == "*":
         return False
     package = root.parent.joinpath(*module.split("."))
     # Exact-case listing: `Query` must not match `query.py` on case-insensitive filesystems.
@@ -231,11 +284,15 @@ def stale_ledger_entries(sources: dict[str, str], ledger: Ledger | None = None) 
         }  # getattr(o, "name")
         if _in_django_package(path):
             imported |= {(module, name) for _, module, name in django_imports(tree)}
+            for node in ast.walk(tree):  # non-Django third parties (asgiref.local) too
+                for _, module, names in _imports(node):
+                    imported |= {(module, name) for name in names or ["*"]}
     plain = {module for module, name in imported if name == "*"}
     from_imported = {module for module, _ in imported}
     stale = [
-        f"ledger entry `{module}.{name}` is not imported under asyncopation/_django/ - remove it"
-        for module, name in sorted(ledger.internal)
+        f"ledger entry `{module}.{name}` is not imported under asyncopation/_django/ - move the "
+        "import there, mark the entry `ported = true` if it is only ported, or remove it"
+        for module, name in sorted(ledger.internal - ledger.ported)
         if (module, name) not in imported
         and module not in plain
         and not (name == "*" and module in from_imported)

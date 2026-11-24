@@ -36,7 +36,8 @@ _django        sole importer of non-public Django APIs
   vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
   `Capabilities` (ADR-0003).
 - Non-public Django APIs are imported only in `_django/` (per-backend submodules, imported lazily)
-  and private attribute access goes through `_django` accessors (ADR-0007).
+  and private attribute access goes through `_django` accessors (ADR-0007), each registered as a
+  ledger `[[attribute]]` entry.
 - Ported orchestration is a sans-I/O generator core driven by the `engine` runner - never an
   `async def` copy of a Django function (ADR-0007).
 

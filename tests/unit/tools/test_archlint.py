@@ -2,10 +2,12 @@ import pytest
 
 from tests.support.guards import (
     EMPTY_LEDGER,
-    ITERABLE_LEDGER,
+    FETCH_MODE_LEDGER,
+    IMPORT_ONLY_LEDGER,
+    PORTED_LEDGER,
     SQL_QUERY_LEDGER,
     lint_src_module,
-    stale_codes,
+    stale_messages,
 )
 from tools.guards.archlint import Ledger
 
@@ -91,6 +93,7 @@ def test_ledgered_internal_import_is_allowed():
         ("from django import db\n", EMPTY_LEDGER, []),
         ("from django.db.models.query import QuerySet\n", EMPTY_LEDGER, ["A201", "A203"]),
         ("from django.db.models.sql import QUERY\n", SQL_QUERY_LEDGER, ["A201", "A203"]),
+        ("from django.db.models import query\n", EMPTY_LEDGER, ["A201", "A203"]),
     ],
     ids=[
         "ledgered-outside",
@@ -103,9 +106,10 @@ def test_ledgered_internal_import_is_allowed():
         "public-submodule-as-name",
         "private-module-from-import",
         "name-differing-from-submodule-only-by-case",
+        "private-py-submodule-as-name",
     ],
 )
-def test_private_django_import_outside_the_django_package_is_reported(source, ledger, expected):
+def test_private_django_import_outside_the_django_package_is_classified(source, ledger, expected):
     # when
     codes = lint_src_module(source, path="src/asyncopation/query/x.py", ledger=ledger)
     # then
@@ -139,60 +143,104 @@ def test_internal_entry_imported_only_outside_the_django_package_is_stale():
     # given
     sources = {"src/asyncopation/query/x.py": "from django.db.models.query import ModelIterable\n"}
     # when
-    stale = stale_codes(sources, ITERABLE_LEDGER)
+    stale = stale_messages(sources, IMPORT_ONLY_LEDGER)
     # then
-    assert len(stale) == 2  # ModelIterable (outside _django) + _fetch_mode (never accessed)
+    assert len(stale) == 1
     assert stale[0].startswith("A202")
+    assert "django.db.models.query.ModelIterable" in stale[0]
 
 
 def test_internal_entry_imported_in_the_django_package_is_not_stale():
     # given
     sources = {
-        "src/asyncopation/_django/x.py": "from django.db.models.query import ModelIterable\n",
-        "src/asyncopation/query/y.py": "def f(qs):\n    return qs._fetch_mode\n",
+        "src/asyncopation/_django/x.py": "from django.db.models.query import ModelIterable\n"
     }
     # when
-    stale = stale_codes(sources, ITERABLE_LEDGER)
+    stale = stale_messages(sources, IMPORT_ONLY_LEDGER)
     # then
     assert stale == []
 
 
 def test_attribute_entry_never_accessed_is_stale():
-    # given
-    sources = {
-        "src/asyncopation/_django/x.py": "from django.db.models.query import ModelIterable\n"
-    }
     # when
-    stale = stale_codes(sources, ITERABLE_LEDGER)
+    stale = stale_messages({"src/asyncopation/query/y.py": "x = 1\n"}, FETCH_MODE_LEDGER)
     # then
     assert len(stale) == 1
-    assert "_fetch_mode" in stale[0]
+    assert "QuerySet._fetch_mode" in stale[0]
 
 
-def test_plain_module_import_under_the_django_package_keeps_named_entries_alive():
-    # given
-    sources = {"src/asyncopation/_django/x.py": "import django.db.models.query\n"}
-    ledger = Ledger(public=EMPTY_LEDGER.public, internal=ITERABLE_LEDGER.internal)
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def f(qs):\n    return qs._fetch_mode\n",
+        "def f(qs):\n    return getattr(qs, '_fetch_mode')\n",
+    ],
+    ids=["attribute-access", "getattr-string"],
+)
+def test_attribute_entry_used_anywhere_in_src_is_not_stale(source):
     # when
-    stale = stale_codes(sources, ledger)
+    stale = stale_messages({"src/asyncopation/query/y.py": source}, FETCH_MODE_LEDGER)
     # then
     assert stale == []
 
 
-def test_attribute_read_through_getattr_keeps_the_entry_alive():
-    # given
-    sources = {
-        "src/asyncopation/_django/x.py": "from django.db.models.query import ModelIterable\n",
-        "src/asyncopation/query/y.py": "def f(qs):\n    return getattr(qs, '_fetch_mode')\n",
-    }
+@pytest.mark.parametrize(
+    "source",
+    ["import django.db.models.query\n", "from django.db.models import query\n"],
+    ids=["plain-module-import", "module-as-name"],
+)
+def test_module_import_under_the_django_package_keeps_named_entries_alive(source):
     # when
-    stale = stale_codes(sources, ITERABLE_LEDGER)
+    stale = stale_messages({"src/asyncopation/_django/x.py": source}, IMPORT_ONLY_LEDGER)
+    # then
+    assert stale == []
+
+
+def test_star_entry_is_kept_alive_by_a_from_import_under_the_django_package():
+    # given
+    ledger = Ledger(
+        public=EMPTY_LEDGER.public, internal=frozenset({("django.db.models.query", "*")})
+    )
+    sources = {"src/asyncopation/_django/x.py": "from django.db.models.query import QuerySet\n"}
+    # when
+    stale = stale_messages(sources, ledger)
+    # then
+    assert stale == []
+
+
+def test_third_party_import_under_the_django_package_keeps_its_entry_alive():
+    # given
+    ledger = Ledger(public=EMPTY_LEDGER.public, internal=frozenset({("asgiref.local", "Local")}))
+    sources = {"src/asyncopation/_django/x.py": "from asgiref.local import Local\n"}
+    # when
+    stale = stale_messages(sources, ledger)
+    # then
+    assert stale == []
+
+
+def test_ported_entry_is_never_stale():
+    # when
+    stale = stale_messages({"src/asyncopation/_django/x.py": "x = 1\n"}, PORTED_LEDGER)
     # then
     assert stale == []
 
 
 def test_unparsable_source_is_ignored_by_the_stale_check():
     # when
-    stale = stale_codes({"src/asyncopation/query/y.py": "def ("}, EMPTY_LEDGER)
+    stale = stale_messages({"src/asyncopation/query/y.py": "def ("}, EMPTY_LEDGER)
     # then
     assert stale == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/asyncopation/query/_django/x.py", "src/asyncopation/_djangox/x.py"],
+    ids=["nested-not-top-level", "prefix-lookalike"],
+)
+def test_lookalike_django_package_paths_do_not_get_the_exemption(path):
+    # when
+    codes = lint_src_module(
+        "from django.db.models.sql import Query\n", path=path, ledger=SQL_QUERY_LEDGER
+    )
+    # then
+    assert codes == ["A203"]

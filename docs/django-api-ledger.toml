@@ -6,12 +6,18 @@
 #   [[internal]]  anything else: private helpers, internal modules, ported code we depend on.
 #                 These are what break when Django changes; the CI "django-main canary" job and
 #                 the `verified_against` field tell us when to re-check them. Optional
-#                 `signatures = { Name = "<str(inspect.signature(obj))>" }` pins callables.
-#   [[attribute]] private attributes accessed directly outside _django (`owner` is the dotted
-#                 class path, e.g. qs._fetch_mode). The guard cannot find such accesses; arch
-#                 review does. Register them so the drift test protects them.
-# A202 flags an [[internal]] item not imported under _django, and an [[attribute]] name never
-# accessed in src. tests/unit/django_drift checks every entry against the installed Django.
+#                 `signatures = { "Query.get_compiler" = "<str(inspect.signature(obj))>" }` pins
+#                 callables; keys are dotted paths below the module and MUST be quoted when dotted;
+#                 the first segment must be listed in `names`. `ported = true` marks code that is
+#                 ported but never imported (e.g. the MySQL backend, which imports MySQLdb): A202
+#                 skips it and the drift test reads the module source instead.
+#   [[attribute]] every private attribute we access directly, wherever (`owner` is the dotted
+#                 class path, e.g. qs._fetch_mode; `signatures` is allowed for methods). The guard
+#                 cannot find such accesses; arch review does. Register them so the drift test
+#                 protects them.
+# A202 flags an [[internal]] item (not `ported`) not imported under _django (any absolute import,
+# asgiref included), and an [[attribute]] name never accessed in src. A malformed entry fails
+# the guard run with a message. tests/unit/django_drift checks every entry against Django.
 #
 # Entry template:
 #   [[internal]]
@@ -20,6 +26,7 @@
 #   used_by = ["src/asyncopation/query/iterables.py"]
 #   reason = "Instance construction logic ported from ModelIterable.__iter__"
 #   verified_against = "6.1.3"
+#   # optional: ported = true, signatures = { "Name.method" = "(self, ...)" }
 #
 #   [[attribute]]
 #   owner = "django.db.models.query.QuerySet"
@@ -36,6 +43,9 @@ modules = [
     "django.core.exceptions",
     "django.db",
     "django.db.models",
+    "django.db.models.deletion",
+    "django.db.models.functions",
+    "django.db.models.signals",
     "django.dispatch",
     "django.utils.functional",
 ]

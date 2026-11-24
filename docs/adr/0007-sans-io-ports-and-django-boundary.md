@@ -66,11 +66,13 @@ differential tests of the core itself. - generator protocol is less familiar.
    importing `_django` never requires both driver libraries. A drift test asserts every symbol
    still exists with the expected signature on the pinned Django version. Enforced by guard A203
    (#30): a private Django import outside `asyncopation/_django/` is a violation. Direct private
-   attribute access is not detectable without false positives; arch-guardian reviews it.
+   attribute access cannot be detected without false positives, so arch-guardian reviews it and
+   each such attribute is registered in the ledger.
 6. **Ledger semantics.** Ledger entries keep `used_by` listing the real consumers (not just
    `_django`); A202 staleness is checked against `_django`'s imports plus the drift-test list. The
    drift-test list is the ledger itself: `[[internal]]` entries (optionally with `signatures`) and
-   `[[attribute]]` entries (private attributes accessed outside `_django`, with their owner class).
+   `[[attribute]]` entries (every private attribute we access directly, with its owner class). Code that
+   is ported but never imported (e.g. the MySQL backend) is marked `ported = true`.
 7. The **sync runner** over Django's own cursor lives in `tests/support/` (`src/` cannot import
    `django.db.connections`).
 

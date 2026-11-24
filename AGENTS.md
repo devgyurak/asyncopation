@@ -30,7 +30,8 @@ saying why (prefer the stack in the plan; otherwise justify in the PR).
 
 ## Non-negotiables
 1. **No thread hops in `src/`.** No `sync_to_async`/`async_to_sync`, threads, executors, or
-   Django's sync connection/transaction machinery. SQL generation stays sync; I/O is async.
+   Django's sync connection/transaction machinery (sole exception: the synchronous `compile_scope`
+   swap in `_django.connections`, ADR-0008). SQL generation stays sync; I/O is async.
 2. **Layering** is enforced (`make guard`). Drivers are the only importers of psycopg/asyncmy.
 3. **Tests:** Given/When/Then markers and **zero control flow** (`for/while/if/try/match/
    comprehensions/ternaries`) in test modules. Logic goes to `tests/support/`.

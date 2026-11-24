@@ -180,7 +180,7 @@ setup) and translates exceptions to `django.db`; SQL shape stays with Django's `
    - At startup, query server version/info asynchronously and inject it into the features/ops caches.
    - SQL generation is thereby fully decoupled from sync connection objects.
    - Some Django compilers re-resolve `connections[using]` (aggregate, update) - how they reach the
-     compile-only wrapper is ADR-0008 (Proposed, decided after the Phase 1 spike).
+     compile-only wrapper is ADR-0008 (Accepted: a synchronous, scoped `connections[alias]` swap per compile call).
 2. **Rewrite orchestration that mixes I/O and logic as async**
    - `Collector.collect` (runs queries while collecting cascade-delete targets)
    - `get_or_create`, `update_or_create`
@@ -273,7 +273,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 
 - [ ] `alist` working with `as_sql()` + psycopg `AsyncClientCursor`
 - [ ] Port `ModelIterable` logic (converters -> `Model.from_db`)
-- [ ] Detect paths that open a sync connection during `as_sql()` (record where `SynchronousOnlyOperation` is raised)
+- [x] Detect paths that open a sync connection during `as_sql()` (record where `SynchronousOnlyOperation` is raised) - spike results in ADR-0008 (#29, ADR-0008 Accepted)
 - [ ] Preload server info asynchronously -> inject into the compile-only connection
 - [ ] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, currently a strict xfail)
 - [ ] Reproduce the same flow on asyncmy

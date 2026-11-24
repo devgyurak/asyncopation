@@ -43,8 +43,8 @@ Prior art:
    MySQL the exact `mysql_server_data` `SELECT` (version, sql_mode, isolation, lower-case names,
    `@@sql_auto_is_null`, the `CONVERT_TZ` zoneinfo test) - and inject the results into the
    compile-only wrapper's cached properties. Every derived property (`mysql_version`,
-   `mysql_is_mariadb`, `sql_mode`, dependent features) follows from these. Whether Django's own
-   `connections[alias]` also receives this data is decided in ADR-0008. The frozen `Capabilities`
+   `mysql_is_mariadb`, `sql_mode`, dependent features) follows from these. Django's own
+   `connections[alias]` does not receive this data; the compile-only wrapper is the only recipient (ADR-0008). The frozen `Capabilities`
    (ADR-0003) are built here.
 3. **Open** (per `(alias, event loop)`): create the `AsyncDriver` and its pool inside that loop and
    open it. Triggered by `await asyncopation.setup()`.
@@ -54,7 +54,7 @@ Prior art:
 5. **Close** (`await asyncopation.close()`): stop new acquires, wait for in-flight statements up to a
    configurable timeout, then close the pools of the current loop and drop their registry entries.
 6. **Registry:** process-global, owned by `asyncopation.connection`, keyed by `(alias, loop)` for
-   drivers/pools and by `alias` for server info. Never in a contextvar, never populated at import.
+   drivers/pools and by `alias` for server info. Never in a contextvar (the transient `compile_scope` swap of ADR-0008 uses asgiref's contextvar-backed storage but carries no state across an `await`), never populated at import.
    It exposes read-only pool stats per entry (in use / idle / waiting) for tests and metrics.
 7. **ASGI lifespan wrapper:** `asyncopation.connection.asgi.LifespanApp(django_asgi_app)` handles
    the `lifespan` scope (setup on startup, close on shutdown) and delegates `http` to Django.

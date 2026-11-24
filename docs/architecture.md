@@ -1,7 +1,7 @@
 # Architecture
 
 Status: skeleton (Phase 0). Packages exist with their contracts; no behaviour yet. ADR-0001..0007
-are Accepted; ADR-0008 is Proposed.
+are Accepted; ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
 ## The split
@@ -34,7 +34,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | 3 | `asyncopation.transaction` | `async_atomic`, savepoints, async `on_commit` | - |
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
 | 1 | `asyncopation.drivers` | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
-| 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md), Proposed) | do I/O, contain `async def` |
+| 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
 | 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
 ## Evaluation pipeline
@@ -52,9 +52,11 @@ behind these decisions: [design/software-architecture.md](design/software-archit
 ## Invariants
 
 1. No thread hops: no `sync_to_async`, threads or executors in `src/`.
-2. No Django sync connection/transaction machinery in `src/`.
+2. No Django sync connection/transaction machinery in `src/`. The one exception is the synchronous
+   `compile_scope` swap of `connections[alias]` in `_django.connections` (ADR-0008; no `await` inside).
 3. Only `drivers/` imports psycopg / asyncmy.
-4. `compile/` never performs I/O; server info is injected by `connection/`.
+4. `compile/` never performs I/O; server info is injected by `connection/`. The compile-only wrapper is
+   visible through `connections[alias]` only inside a synchronous `compile_scope` (ADR-0008).
 5. Every non-public Django import is recorded in [django-api-ledger.toml](django-api-ledger.toml)
    and lives in `asyncopation._django` (enforced in review until the guard lands; ADR-0007).
 6. Results are identical to the sync ORM on PostgreSQL, MySQL and MariaDB (differential tests).

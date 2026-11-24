@@ -10,7 +10,8 @@ paths:
 
 1. **Never block the loop.** No sync I/O in coroutines - including Django calls that may
    lazily open a sync connection (`connection.features`, `pg_version`, `mysql_server_data`).
-   If Django code you call might touch a connection, route it through the compile-only wrapper.
+   If Django code you call might touch a connection, route it through the compile-only wrapper
+   (ADR-0008: `compile_scope` swaps it into `connections[alias]` synchronously; never `await` inside).
 2. **Ownership through `contextvars`, never thread-locals.** A task inherits a *copy* of the
    context; children spawned by `asyncio.gather`/`TaskGroup` see the parent's values.
 3. **One connection = one in-flight query.** Outside a transaction borrow a pooled connection

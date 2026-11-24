@@ -72,7 +72,8 @@ QuerySet (Django, lazy)
 - Ledger entries and drift tests for `results_iter`, `get_converters`, `_get_from_db`,
 `get_related_populators`, `compiler.klass_info` / `annotation_col_map`, `_state.peers`.
 - Two extra layers in import-linter (`engine`, and `_django` from ADR-0007).
-- Blocked on ADR-0008 for aggregate/update compilers.
+- Depends on ADR-0008 (Accepted): aggregate/update compilers run inside `compile_scope`; I/O-bearing
+  steps are ported cores (ADR-0008 Decision 4).
 
 ## Validation
 - `tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync` passes on all

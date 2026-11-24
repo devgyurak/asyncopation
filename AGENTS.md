@@ -51,7 +51,7 @@ close (plan checklist, docs, ledger, translations). Details: `docs/workflow.md`.
 Definition of done: `make check-all` green, review has no open BLOCKER/MAJOR, plan checklist
 ticked, docs/ledger/translations updated.
 
-Commits and branches: one prefix per change - `ADD:` `FIX:` `REF:` `UPT:` `DEL:` - with an
+Commits and branches: one prefix per change - `ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` - with an
 English summary and a body explaining why (`ADD: alist() on aobjects for PostgreSQL`). Work
 branches `<prefix>/<kebab-summary>` are cut from `develop` and PR'd into `develop`; `main` only
 receives release merges from `develop`. Details: the `commit` skill. Do not commit or push unless
@@ -100,7 +100,7 @@ asked.
 | Skill | When |
 |---|---|
 | [`architecture-guard`](.agents/skills/architecture-guard/SKILL.md) | Run, interpret and extend the mechanical architecture/test/language guards (import-linter contracts, tools/guards A1xx/A2xx/T/L codes). Use when a guard fails, when adding a layer/module, or when a new invariant should be enforced. |
-| [`commit`](.agents/skills/commit/SKILL.md) | Commit message, PR title and branch name conventions (ADD/FIX/REF/UPT/DEL prefixes) and the main/develop branch flow. Use right before committing or opening a PR, or when asked "commit this", "open a PR", "which prefix?". |
+| [`commit`](.agents/skills/commit/SKILL.md) | Commit message, PR title and branch name conventions (ADD/FIX/REF/DEL/DOCS/UPT prefixes) and the main/develop branch flow. Use right before committing or opening a PR, or when asked "commit this", "open a PR", "which prefix?". |
 | [`differential-testing`](.agents/skills/differential-testing/SKILL.md) | Sync-vs-async differential testing harness - snapshots, the differential fixture, Hypothesis QuerySet strategies and how to extend them for new QuerySet features. Use when adding read APIs or debugging result mismatches. |
 | [`e2e-harness`](.agents/skills/e2e-harness/SKILL.md) | End-to-end tests against a real uvicorn process serving the harness Django site on the test DB. Use when adding a user-visible scenario, testing ASGI integration, or reproducing a production-like bug. |
 | [`feature-loop`](.agents/skills/feature-loop/SKILL.md) | End-to-end loop for implementing one roadmap item (spec -> design check -> failing tests -> implementation -> guards -> multi-agent review -> perf -> docs). Use whenever starting work on a feature, phase checklist item or bug fix in src/. |

@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=c316d2382aec -->
+<!-- i18n: source=docs/workflow.md source-sha256=3b031ce27b9c -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -57,7 +57,7 @@ AGENTS.md 인덱스 블록                               Codex, Pi (Claude는 CL
 
 브랜치: 작업은 `develop`에서 딴 `<prefix>/<kebab-summary>` 브랜치에서 하고 `develop`으로 PR을
 보낸다. `main`은 릴리스 머지만 받는다. 커밋/PR 제목은 접두사 하나를 쓴다:
-`ADD:` `FIX:` `REF:` `UPT:` `DEL:` (`commit` 스킬).
+`ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (`commit` 스킬).
 
 ## 3. 서브 에이전트
 

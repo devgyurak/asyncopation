@@ -1,4 +1,4 @@
-<!-- Title: `<PREFIX>: <summary>` with one of ADD / FIX / REF / UPT / DEL (see the `commit` skill).
+<!-- Title: `<PREFIX>: <summary>` with one of ADD / FIX / REF / DEL / DOCS / UPT (see the `commit` skill).
      Work PRs target `develop`; only release PRs target `main`. -->
 
 ## What

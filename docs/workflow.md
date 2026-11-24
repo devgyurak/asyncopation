@@ -57,7 +57,7 @@ Humans decide: accepting ADRs, changing guards/rules, updating benchmark baselin
 
 Branches: work happens on `<prefix>/<kebab-summary>` branches cut from `develop` and is PR'd
 into `develop`; `main` only receives release merges. Commit/PR titles use one prefix:
-`ADD:` `FIX:` `REF:` `UPT:` `DEL:` (the `commit` skill).
+`ADD:` `FIX:` `REF:` `DEL:` `DOCS:` `UPT:` (the `commit` skill).
 
 ## 3. Sub-agents
 

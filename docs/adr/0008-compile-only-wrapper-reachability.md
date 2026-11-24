@@ -27,11 +27,14 @@ installed source):
 
 ## Options
 ### A - Install the compile-only wrapper as `connections[alias]` (spike: scoped, per async context)
-Django's `ConnectionHandler` is thread-local, and inside a running loop per async context (see Spike results); under ASGI our coroutines run on the loop thread,
-while sync views run in executor threads with their own wrappers.
-+ every direct `connections[...]` read and every `using`-based re-resolution reaches the wrapper.
-- needs a reviewed, narrowly scoped exception to A102 (only in `compile`); sync ORM calls on the
-loop thread hit the compile-only wrapper (they already raise `SynchronousOnlyOperation` today).
+Django's `ConnectionHandler` is thread-local in sync code and per async context inside a running
+loop (see Spike results). The wrapper is swapped in only for the duration of one synchronous
+compile call, so a permanent install on the loop thread is not needed (and would be wrong).
++ every direct `connections[...]` read and every `using`-based re-resolution inside the scope
+reaches the wrapper.
+- needs a reviewed, narrowly scoped exception to A102 (only in `asyncopation._django.connections`);
+sync ORM calls made from the same async context between scopes still see Django's own wrapper (they
+already raise `SynchronousOnlyOperation` on the loop).
 
 ### B - Compiler subclasses returned by the wrapper's `ops.compiler()`
 + no global state. - every re-resolution point must be overridden, ledgered and drift-tested;
@@ -205,7 +208,7 @@ in the PR that first uses them (#3 / #6 / Phase 5):
 
 ## Consequences
 Blocks Phase 1 `acount` / aggregate paths and all write compilers. If accepted as recommended:
-#3 adds the A102 exception for `asyncopation.compile`, `compile_scope`, server-info injection and
+#3 adds the A102 exception for `asyncopation._django.connections`, `compile_scope`, server-info injection and
 the "zero sync connections" assertion; #6 ports `get_aggregation` / `has_results` and decides the
 Asyncopation MySQL `ENGINE`; Phase 5 ports `pre_sql_setup` as a core. ADR-0002 and ADR-0004 refer to
 this ADR for how compilers reach the wrapper and whether Django's own wrappers receive server info.

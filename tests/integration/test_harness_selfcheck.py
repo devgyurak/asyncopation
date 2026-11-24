@@ -11,7 +11,7 @@ from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
-from tests.support.snapshot import annotation_names
+from tests.support.snapshot import annotation_names, nested_related_names, snapshot
 from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
 
 
@@ -35,6 +35,10 @@ async def test_seed_creates_expected_row_counts(readonly_db, model_name, expecte
         pytest.param(
             lambda: Book.objects.select_related("author__publisher").order_by("-price", "pk")[:15],
             id="select-related-slice",
+        ),
+        pytest.param(
+            lambda: Author.objects.select_related("profile", "publisher").order_by("pk"),
+            id="select-related-nullable",
         ),
         pytest.param(lambda: Book.objects.values("title", "price").order_by("pk"), id="values"),
         pytest.param(
@@ -172,3 +176,12 @@ async def test_asyncopation_list_matches_sync(readonly_db, differential):
     # then
     assert result.async_outcome == result.sync_outcome
     assert result.async_outcome.error is None
+
+
+async def test_select_related_snapshot_contains_nested_related_objects(readonly_db):
+    # given
+    book = await Book.objects.select_related("author__publisher").aearliest("pk")
+    # when
+    related_names = nested_related_names(snapshot(book))
+    # then
+    assert related_names == ("author", "publisher")

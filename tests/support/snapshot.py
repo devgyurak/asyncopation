@@ -45,9 +45,12 @@ def snapshot(obj: Model) -> Snapshot:
     recursively and sorted by cache name. A relation that was not loaded has no entry; one loaded
     as ``None`` (nullable FK, missing reverse one-to-one) is ``(name, None)``. An object already on
     the recursion path (a one-to-one cycle) becomes ``("<ref>", label, pk snapshot)``.
-    The cache state at call time is what is compared (single-valued ``prefetch_related`` fills it
-    too), so do not touch relations lazily before snapshotting. ``_prefetched_objects_cache``
-    (reverse FK / M2M prefetch) is out of scope (#17).
+    The whole ``_state.fields_cache`` is compared, so besides ``select_related`` it covers
+    single-valued ``prefetch_related`` results (forward FK, one-to-one, GenericForeignKey) and the
+    known related objects of related managers. It reflects the state at call time: do not touch
+    relations lazily before snapshotting. ``_prefetched_objects_cache`` (multi-valued prefetch:
+    reverse FK, M2M, GenericRelation) is out of scope (#17). Object identity is encoded only through
+    these back-references, not for repeated (acyclic) occurrences.
     """
     return _snapshot(obj, frozenset())
 
@@ -96,12 +99,15 @@ def snapshot_result(result: Any) -> Snapshot:
     return ("single", snapshot_row(result))
 
 
-def nested_related_names(instance_snapshot: Snapshot) -> tuple[str, ...]:
-    """Cache names along the first related chain of a ``snapshot()`` (``author``, ``publisher``)."""
-    names: list[str] = []
-    related = instance_snapshot[3]
-    while related:
-        name, nested = related[0]
-        names.append(name)
-        related = nested[3] if nested else ()
-    return tuple(names)
+def related_snapshot(instance_snapshot: Snapshot, *path: str) -> Snapshot | None:
+    """The snapshot cached under relation ``path`` (``("author", "publisher")`` walks two levels).
+
+    ``None`` when a relation on the path was loaded as None; ``KeyError`` when one was not loaded.
+    A ``("<ref>", ...)`` back-reference marker cannot be walked into.
+    """
+    current: Snapshot | None = instance_snapshot
+    for name in path:
+        if current is None:
+            return None
+        current = dict(current[3])[name]
+    return current

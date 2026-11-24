@@ -2,8 +2,8 @@ from decimal import Decimal
 
 import pytest
 
-from harness.catalog.models import Book
-from tests.support.snapshot import annotation_names, snapshot, snapshot_result
+from harness.catalog.models import Book, Publisher
+from tests.support.snapshot import annotation_names, related_snapshot, snapshot, snapshot_result
 from tests.support.snapshot_graphs import (
     cached_related,
     make_author,
@@ -111,8 +111,9 @@ def test_related_object_annotation_type_difference_is_detected():
     left_author, right_author = make_author(), make_author()
     vars(left_author).update(n=Decimal("1"))
     vars(right_author).update(n=1)
+    left, right = make_book(left_author), make_book(right_author)
     # when
-    result = snapshot(make_book(left_author)) == snapshot(make_book(right_author))
+    result = snapshot(left) == snapshot(right)
     # then
     assert result is False
 
@@ -174,9 +175,9 @@ def test_one_to_one_cycle_terminates_with_back_reference():
     # given
     author = make_one_to_one_cycle()
     # when
-    related = snapshot(author)[3]
+    related = related_snapshot(snapshot(author), "profile", "author")
     # then
-    assert related[0][1][3] == (("author", ("<ref>", "catalog.Author", ("int", 1))),)
+    assert related == ("<ref>", "catalog.Author", ("int", 1))
 
 
 def test_one_to_one_cycle_snapshots_are_equal_for_equal_graphs():
@@ -216,3 +217,49 @@ def test_instance_cycle_through_an_annotation_terminates():
     related = snapshot(author)[2]
     # then
     assert related == (("self_ref", "Author", ("<ref>", "catalog.Author", ("int", 1))),)
+
+
+def test_related_object_concrete_field_type_is_part_of_the_snapshot():
+    # given
+    left = make_book(make_author(publisher=Publisher(pk=1, name="1")))
+    right = make_book(make_author(publisher=Publisher(pk=1, name=1)))
+    # when
+    result = snapshot(left) == snapshot(right)
+    # then
+    assert result is False
+
+
+def test_nested_relation_loaded_differs_from_nested_relation_unloaded():
+    # given
+    loaded = make_book(make_author(publisher=make_publisher()))
+    unloaded = make_book(make_author())
+    # when
+    result = snapshot(loaded) == snapshot(unloaded)
+    # then
+    assert result is False
+
+
+def test_related_snapshot_returns_the_cached_relation_snapshot():
+    # given
+    book = make_book(make_author())
+    # when
+    author = related_snapshot(snapshot(book), "author")
+    # then
+    assert author == snapshot(make_author())
+
+
+def test_related_snapshot_returns_none_for_relation_loaded_as_none():
+    # given
+    author = make_author(publisher=None)
+    # when
+    result = related_snapshot(snapshot(author), "publisher")
+    # then
+    assert result is None
+
+
+def test_related_snapshot_raises_for_relation_that_was_not_loaded():
+    # given
+    book = snapshot(make_book())
+    # when / then
+    with pytest.raises(KeyError):
+        related_snapshot(book, "author")

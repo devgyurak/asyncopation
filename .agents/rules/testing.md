@@ -47,8 +47,8 @@ Async connections cannot see the sync test transaction, so pytest-django's defau
 ## Differential testing is the default for read APIs
 For every read API compare against the sync ORM with the `differential` fixture
 (see the `differential-testing` skill). Snapshots compare model, pk, every concrete field,
-every annotation (any public non-field instance attribute), objects cached by
-`select_related` (recursively; "not loaded" differs from "loaded as None"), value **and type**,
+every annotation (any public non-field instance attribute), related objects cached in
+`_state.fields_cache` (`select_related`, single-valued prefetch; recursively; "not loaded" differs from "loaded as None"), value **and type**,
 and order. `_prefetched_objects_cache` (reverse FK / M2M prefetch) is out of scope until #17.
 Add Hypothesis strategies when adding QuerySet features.
 

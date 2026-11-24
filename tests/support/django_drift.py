@@ -70,7 +70,7 @@ def ported_problem(module: str, name: str) -> str | None:
         return f"{module}: {type(exc).__name__}: {exc}"
     if source is None:
         return f"{module}: no source file"
-    if name == "*" or _defines(ast.parse(source).body, name.split(".")):
+    if _defines(ast.parse(source).body, name.split(".")):
         return None
     return f"{module}.{name}: not defined in the module source"
 

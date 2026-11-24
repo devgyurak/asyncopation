@@ -122,6 +122,7 @@ class Ledger:
                 if is_ported:
                     ported.add((module, name))
             signatures |= _signatures(entry, module, names, "[[internal]]")
+            _check_record(entry, "[[internal]]", module)
         attributes: set[tuple[str, str]] = set()
         attribute_signatures: set[tuple[str, str, str]] = set()
         for entry in _tables(data, "attribute"):
@@ -133,6 +134,7 @@ class Ledger:
                     raise ValueError(f"[[attribute]] {owner}: `{name}` is listed twice")
                 attributes.add((owner, name))
             attribute_signatures |= _signatures(entry, owner, names, "[[attribute]]")
+            _check_record(entry, "[[attribute]]", owner)
         return cls(
             frozenset(modules),
             frozenset(internal),
@@ -161,6 +163,8 @@ def _check_keys(table: dict, allowed: set[str], kind: str) -> None:
 
 
 def _check_internal_name(module: str, name: str, is_ported: bool) -> None:
+    if is_ported and name == "*":
+        raise ValueError(f"[[internal]] {module}: ported entries must name what was ported")
     if "." in name and not is_ported:
         raise ValueError(f"[[internal]] {module}: dotted name `{name}` is only allowed if ported")
     if name != "*" and _is_django_submodule(module, name):
@@ -168,6 +172,16 @@ def _check_internal_name(module: str, name: str, is_ported: bool) -> None:
             f"[[internal]] {module}: `{name}` is a submodule - "
             f'use module = "{module}.{name}" instead'
         )
+
+
+def _check_record(entry: dict, kind: str, owner: str) -> None:
+    """Every entry says who uses it, why, and against which Django it was verified."""
+    used_by = entry.get("used_by")
+    if not isinstance(used_by, list) or not used_by or not all(isinstance(u, str) for u in used_by):
+        raise ValueError(f"{kind} {owner}: `used_by` must be a non-empty list of strings")
+    for key in ("reason", "verified_against"):
+        if not isinstance(entry.get(key), str) or not entry[key].strip():
+            raise ValueError(f"{kind} {owner}: `{key}` must be a non-empty string")
 
 
 def _require(entry: dict, kind: str, key: str, expected: type) -> Any:

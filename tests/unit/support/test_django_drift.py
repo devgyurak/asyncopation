@@ -193,9 +193,8 @@ def test_ported_check_reports_an_unlocatable_module(module, name):
         "Sample.class_level",
         "method_with_signature",
         "CONSTANT",
-        "*",
     ],
-    ids=["class", "method", "annotation", "assignment", "function", "constant", "whole-module"],
+    ids=["class", "method", "annotation", "assignment", "function", "constant"],
 )
 def test_ported_check_finds_methods_annotations_and_module_level_names(name):
     # when

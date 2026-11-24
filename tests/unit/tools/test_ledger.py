@@ -5,22 +5,32 @@ from tools.guards.archlint import Ledger
 
 BASE = '[public]\nmodules = ["django.db"]\n'
 QUERY = "django.db.models.sql.query"
+REC = 'used_by = ["src/asyncopation/_django/x.py"]\nreason = "r"\nverified_against = "6.1.3"\n'
 FULL = (
     BASE
     + """
 [[internal]]
 module = "django.db.models.sql.query"
 names = ["Query"]
+used_by = ["src/asyncopation/_django/x.py"]
+reason = "r"
+verified_against = "6.1.3"
 signatures = { "Query.get_compiler" = "(self, using=None)" }
 
 [[internal]]
 module = "django.db.backends.mysql.base"
 names = ["DatabaseWrapper", "DatabaseWrapper.operators"]
+used_by = ["src/asyncopation/_django/x.py"]
+reason = "r"
+verified_against = "6.1.3"
 ported = true
 
 [[attribute]]
 owner = "django.db.models.query.QuerySet"
 names = ["_fetch_mode"]
+used_by = ["src/asyncopation/_django/x.py"]
+reason = "r"
+verified_against = "6.1.3"
 signatures = { _fetch_mode = "()" }
 """
 )
@@ -47,7 +57,7 @@ def test_only_ported_entries_are_in_the_ported_set():
 
 def test_wildcard_entry_covers_any_name_of_the_module():
     # given
-    ledger = Ledger.from_toml(BASE + '[[internal]]\nmodule = "m"\nnames = ["*"]\n')
+    ledger = Ledger.from_toml(BASE + '[[internal]]\nmodule = "m"\nnames = ["*"]\n' + REC)
     # when
     covered = (ledger.covers("m", "Anything"), ledger.covers("other", "Anything"))
     # then
@@ -96,6 +106,32 @@ def test_ported_entries_do_not_cover_a_real_import():
         ('[[attribute]]\nowner = "a.B"\nnames = ["_x"]\nname = "y"\n', "unknown key"),
         ('[[attribute]]\nowner = "a.B"\nnames = ["_x"]\nported = true\n', "unknown key"),
         ("[[extra]]\nx = 1\n", "unknown key"),
+        (
+            '[[internal]]\nmodule = "m"\nnames = ["*"]\nported = true\n' + REC,
+            "ported entries must name what was ported",
+        ),
+        ('[[internal]]\nmodule = "m"\nnames = ["X"]\n', "`used_by` must be a non-empty list"),
+        (
+            '[[internal]]\nmodule = "m"\nnames = ["X"]\nused_by = []\nreason = "r"\nverified_against = "1"\n',
+            "`used_by` must be a non-empty list",
+        ),
+        (
+            '[[internal]]\nmodule = "m"\nnames = ["X"]\nused_by = ["a"]\nverified_against = "1"\n',
+            "`reason` must be a non-empty string",
+        ),
+        (
+            '[[internal]]\nmodule = "m"\nnames = ["X"]\nused_by = ["a"]\nreason = "r"\n',
+            "`verified_against` must be a non-empty string",
+        ),
+        ('[[attribute]]\nowner = "a.B"\nnames = ["_x"]\n', "`used_by` must be a non-empty list"),
+        (
+            '[[attribute]]\nowner = "a.B"\nnames = ["_x"]\nused_by = ["a"]\nverified_against = "1"\n',
+            "`reason` must be a non-empty string",
+        ),
+        (
+            '[[attribute]]\nowner = "a.B"\nnames = ["_x"]\nused_by = ["a"]\nreason = "r"\n',
+            "`verified_against` must be a non-empty string",
+        ),
     ],
     ids=[
         "internal-without-module",
@@ -119,6 +155,14 @@ def test_ported_entries_do_not_cover_a_real_import():
         "attribute-misspelled-key",
         "attribute-with-internal-only-key",
         "unknown-top-level-table",
+        "ported-wildcard",
+        "internal-without-used-by",
+        "internal-empty-used-by",
+        "internal-without-reason",
+        "internal-without-verified-against",
+        "attribute-without-used-by",
+        "attribute-without-reason",
+        "attribute-without-verified-against",
     ],
 )
 def test_malformed_ledger_entries_are_rejected_with_a_clear_error(entry, message):
@@ -136,8 +180,7 @@ def test_malformed_ledger_entries_are_rejected_with_a_clear_error(entry, message
         ("[public]\nmodules = [1]\n", "list of strings"),
         ("[public]\nmodules = []\nextra = 1\n", "unknown key"),
         (
-            BASE
-            + '[[internal]]\nmodule = "django.db.models"\nnames = ["*"]\n[[internal]]\nmodule = "django.db.models"\nnames = ["*"]\n',
+            BASE + ('[[internal]]\nmodule = "django.db.models"\nnames = ["*"]\n' + REC) * 2,
             "listed twice",
         ),
     ],

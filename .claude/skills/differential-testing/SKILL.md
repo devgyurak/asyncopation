@@ -9,8 +9,15 @@ Asyncopation must give identical snapshots on every backend.
 
 ## Pieces (tests/support/)
 - `snapshot.py` - `snapshot(obj)` turns a model instance into a hashable tuple
-  `(app_label.Model, ((attname, type_name, value)...), ((annotation, type_name, value)...))`;
+  `(app_label.Model, ((attname, type_name, value)...), ((annotation, type_name, value)...),
+  ((cache_name, related_snapshot | None)...))`;
   annotations are the instance's public non-field attributes (`annotation_names()` lists them).
+  The 4th element holds objects cached in `_state.fields_cache` (`select_related`, single-valued
+  prefetch), recursively and sorted by cache name: a relation that was not loaded has no entry,
+  one loaded as `None` is `(name, None)`,
+  and an object already on the recursion path (1:1 cycle) becomes `("<ref>", label, pk)`.
+  `_prefetched_objects_cache` (multi-valued prefetch: reverse FK, M2M, GenericRelation) is not
+  covered yet (#17).
   `snapshot_result(rows)` keeps order.
   Types are part of the snapshot on purpose: drivers differ (Decimal vs float, naive vs aware
   datetime, `memoryview` vs `bytes`, JSON decoding).

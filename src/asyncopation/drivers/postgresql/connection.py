@@ -172,8 +172,12 @@ class PostgresConnection:
 
         A CLOSE that fails inside a transaction raises (as Django does), mapped to ``django.db``
         per ADR-0003 D4 (Django leaves it unmapped): e.g. the cursor vanished with a savepoint
-        rollback. ``quiet`` (an earlier error is already propagating) only marks it closed. In
-        autocommit the error is swallowed and the cursor stays tracked: ``reset()`` retries.
+        rollback. Inside a transaction a failed CLOSE marks the cursor closed and forgets it only
+        when the error is ``InvalidCursorName`` or the cursor is not held; a held cursor otherwise
+        stays tracked and ``reset()`` closes it after the rollback. ``quiet`` (an earlier error is
+        already propagating) only means the CLOSE error is not raised; the cursor is handled by the
+        same rule. In autocommit the error is swallowed and the cursor stays tracked: ``reset()``
+        retries.
         """
         raw = self._raw
         if raw is _RELEASED:  # reset() already closed it; never touch the next borrower
@@ -315,9 +319,10 @@ class PostgresConnection:
         """
         raw = self._raw
         cursors, self._open_cursors = self._open_cursors, []
-        if raw.closed or (
-            not cursors and raw.autocommit and raw.pgconn.transaction_status == _IDLE
-        ):
+        if raw.closed:
+            await _mark_all_closed(cursors)  # the session (and its cursors) is gone
+            return
+        if not cursors and raw.autocommit and raw.pgconn.transaction_status == _IDLE:
             return
         try:
             async with asyncio.timeout(_RECOVERY_TIMEOUT):
@@ -334,8 +339,10 @@ class PostgresConnection:
         except Exception:
             # The body's outcome (including a CancelledError) must win over a failed cleanup.
             await self._discard()
+            await _mark_all_closed(cursors)
         except BaseException:
             await self._discard()
+            await _mark_all_closed(cursors)
             raise
 
     def release(self) -> None:
@@ -373,3 +380,8 @@ async def _mark_closed(cursor: Any) -> None:
     """Mark a server cursor closed on the client only (psycopg's base-class ``close``)."""
     with suppress(Exception):
         await super(psycopg.AsyncServerCursor, cursor).close()
+
+
+async def _mark_all_closed(cursors: list[Any]) -> None:
+    for cursor in cursors:
+        await _mark_closed(cursor)

@@ -16,7 +16,7 @@ round). The stable metric is client CPU per operation. The report adds the per-r
 ratios ``driver / raw`` and ``driver / getconn`` (median and inter-quartile range over the rounds,
 paired by round index), the paired difference ``driver - getconn`` in microseconds and the load
 average. Against a real server ratios within about +-5% are noise; the ``noio`` groups remove the
-server and resolve the driver's own per-operation cost in microseconds (shown with its IQR).
+server and resolve the driver's own per-operation cost in microseconds (its IQR is shown for the ``noio`` groups).
 
 The raw baselines use their own pool built from the driver's own configuration (same sizes and
 connection kwargs). They do not run the driver's per-connection session setup (isolation level,
@@ -298,6 +298,24 @@ async def throughput(op: Op, tasks: int, seconds: float) -> dict[str, float] | N
     }
 
 
+def summarize_error(exc: BaseException) -> str:
+    """``repr`` of the first leaf exception (a TaskGroup wraps worker errors in an ExceptionGroup)."""
+    leaves = _leaves(exc)
+    more = f" (+{len(leaves) - 1} more)" if len(leaves) > 1 else ""
+    return repr(leaves[0]) + more
+
+
+def _leaves(exc: BaseException) -> list[BaseException]:
+    if isinstance(exc, BaseExceptionGroup):
+        return [leaf for inner in exc.exceptions for leaf in _leaves(inner)] or [exc]
+    return [exc]
+
+
+def known_suffixes() -> set[str]:
+    """Every ``driver.*`` case name without its ``driver.`` prefix (valid ``--only`` values)."""
+    return {n.split(".", 1)[1] for n in case_names()}
+
+
 def _quartiles(values: list[float]) -> tuple[float, float, float]:
     if len(values) < 2:
         return (values[0], values[0], values[0]) if values else (0.0, 0.0, 0.0)
@@ -331,7 +349,10 @@ async def _measure_group(
             await throughput(ops[impl], tasks, 0.3)  # warm-up
         except Exception as exc:
             failed.add(impl)
-            results[f"driver.{group}.{impl}.t{tasks}"] = {"status": "error", "error": repr(exc)}
+            results[f"driver.{group}.{impl}.t{tasks}"] = {
+                "status": "error",
+                "error": summarize_error(exc),
+            }
     live = [i for i in impls if i not in failed]
     rounds_data: dict[str, dict[int, dict[str, float]]] = {i: {} for i in live}
     for index in range(rounds):
@@ -343,7 +364,10 @@ async def _measure_group(
                 sample = await throughput(ops[impl], tasks, seconds)
             except Exception as exc:
                 failed.add(impl)
-                results[f"driver.{group}.{impl}.t{tasks}"] = {"status": "error", "error": repr(exc)}
+                results[f"driver.{group}.{impl}.t{tasks}"] = {
+                    "status": "error",
+                    "error": summarize_error(exc),
+                }
                 continue
             if sample is not None:
                 sample["load_1m"] = os.getloadavg()[0]

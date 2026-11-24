@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first

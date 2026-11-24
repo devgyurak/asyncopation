@@ -21,7 +21,8 @@ paths:
     <maintainer>; architect verdict: <verdict>`. The verdict is a real verdict from the
     `architect` sub-agent, never `PENDING` at merge, one verdict per Amended line. The
     maintainer's approval is recorded as "to be confirmed in the PR review" until the maintainer
-    confirms it - an agent cannot self-attest it;
+    gives it, then as `maintainer (@login), <date> in the PR #M review` - an agent cannot
+    self-attest it;
   - an inline mark `*Amended <date> (#N, PR #M): ...*` on **every** Decision or Validation
     sentence, code block and Option pro/con that is changed or contradicted (an "Implementation
     note" section may hold detail, but the affected places still carry the mark).

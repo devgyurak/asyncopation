@@ -29,16 +29,17 @@ named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
   `driver`, run with 1 task only): fake pool and cursor objects take the database out, so the
   difference measures the driver's own cost; `noio-yield` uses a fake that yields
   (`await asyncio.sleep(0)`). Treat the result as a LOWER BOUND of the driver's own cost;
-- output columns: `CPU us/op` (client CPU per operation, the stable metric), `paired ratio
+- output columns: `CPU µs/op` (client CPU per operation, the stable metric), `paired ratio
   (IQR)` (per-round paired ratio vs the baseline: median and inter-quartile range over the
   rounds), `driver-getconn µs` (driver minus `getconn` CPU per operation, shown with its IQR
   only for the noio groups), `load` (min-max 1-minute load average over the rounds) and a
-  separate errors column. A case without samples has status `no-samples`. The baselines of a
+  `note` column (error or skip reason). A case without samples has status `no-samples`. The baselines of a
   selected case always run too, so its ratio can be computed.
 
 Compare ratios, not absolute times, and rerun when the load is high. Real-DB ratios within about
-+-5% are noise. Measured driver overhead (driver minus `getconn`): about 0.5-0.7 us/op with a
-plain fake and 0.7-0.9 us/op with a fake that yields.
++-5% are noise. Driver overhead (driver minus `getconn`), as ranges: `noio` (plain fake) about
+0.5-0.7 us/op, `noio-yield` about 0.6-1.4 us/op (the IQR reaches about 2.4 us under load, so
+rerun on a quiet machine).
 
 ## Load (k6, minutes)
 ```bash

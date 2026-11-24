@@ -78,7 +78,24 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   `OPTIONS["server_side_binding"] = True` `AsyncCursor` / psycopg's `AsyncServerCursor`. Named
   cursors are `scrollable=False` and `withhold` outside transactions. The SQL shape difference
   stays in the compile-only wrapper's `features.uses_server_side_binding`.
-- **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver ignores `CONN_MAX_AGE`. Other types, unknown keys, any callable value (except `connection_class`, see below), `close_returns` unless it is exactly `False`, and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself) are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still rejected by name. `min_size` and `max_size` must be integers (`max_size` may be `None`); `max_waiting` must be an integer >= 0 and `num_workers` an integer >= 1 (not `bool`); `timeout`, `max_lifetime`, `max_idle` and `reconnect_timeout` must be `int` or `float`; `connection_class` is allowed only as a subclass of `psycopg.AsyncConnection` - the key must be absent otherwise, and `None` is rejected like any other bad value (it is not rejected as a callable); an explicit `check=None` switches the `CONN_HEALTH_CHECKS` check off. A size the user gives is never corrected (a missing `max_size` defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s builtin `ValueError` is raised from `open()` before any connection is made (an explicit exception to ADR-0003 Decision 4, which covers database errors; this is a configuration error). Side effect: Django's own sync backend reads the same key and would
+- **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of
+  `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`,
+  `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional
+  `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always
+  pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver
+  ignores `CONN_MAX_AGE`. Other types, unknown keys, `close_returns` unless it is exactly `False`,
+  and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself)
+  are rejected with `ImproperlyConfigured`; `OPTIONS["cursor_factory"]` (not a pool key) is still
+  rejected by name. `min_size` and `max_size` must be integers (`max_size` may be `None`),
+  `max_waiting` an integer >= 0, `num_workers` an integer >= 1, and `timeout`, `max_lifetime`,
+  `max_idle` and `reconnect_timeout` an `int` or `float`; a `bool` is never accepted for any of
+  them. `connection_class` is allowed only as a subclass of `psycopg.AsyncConnection` - the key must
+  be absent otherwise, and `None` is rejected like any other bad value; any other callable value is
+  rejected too (sync hooks do not fit an async pool). An explicit `check=None` switches the
+  `CONN_HEALTH_CHECKS` check off. A size the user gives is never corrected (a missing `max_size`
+  defaults to `max(10, min_size)`), so `min_size > max_size` is not fixed up: `psycopg_pool`'s
+  builtin `ValueError` is raised from `open()` before any connection is made (an explicit exception
+  to ADR-0003 Decision 4, which covers database errors; this is a configuration error). Side effect: Django's own sync backend reads the same key and would
   also enable *its* sync pool for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django
   raises `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes
   `psycopg_pool`'s `check_connection` (one extra round trip per borrow, as in Django's pool).
@@ -105,7 +122,9 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   connection is discarded if `CLOSE` fails). A `CLOSE` that fails when a stream ends inside a
   transaction (e.g. its cursor vanished with a savepoint rollback) raises (as Django does), mapped to
   `django.db` per ADR-0003 D4 (Django leaves it unmapped), unless an earlier error is already
-  propagating; in autocommit it is swallowed and release retries it. A disconnected connection is closed so the pool
+  propagating (the failed cursor is forgotten only when the error is `InvalidCursorName` or the
+  cursor is not held; a held cursor stays tracked and `reset()` closes it after the rollback); in
+  autocommit it is swallowed and release retries it. A disconnected connection is closed so the pool
   replaces it. A released connection wrapper, and any stream iterator it handed out, raise
   `InterfaceError` when used afterwards.
 - `connection_created` is **not** sent for driver connections; hstore/citext registration is

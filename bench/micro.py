@@ -131,6 +131,9 @@ def main() -> None:
 
     pk = Book.objects.order_by("pk").values_list("pk", flat=True)[0]  # sync, before the loop starts
     only = {s for s in args.only.split(",") if s}
+    unknown = sorted(only - {"aget", "gather3", "list20"} - driver_micro.known_suffixes())
+    if unknown:
+        parser.error(f"--only matches no case: {', '.join(unknown)}")
     driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
     results = asyncio.run(
         main_async(

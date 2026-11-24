@@ -1213,3 +1213,35 @@ async def recording_error_after_stream_exit(
         except Exception as exc:
             return exc
     return None
+
+
+# --------------------------------------------------------------------------- discarded + open stream
+async def _leave_stream_open_on_a_dead_connection(driver: Any, *, kill: bool) -> None:
+    """Borrow, open a stream, make the connection unusable, leave without closing the stream."""
+    if kill:
+        async with driver.connection() as conn:
+            stream, _ = await _open_stream(conn)
+            await terminate_backend(await backend_pid(conn))
+            del stream
+        return
+    ready = asyncio.Event()
+
+    async def worker() -> None:
+        async with driver.connection() as conn, conn.stream(HUNDRED, None, 2) as chunks:
+            await anext(chunks)
+            ready.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(worker())
+    await wait_until(lambda: _event_probe(ready)({}))
+    task.cancel()
+    await asyncio.wait([task])
+
+
+async def resource_warnings_after_discard(driver: Any, *, kill: bool) -> int:
+    """ResourceWarnings seen after a connection with an open stream was discarded and collected."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await _leave_stream_open_on_a_dead_connection(driver, kill=kill)
+        gc.collect()
+    return _resource_warnings(caught)

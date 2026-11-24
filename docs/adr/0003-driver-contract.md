@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (decided to handle all review items in PR #46; to be confirmed in the PR review before merge); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs

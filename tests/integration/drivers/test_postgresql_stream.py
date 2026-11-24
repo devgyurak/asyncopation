@@ -2,7 +2,7 @@
 
 import psycopg
 import pytest
-from django.db import DataError, InterfaceError, ProgrammingError
+from django.db import DataError, InterfaceError, OperationalError, ProgrammingError
 
 from tests.support.drivers import (
     POSTGRES_ONLY,
@@ -16,6 +16,7 @@ from tests.support.drivers import (
     raw_begin_then_failing_stream,
     recover_from_failed_close_with_savepoint,
     release_with_open_stream,
+    resource_warnings_after_discard,
     scrollable_flags,
     sizes,
     stream_chunks,
@@ -409,3 +410,38 @@ async def test_non_cursor_close_error_on_a_held_cursor_in_a_transaction_leaves_n
     )
     # then
     assert outcome.cursors_after == []
+
+
+async def test_non_cursor_close_error_on_a_held_cursor_in_a_transaction_raises_a_django_error(
+    single_driver,
+):
+    # when
+    outcome = await stream_whose_close_fails_once(
+        single_driver, psycopg.errors.QueryCanceled("simulated"), transactional=True
+    )
+    # then
+    assert type(outcome.exit_error) is OperationalError
+
+
+async def test_non_cursor_close_error_on_a_held_cursor_in_a_transaction_keeps_the_connection(
+    single_driver,
+):
+    # when
+    outcome = await stream_whose_close_fails_once(
+        single_driver, psycopg.errors.QueryCanceled("simulated"), transactional=True
+    )
+    # then
+    assert outcome.pid_after == outcome.pid_before
+
+
+@pytest.mark.parametrize("kill", [True, False], ids=["backend-killed", "task-cancelled"])
+async def test_discarded_connection_with_an_open_stream_leaves_no_unclosed_cursor_warning(
+    single_driver, kill
+):
+    """Regression guard only: psycopg already marks these cursors closed on a dead connection, so
+    this test passes without `reset()`'s own marking; it fails if a future change makes a discarded
+    connection's stream cursors warn when they are garbage collected."""
+    # when
+    warnings_seen = await resource_warnings_after_discard(single_driver, kill=kill)
+    # then
+    assert warnings_seen == 0

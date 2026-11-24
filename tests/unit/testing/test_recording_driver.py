@@ -444,11 +444,15 @@ async def test_empty_or_exhausted_chunk_iterator_kept_after_the_borrow_raises_in
     assert type(error) is InterfaceError
 
 
-@pytest.mark.parametrize("exhaust", [False, True], ids=["half-read", "exhausted"])
-async def test_chunk_iterator_after_its_stream_block_raises_interface_error_in_the_same_borrow(
-    driver, exhaust
-):
+async def test_half_read_chunk_iterator_after_its_stream_block_raises_interface_error(driver):
     # when
-    error = await recording_error_after_stream_exit(driver, [(1,), (2,)], exhaust=exhaust)
+    error = await recording_error_after_stream_exit(driver, [(1,), (2,)], exhaust=False)
     # then
     assert type(error) is InterfaceError
+
+
+async def test_exhausted_chunk_iterator_after_its_stream_block_stops_like_a_real_generator(driver):
+    # when
+    error = await recording_error_after_stream_exit(driver, [(1,), (2,)], exhaust=True)
+    # then
+    assert type(error) is StopAsyncIteration

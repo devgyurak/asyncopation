@@ -201,10 +201,10 @@ class _GuardedChunks:
 
     async def __anext__(self) -> list[Row]:
         self._connection._check()  # even an exhausted iterator reports a released connection
+        if self._position >= len(self._rows):
+            raise StopAsyncIteration  # read to the end: stays exhausted, like a real generator
         if self.closed:
             raise InterfaceError("the stream was closed and its chunks can no longer be read")
-        if self._position >= len(self._rows):
-            raise StopAsyncIteration
         chunk = self._rows[self._position : self._position + self._size]
         self._position += self._size
         return chunk

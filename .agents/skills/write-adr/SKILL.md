@@ -21,8 +21,9 @@ An amendment may add or tighten Validation items but never drop or contradict on
 1. Ask **architect** to review the amendment and wait for a real verdict.
 2. Add one header line (after `Architect review`): `- Amended: <date> (#N, PR #M) - <every
    changed item>; approved by: <maintainer>; architect verdict: <verdict>`. One verdict per line,
-   never `PENDING` at merge. Write the approval as "to be confirmed in the PR review": an agent
-   cannot self-attest the maintainer's approval. Status stays `Accepted`.
+   never `PENDING` at merge. Write the approval as "to be confirmed in the PR review" until the
+   maintainer gives it, then as `maintainer (@login), <date> in the PR #M review`: an agent cannot
+   self-attest the maintainer's approval. Status stays `Accepted`.
 3. Mark every changed or contradicted Decision/Validation sentence, code block and Option pro/con
    inline with `*Amended <date> (#N, PR #M): ...*`; detail may live in an "Implementation note".
 4. Update `docs/architecture.md` and the docs-sync targets as for any ADR change.

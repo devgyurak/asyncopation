@@ -28,10 +28,12 @@ DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 # (psycopg_pool would raise "multiple values for keyword argument"): `name` (the alias),
 # `configure` (the per-connection session setup), `kwargs` / `conninfo` (the connection settings)
 # and `open` (the pool is opened by `PostgresDriver.open()`). Every other key is validated by
-# VALUE: callables are sync hooks (or classes) that do not fit an async pool, `close_returns`
-# must be False (True would make a discarded connection go back to the pool), the numeric options
-# must be int/float (`max_waiting` int >= 0, `num_workers` int >= 1) and `connection_class`, when present,
-# an `AsyncConnection` subclass.
+# VALUE: sizes must be ints (`max_size` may be None), `max_waiting` an int >= 0, `num_workers` an
+# int >= 1 and `timeout`, `max_lifetime`, `max_idle`, `reconnect_timeout` int/float - a bool is never
+# accepted for any of them; `connection_class`, when present, must be an `AsyncConnection`
+# subclass (the key must be absent otherwise, `None` is rejected) and every other callable is
+# rejected (sync hooks do not fit an async pool); `close_returns` must be False (True would make a
+# discarded connection go back to the pool).
 _DRIVER_OWNED_POOL_KEYS = frozenset({"name", "configure", "kwargs", "conninfo", "open"})
 _POOL_PARAMETERS = frozenset(inspect.signature(AsyncConnectionPool.__init__).parameters) - {"self"}
 

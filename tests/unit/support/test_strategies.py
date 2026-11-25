@@ -1,6 +1,11 @@
 from hypothesis import given
 
-from tests.support.strategies import QuerySetSpec, build_queryset, queryset_specs
+from tests.support.strategies import (
+    QuerySetSpec,
+    build_queryset,
+    expected_deferred_loading,
+    queryset_specs,
+)
 
 
 @given(spec=queryset_specs())
@@ -17,3 +22,11 @@ def test_build_queryset_always_orders_by_pk_last(spec: QuerySetSpec):
     qs = build_queryset(spec)
     # then
     assert qs.query.order_by[-1] == "pk"
+
+
+@given(spec=queryset_specs())
+def test_build_queryset_applies_the_spec_deferred_loading(spec: QuerySetSpec):
+    # when
+    qs = build_queryset(spec)
+    # then
+    assert qs.query.deferred_loading == expected_deferred_loading(spec)

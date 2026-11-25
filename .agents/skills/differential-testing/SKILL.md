@@ -33,7 +33,17 @@ Asyncopation must give identical snapshots on every backend.
   (Django core async API; used for the harness self-check).
 - `strategies.py` - Hypothesis strategies producing `QuerySetSpec`s (filters, excludes,
   ordering, slicing, select_related, annotations picked by name from `ANNOTATIONS` and usable in
-  the ordering) and `build_queryset(spec)`; `annotated_spec()` builds example-based specs.
+  the ordering, the `Book.editions` reverse FK - `Count("editions")` without `distinct` because
+  `BookEdition` has a composite pk - and an `editions__released__isnull` filter, and one
+  `only()` or `defer()` over Book fields and `author__*` paths of the chosen select_related) and
+  `build_queryset(spec)` (order: select_related, annotate, only/defer, order_by, slice);
+  `annotated_spec()`, `filtered_spec()` and `deferred_spec()` build example-based specs.
+  Invalid deferrals (defer() of a select_related-traversed FK, or only() that never reaches one)
+  make Django raise `FieldError` at compile time; the generator builds one in 20 when select_related is
+  not empty, `is_valid_deferral()` classifies a spec, and the random differential test expects
+  exactly `expected_error(spec)` (`FieldError` or none) on the sync side and the same outcome on
+  the async side (same exception type). `valid_deferred_specs()` yields only valid
+  deferrals for properties that need rows (e.g. a snapshot runs no extra query).
 
 ## Driver-level comparison (no QuerySet)
 Driver tests compare the async driver with Django's sync backend directly:

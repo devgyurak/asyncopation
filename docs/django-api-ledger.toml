@@ -72,7 +72,6 @@ modules = [
     "django.db.models.functions",
     "django.db.models.signals",
     "django.dispatch",
-    "django.utils.functional",
 ]
 
 # --------------------------------------------------------------------------- PostgreSQL driver (#2)

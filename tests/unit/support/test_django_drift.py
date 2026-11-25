@@ -643,7 +643,7 @@ def test_pin_check_names_the_package_it_was_given(requirement, installed, fragme
     assert fragment in problem
 
 
-def test_pin_check_accepts_an_installed_version_at_the_floor_of_another_package():
+def test_pin_check_accepts_a_package_installed_at_its_floor():
     # when
     problem = pin_problem(AS, "3.13.0", "asgiref")
     # then
@@ -696,6 +696,16 @@ def test_ledger_pin_check_accepts_a_verified_version_inside_the_requirement():
     problem = ledger_pin_problem(pyproject_text(AS, C61), VERSIONS, "asgiref")
     # then
     assert problem is None
+
+
+def test_ledger_pin_check_reports_an_unparsable_verified_version():
+    # when
+    problem = ledger_pin_problem(
+        pyproject_text(AS, C61), frozenset({("asgiref", "x.y")}), "asgiref"
+    )
+    # then
+    assert problem is not None
+    assert "'x.y'" in problem
 
 
 @pytest.mark.parametrize(

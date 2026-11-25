@@ -13,9 +13,8 @@ from tests.support.asgiref_local import (
     awaited_view,
     child_set_views,
     earlier_task_view,
-    is_thread_critical_local,
+    flag_selects_a_different_storage,
     later_task_view,
-    make_local,
     plain_thread_view,
     sibling_view_of_child_value,
     sync_other_thread_view,
@@ -25,11 +24,11 @@ from tests.support.asgiref_local import (
 )
 
 
-def test_thread_critical_flag_selects_the_thread_local_backed_storage():
+def test_thread_critical_flag_selects_a_different_storage_implementation():
     # when
-    critical = is_thread_critical_local(make_local(thread_critical=True))
+    differs = flag_selects_a_different_storage()
     # then
-    assert critical
+    assert differs
 
 
 def test_local_without_a_loop_is_visible_in_the_same_thread():
@@ -60,6 +59,7 @@ async def test_local_in_a_loop_is_visible_to_a_task_created_afterwards():
     assert seen == VALUE
 
 
+@pytest.mark.timeout(10)
 async def test_local_in_a_loop_is_invisible_to_a_task_created_beforehand():
     # when
     seen = await earlier_task_view()
@@ -67,13 +67,23 @@ async def test_local_in_a_loop_is_invisible_to_a_task_created_beforehand():
     assert seen is ABSENT
 
 
+@pytest.mark.timeout(10)
 async def test_value_set_in_a_child_task_is_invisible_to_the_parent():
     # when
-    parent_view, child_view = await child_set_views()
+    parent_view, _ = await child_set_views()
     # then
-    assert (parent_view, child_view) == (ABSENT, VALUE)
+    assert parent_view is ABSENT
 
 
+@pytest.mark.timeout(10)
+async def test_value_set_in_a_child_task_is_visible_to_the_child_itself():
+    # when
+    _, child_view = await child_set_views()
+    # then
+    assert child_view == VALUE
+
+
+@pytest.mark.timeout(10)
 async def test_value_set_in_a_task_is_invisible_to_a_sibling_task():
     # when
     seen = await sibling_view_of_child_value()
@@ -103,8 +113,11 @@ async def test_local_in_a_loop_is_invisible_to_a_plain_thread():
     assert seen is ABSENT
 
 
-async def test_non_critical_local_is_visible_to_sync_to_async_unlike_the_critical_one():
+@pytest.mark.parametrize("thread_sensitive", [True, False], ids=["sensitive", "insensitive"])
+async def test_non_critical_local_is_visible_to_sync_to_async_unlike_the_critical_one(
+    thread_sensitive,
+):
     # when
-    seen = await sync_to_async_view(thread_sensitive=True, thread_critical=False)
+    seen = await sync_to_async_view(thread_sensitive=thread_sensitive, thread_critical=False)
     # then
     assert seen == VALUE

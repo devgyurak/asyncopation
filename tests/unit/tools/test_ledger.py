@@ -209,6 +209,8 @@ def test_malformed_ledger_entries_are_rejected_with_a_clear_error(entry, message
     [
         (DEP.replace('package = "asgiref"\n', ""), "`package` must be a str"),
         (DEP.replace('"asgiref"', "1"), "`package` must be a str"),
+        (DEP.replace('"asgiref"', '"Asgiref"'), "lower-case name"),
+        (DEP.replace('"asgiref"', '"a-b"'), "lower-case name"),
         (
             DEP.replace('names = ["local.Local", "sync.sync_to_async"]', "names = []"),
             "`names` must be",
@@ -238,6 +240,8 @@ def test_malformed_ledger_entries_are_rejected_with_a_clear_error(entry, message
     ids=[
         "no-package",
         "package-not-a-string",
+        "package-upper-case",
+        "package-with-a-dash",
         "names-empty",
         "duplicate-name",
         "duplicate-package-row",

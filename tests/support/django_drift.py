@@ -61,8 +61,13 @@ def package_requirement(pyproject: str, package: str) -> str | None:
     return package + ",".join(sorted({str(spec) for _, req in found for spec in req.specifier}))
 
 
-def pin_problem(requirement: str | None, installed: str, package: str = "django") -> str | None:
-    """Why the installed ``package`` violates the pyproject requirement, or None."""
+def pin_problem(
+    requirement: str | None, installed: str, package: str = "django", subject: str | None = None
+) -> str | None:
+    """Why the installed ``package`` violates the pyproject requirement, or None.
+
+    ``subject`` replaces the "installed <package> <version>" wording of the out-of-range message.
+    """
     label = "Django" if package == "django" else package
     if requirement is None:
         return (
@@ -78,7 +83,8 @@ def pin_problem(requirement: str | None, installed: str, package: str = "django"
     if not allowed:
         return f"{requirement!r} does not constrain the {label} version"
     if not inside:
-        return f"installed {label} {installed} is outside the pyproject pin {requirement!r}"
+        who = subject or f"installed {label} {installed}"
+        return f"{who} is outside the pyproject pin {requirement!r}"
     return None
 
 
@@ -108,19 +114,12 @@ def ledger_pin_problem(
     verified = dict(versions).get(package)
     if verified is None:
         return f"no [[dependency]] row for {package} in the ledger"
-    requirement = package_requirement(pyproject, package)
-    if requirement is None:
-        return pin_problem(None, verified, package)
-    try:
-        allowed = Requirement(requirement).specifier
-        inside = allowed.contains(Version(verified), prereleases=True)
-    except ValueError as exc:
-        return f"{requirement!r} / {verified!r}: {exc}"
-    if not allowed:
-        return f"{requirement!r} does not constrain the {package} version"
-    if not inside:
-        return f"the ledger's {package} {verified} is outside the pyproject pin {requirement!r}"
-    return None
+    return pin_problem(
+        package_requirement(pyproject, package),
+        verified,
+        package,
+        subject=f"the ledger's {package} {verified}",
+    )
 
 
 def dependency_name_problem(package: str, name: str) -> str | None:

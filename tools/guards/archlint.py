@@ -137,6 +137,7 @@ _INTERNAL_KEYS = {
 _ATTRIBUTE_KEYS = {"owner", "names", "used_by", "reason", "verified_against", "signatures"}
 _DEPENDENCY_KEYS = {"package", "names", "used_by", "reason", "verified_against"}
 _RELEASE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+_DEPENDENCY_PACKAGE = re.compile(r"[a-z0-9_]+")
 
 
 @dataclass(frozen=True)
@@ -241,8 +242,9 @@ def _dependencies(data: dict) -> tuple[set[tuple[str, str]], set[tuple[str, str]
     subject: nothing under ``src/`` imports the package, so no import can be checked, and A202
     would flag every row stale. ``tests/unit/django_drift`` owns the checks instead (names still
     resolve, installed version equals ``verified_against``, pyproject floor admits it). Hence
-    ``verified_against`` is an exact ``X.Y.Z`` release (compared for equality), the package has
-    one row, and ``signatures`` / ``ported`` do not exist for this table.
+    ``verified_against`` is an exact ``X.Y.Z`` release (compared for equality), ``package`` is the
+    lower-case distribution name that is also the import name (so rows cannot disagree with the
+    metadata lookup or the name check), the package has one row, and ``signatures`` / ``ported`` do not exist for this table.
     """
     names_found: set[tuple[str, str]] = set()
     versions: dict[str, str] = {}
@@ -251,6 +253,11 @@ def _dependencies(data: dict) -> tuple[set[tuple[str, str]], set[tuple[str, str]
         package = _require(entry, "[[dependency]]", "package", str)
         names = _names(entry, "[[dependency]]")
         _check_record(entry, "[[dependency]]", package)
+        if not _DEPENDENCY_PACKAGE.fullmatch(package):
+            raise ValueError(
+                f"[[dependency]] {package}: `package` must be the lower-case name that is both "
+                "the distribution and the import name (letters, digits, `_`)"
+            )
         if not _RELEASE_VERSION.fullmatch(entry["verified_against"]):
             raise ValueError(
                 f"[[dependency]] {package}: `verified_against` must be an exact release "

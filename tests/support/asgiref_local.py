@@ -29,9 +29,9 @@ def read(local: Local) -> Any:
     return getattr(local, "value", ABSENT)
 
 
-def is_thread_critical_local(local: Local) -> bool:
-    """Whether ``Local(thread_critical=True)`` produced the thread-local-backed variant."""
-    return type(local).__name__ == "_ThreadCriticalLocal"
+def flag_selects_a_different_storage() -> bool:
+    """Whether ``thread_critical`` picks another implementation (the class is private to asgiref)."""
+    return type(make_local(thread_critical=True)) is not type(make_local(thread_critical=False))
 
 
 def sync_same_thread_view() -> Any:
@@ -117,8 +117,8 @@ async def sibling_view_of_child_value() -> Any:
     return seen
 
 
-async def to_thread_view(*, thread_critical: bool = True) -> Any:
-    local = make_local(thread_critical=thread_critical)
+async def to_thread_view() -> Any:
+    local = make_local(thread_critical=True)
     local.value = VALUE
     return await asyncio.to_thread(read, local)
 
@@ -140,8 +140,17 @@ async def _read_async(local: Local) -> Any:
 
 
 def _plain_thread_read(local: Local) -> Any:
-    box: list[Any] = [None]
-    thread = threading.Thread(target=lambda: box.__setitem__(0, read(local)))
+    box: list[Any] = []
+
+    def target() -> None:
+        try:
+            box.append(read(local))
+        except BaseException as exc:  # re-raised in the caller, not left as a thread warning
+            box.append(exc)
+
+    thread = threading.Thread(target=target)
     thread.start()
     thread.join()
+    if isinstance(box[0], BaseException):
+        raise box[0]
     return box[0]

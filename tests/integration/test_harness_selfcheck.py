@@ -7,10 +7,12 @@ before any Asyncopation code exists; if they fail, the harness - not the library
 from functools import partial
 
 import pytest
+from django.db.models import FETCH_ONE, FETCH_PEERS  # ty: ignore[missing-module-member] - missing from django-types
 from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
+from tests.support.deferred_queries import evaluate_and_snapshot_query_counts
 from tests.support.snapshot import annotation_names, related_snapshot, snapshot
 from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
 
@@ -190,3 +192,32 @@ async def test_select_related_snapshot_contains_nested_related_objects(readonly_
     # then
     assert publisher is not None
     assert publisher[0] == "catalog.Publisher"
+
+
+DEFERRED_BUILDS = [
+    pytest.param(lambda: Book.objects.only("title").order_by("pk"), id="only"),
+    pytest.param(lambda: Book.objects.defer("metadata").order_by("pk"), id="defer"),
+    pytest.param(
+        lambda: Book.objects.select_related("author").only("title", "author__name").order_by("pk"),
+        id="only-select-related",
+    ),
+    pytest.param(lambda: BookEdition.objects.only("number").order_by("pk"), id="only-composite-pk"),
+]
+
+
+@pytest.mark.parametrize("build", DEFERRED_BUILDS)
+async def test_reference_deferred_querysets_match_sync(readonly_db, reference_differential, build):
+    # when
+    result = await reference_differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize("fetch_mode", [FETCH_ONE, FETCH_PEERS], ids=["fetch-one", "fetch-peers"])
+@pytest.mark.parametrize("build", DEFERRED_BUILDS)
+def test_snapshot_of_deferred_querysets_runs_no_extra_query(readonly_db, build, fetch_mode):
+    # when
+    rows, evaluated, snapshotted = evaluate_and_snapshot_query_counts(build, fetch_mode)
+    # then
+    assert (rows > 0, evaluated, snapshotted) == (True, 1, 0)

@@ -7,12 +7,12 @@ before any Asyncopation code exists; if they fail, the harness - not the library
 from functools import partial
 
 import pytest
+from django.db.models import FETCH_ONE, FETCH_PEERS  # ty: ignore[missing-module-member] - missing from django-types
 from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
 from tests.support.deferred_queries import evaluate_and_snapshot_query_counts
-from tests.support.fetch_modes import FETCH_ONE, FETCH_PEERS
 from tests.support.snapshot import annotation_names, related_snapshot, snapshot
 from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
 

@@ -6,8 +6,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, cast
 
+from django.db.models import FETCH_ONE  # ty: ignore[missing-module-member] - missing from django-types
+
 from harness.catalog.models import Author, AuthorProfile, Book, BookEdition, Publisher
-from tests.support.fetch_modes import FETCH_ONE
 
 
 class Unloaded(Enum):
@@ -88,9 +89,11 @@ def make_deferred_author(*deferred: str, fetch_mode: Any = FETCH_ONE) -> Author:
     if unknown:
         raise ValueError(f"not concrete fields of Author: {sorted(unknown)}")
     loaded = [name for name in names if name not in deferred]
-    # cast: the installed stubs predate the 6.1 ``fetch_mode`` argument
-    return cast("Any", Author).from_db(
-        None, loaded, [getattr(author, name) for name in loaded], fetch_mode=fetch_mode
+    return Author.from_db(
+        None,
+        loaded,
+        [getattr(author, name) for name in loaded],
+        fetch_mode=fetch_mode,  # ty: ignore[unknown-argument] - missing from django-types
     )
 
 

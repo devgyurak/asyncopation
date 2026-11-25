@@ -43,9 +43,8 @@ def snapshot(obj: Model) -> Snapshot:
     A field deferred by ``only()``/``defer()`` is never read (reading would run a hidden query on
     the sync side - FETCH_PEERS also fills peer instances - and raise
     ``SynchronousOnlyOperation`` (core async) or ``FieldFetchBlocked`` (FETCH_RAISE, ADR-0006) on
-    the async side): it is recorded as
-    ``(attname, "<deferred>", None)``, so "deferred" differs from any loaded value. The rule
-    applies to related objects too.
+    the async side): it is recorded as ``(attname, "<deferred>", None)``, so "deferred" differs
+    from any loaded value. The rule applies to related objects too.
 
     Annotations (``qs.annotate(...)``) are stored as plain instance attributes: they are the public
     attributes that are not concrete fields (``extra(select=...)`` values and

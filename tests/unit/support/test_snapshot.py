@@ -1,10 +1,10 @@
 from decimal import Decimal
 
 import pytest
+from django.db.models import FETCH_ONE, FETCH_PEERS, FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
 
 from harness.catalog.models import Book, Publisher
 from tests.support.deferred_loads import forbid_deferred_loads
-from tests.support.fetch_modes import FETCH_ONE, FETCH_PEERS, FETCH_RAISE
 from tests.support.snapshot import (
     annotation_names,
     field_snapshot,

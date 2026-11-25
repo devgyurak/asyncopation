@@ -37,7 +37,7 @@ class DifferentialResult:
     async_outcome: Outcome
 
 
-def _error_name(exc: BaseException) -> str:
+def error_name(exc: BaseException) -> str:
     return f"{type(exc).__module__}.{type(exc).__qualname__}"
 
 
@@ -46,7 +46,7 @@ async def run_sync(build: QuerySetFactory, evaluator: Evaluator) -> Outcome:
         try:
             return Outcome(snapshot_result(evaluator.sync(build())), None)
         except Exception as exc:
-            return Outcome(None, _error_name(exc))
+            return Outcome(None, error_name(exc))
         finally:
             # Close the worker thread's connection; otherwise dropping the test DB hangs.
             connections.close_all()
@@ -58,7 +58,7 @@ async def run_async(build: QuerySetFactory, evaluator: Evaluator) -> Outcome:
     try:
         return Outcome(snapshot_result(await evaluator.async_(build())), None)
     except Exception as exc:
-        return Outcome(None, _error_name(exc))
+        return Outcome(None, error_name(exc))
 
 
 async def run_differential(build: QuerySetFactory, evaluator: Evaluator) -> DifferentialResult:

@@ -64,7 +64,8 @@ differs from "loaded as None"), value **and type**, and order. Deferred fields
 (`only()`/`defer()`) are never loaded by the snapshot (in any fetch mode); they are compared as a
 `"<deferred>"` marker. `_prefetched_objects_cache` (multi-valued prefetch: reverse FK, M2M,
 GenericRelation) is out of scope until #17.
-Add Hypothesis strategies when adding QuerySet features.
+Add Hypothesis strategies when adding QuerySet features. Generated `only()`/`defer()` specs may
+be invalid (`FieldError`, same type on both sides); use `valid_deferred_specs()` when rows are needed.
 
 Driver-level tests (no QuerySet) use the same idea one layer lower: run the same SQL through the
 async driver and through a synchronous Django `DatabaseWrapper` built from the same settings and

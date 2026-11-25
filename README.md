@@ -10,7 +10,7 @@ instead of hopping to a thread with `sync_to_async`.
 |---|---|
 | PyPI | `django-asyncopation` |
 | import | `asyncopation` |
-| Requires | Python 3.12+, Django 6.1, ASGI |
+| Requires | Python 3.12+, Django 6.1, asgiref 3.13+, ASGI |
 | Name | *syncopation* (an off-beat rhythm) + *async*; a nod to Django Reinhardt |
 
 ```python

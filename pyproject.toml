@@ -14,7 +14,7 @@ classifiers = [
 # We port Django internals (ModelIterable, prefetch_one_level, fetch modes ...), so the
 # minor version is pinned. Widening the range requires re-validating docs/django-api-ledger.toml
 # and updating the `Framework :: Django :: X.Y` classifiers (the drift test checks them).
-dependencies = ["django>=6.1,<6.2"]
+dependencies = ["django>=6.1,<6.2", "asgiref>=3.13"]
 
 [project.optional-dependencies]
 postgresql = ["psycopg[pool]>=3.3"]

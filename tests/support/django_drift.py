@@ -2,7 +2,8 @@
 
 Ledger checks: docs/django-api-ledger.toml against the installed Django. Pin checks: the
 ``django`` requirement and ``Framework :: Django :: X.Y`` classifiers in pyproject.toml against
-each other and against the installed Django.
+each other and against the installed Django. Dependency checks: a ``[[dependency]]`` ledger row
+(a third-party package such as asgiref) against the installed version and the pyproject requirement.
 
 The pin checks and ledger-entry checks return a human-readable problem (None = no drift) instead
 of raising, so tests stay free of control flow (``raw_entry_count`` is a plain count and may raise
@@ -34,7 +35,12 @@ _UPPER = frozenset({"<", "<=", "~=", "=="})
 
 
 def django_requirement(pyproject: str) -> str | None:
-    """The unconditional ``django`` requirement of ``[project].dependencies``, or None.
+    """The unconditional ``django`` requirement of ``[project].dependencies``, or None."""
+    return package_requirement(pyproject, "django")
+
+
+def package_requirement(pyproject: str, package: str) -> str | None:
+    """The unconditional requirement on ``package`` in ``[project].dependencies``, or None.
 
     Entries with an environment marker are skipped. Several entries are combined, as pip does,
     into one requirement that carries every specifier.
@@ -48,17 +54,26 @@ def django_requirement(pyproject: str) -> str | None:
         [d for d in dependencies if isinstance(d, str)] if isinstance(dependencies, list) else []
     )
     found = [
-        (entry, req) for entry in entries if (req := _django_requirement_of(entry)) is not None
+        (entry, req) for entry in entries if (req := _requirement_named(entry, package)) is not None
     ]
     if len(found) <= 1:
         return found[0][0] if found else None
-    return "django" + ",".join(sorted({str(spec) for _, req in found for spec in req.specifier}))
+    return package + ",".join(sorted({str(spec) for _, req in found for spec in req.specifier}))
 
 
-def pin_problem(requirement: str | None, installed: str) -> str | None:
-    """Why the installed Django violates the pyproject requirement, or None."""
+def pin_problem(
+    requirement: str | None, installed: str, package: str = "django", subject: str | None = None
+) -> str | None:
+    """Why the installed ``package`` violates the pyproject requirement, or None.
+
+    ``subject`` replaces the "installed <package> <version>" wording of the out-of-range message.
+    """
+    label = "Django" if package == "django" else package
     if requirement is None:
-        return "pyproject.toml: no unconditional django requirement (valid, without marker) in [project].dependencies"
+        return (
+            f"pyproject.toml: no unconditional {package} requirement "
+            "(valid, without marker) in [project].dependencies"
+        )
     try:
         allowed = Requirement(requirement).specifier
         version = Version(installed)
@@ -66,9 +81,66 @@ def pin_problem(requirement: str | None, installed: str) -> str | None:
     except ValueError as exc:  # InvalidRequirement and InvalidVersion are ValueErrors
         return f"{requirement!r} / {installed!r}: {exc}"
     if not allowed:
-        return f"{requirement!r} does not constrain the Django version"
+        return f"{requirement!r} does not constrain the {label} version"
     if not inside:
-        return f"installed Django {installed} is outside the pyproject pin {requirement!r}"
+        who = subject or f"installed {label} {installed}"
+        return f"{who} is outside the pyproject pin {requirement!r}"
+    return None
+
+
+def ledger_version_problem(
+    versions: frozenset[tuple[str, str]], package: str, installed: str
+) -> str | None:
+    """Why the installed ``package`` is not the version its ``[[dependency]]`` row verified."""
+    verified = dict(versions).get(package)
+    if verified is None:
+        return f"no [[dependency]] row for {package} in the ledger"
+    try:
+        same = Version(installed) == Version(verified)
+    except ValueError as exc:  # InvalidVersion is a ValueError
+        return f"{installed!r} / {verified!r}: {exc}"
+    if not same:
+        return (
+            f"installed {package} {installed} differs from the ledger's {verified}: re-read the "
+            "pins in tests/unit/django_drift (test_asgiref_local_drift.py and "
+            "test_connection_handler_drift.py), then update verified_against in the "
+            f"[[dependency]] row of docs/django-api-ledger.toml for {package}"
+        )
+    return None
+
+
+def ledger_pin_problem(
+    pyproject: str, versions: frozenset[tuple[str, str]], package: str
+) -> str | None:
+    """Why the ledger's verified ``package`` version is outside the pyproject requirement."""
+    verified = dict(versions).get(package)
+    if verified is None:
+        return f"no [[dependency]] row for {package} in the ledger"
+    return pin_problem(
+        package_requirement(pyproject, package),
+        verified,
+        package,
+        subject=f"the ledger's {package} {verified}",
+    )
+
+
+def packages_of(versions: frozenset[tuple[str, str]]) -> list[str]:
+    """The sorted package names of ledger ``(package, version)`` pairs."""
+    return sorted(package for package, _ in versions)
+
+
+def used_by_problem(root: Path, path: str) -> str | None:
+    """Why a ``used_by`` path of a ``[[dependency]]`` row does not exist under ``root``."""
+    if (root / path).is_file():
+        return None
+    return f"{path}: file not found (update used_by in the [[dependency]] row)"
+
+
+def dependency_name_problem(package: str, name: str) -> str | None:
+    """Why ``package.<dotted name>`` (a ``[[dependency]]`` name) no longer resolves, or None."""
+    target = _resolve(f"{package}.{name}")
+    if isinstance(target, _Unresolved):
+        return f"{package}.{name}: {target.reason}"
     return None
 
 
@@ -173,12 +245,12 @@ def _admitted_minors(specifier: SpecifierSet, installed: Version) -> set[str] | 
     }
 
 
-def _django_requirement_of(dependency: str) -> Requirement | None:
+def _requirement_named(dependency: str, package: str) -> Requirement | None:
     try:
         parsed = Requirement(dependency)
     except InvalidRequirement:
         return None
-    if canonicalize_name(parsed.name) == "django" and parsed.marker is None:
+    if canonicalize_name(parsed.name) == canonicalize_name(package) and parsed.marker is None:
         return parsed
     return None
 
@@ -299,7 +371,9 @@ def raw_entry_count(ledger_text: str) -> int:
     """Number of (module|owner, name) pairs written in the ledger TOML, before any processing."""
     data = tomllib.loads(ledger_text)
     return sum(
-        len(entry["names"]) for table in ("internal", "attribute") for entry in data.get(table, [])
+        len(entry["names"])
+        for table in ("internal", "attribute", "dependency")
+        for entry in data.get(table, [])
     )
 
 

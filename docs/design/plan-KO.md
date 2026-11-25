@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=23672c4e93d0 -->
+<!-- i18n: source=docs/design/plan.md source-sha256=6fa5b74e912f -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -278,6 +278,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입 (PostgreSQL; #5, ADR-0004; MySQL/MariaDB 프로브 → #7)
 - [x] 실행기와 연결 소유권: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, 깨진 트랜잭션 상태, 열린 pin과 스트림을 기다리는 `close()` (#5, ADR-0001; `async_atomic` → #19, 풀 크기 → #8, 훅 → #4)
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
+- [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
 - [ ] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, 현재 strict xfail)
 - [ ] asyncmy로 같은 흐름 재현
 

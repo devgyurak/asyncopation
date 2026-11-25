@@ -11,6 +11,8 @@ from tests.support.lifecycle.helpers import entry_aliases, error_names, failing
 from tests.support.lifecycle.logs import capture_logs, errors_logged, mention_count
 from tests.support.lifecycle.scenarios import (
     SetupScenario,
+    cancel_opener_while_close_waits,
+    close_cancelled_twice_while_the_driver_closes,
     close_while_open_hangs,
     ensure_is_refused,
 )
@@ -296,15 +298,15 @@ async def test_a_cancelled_close_logs_the_driver_close_failures_at_error(opened,
     assert mention_count(errors_logged(caplog), "failed to close") == 1
 
 
-async def test_an_uninterrupted_close_does_not_log_the_failure_it_raises(opened, caplog):
+async def test_an_uninterrupted_close_logs_the_failure_it_raises_once(opened, caplog):
     # given
     capture_logs(caplog)
     opened.script.fail_close = True
     await failing(close(), FakeCloseError)
     # when
-    logged = errors_logged(caplog)
+    logged = mention_count(errors_logged(caplog), "failed to close")
     # then
-    assert logged == []
+    assert logged == 1
 
 
 async def test_close_with_a_hung_open_returns_within_its_timeout(opening):
@@ -375,3 +377,121 @@ async def test_a_caller_cancelled_during_open_leaves_no_driver(opening):
     # then
     assert registry.entries() == []
     assert opening.env.recorder.opens == 0
+
+
+async def test_close_cancelled_while_a_driver_is_closing_still_closes_it(opened, closing):
+    # when
+    outcome = await close_cancelled_twice_while_the_driver_closes(opened, closing)
+    # then
+    assert error_names([outcome]) == ["CancelledError"]
+    assert opened.recorder.built[0].is_open is False
+    assert registry.entries() == []
+
+
+async def test_close_cancelled_while_a_driver_is_closing_clears_the_closing_mark(opened, closing):
+    # when
+    await close_cancelled_twice_while_the_driver_closes(opened, closing)
+    # then
+    assert await ensure_is_refused("default") is False
+
+
+async def test_a_close_cancelled_twice_still_logs_the_driver_close_failure(opened, closing, caplog):
+    # given
+    capture_logs(caplog)
+    opened.script.fail_close = True
+    # when
+    await close_cancelled_twice_while_the_driver_closes(opened, closing)
+    # then
+    assert mention_count(errors_logged(caplog), "failed to close") == 1
+
+
+async def test_cancelled_setup_rollback_still_closes_the_driver_it_opened(rollback):
+    # given
+    await rollback.begin()
+    await rollback.cancel_setup()
+    # when
+    await rollback.release_and_settle()
+    # then
+    assert rollback.env.recorder.built[0].is_open is False
+
+
+async def test_a_caller_cancelled_during_open_while_close_waits_still_sees_cancelled_error(
+    opening,
+):
+    # given
+    await opening.begin()
+    # when
+    await cancel_opener_while_close_waits(opening)
+    # then
+    assert opening.task is not None
+    assert opening.task.cancelled() is True
+
+
+async def test_close_that_waited_for_a_cancelled_opener_finishes_cleanly(opening):
+    # given
+    await opening.begin()
+    # when
+    results = await cancel_opener_while_close_waits(opening)
+    # then
+    assert error_names(results) == ["CancelledError", "ok"]
+    assert registry.entries() == []
+
+
+async def test_close_with_a_timeout_and_a_failing_driver_raises_the_driver_failure(
+    opened, short_closing
+):
+    # given
+    opened.script.fail_close = True
+    await short_closing.begin()
+    # when / then
+    with pytest.raises(FakeCloseError):
+        await short_closing.join()
+
+
+async def test_close_with_a_timeout_and_a_failing_driver_logs_the_timeout(
+    opened, short_closing, caplog
+):
+    # given
+    capture_logs(caplog)
+    opened.script.fail_close = True
+    await short_closing.begin()
+    await failing(short_closing.join(), FakeCloseError)
+    # when
+    logged = mention_count(errors_logged(caplog), "still in flight")
+    # then
+    assert logged == 1
+
+
+async def test_setup_rollback_logs_a_driver_that_fails_to_close_at_error(configured, caplog):
+    # given
+    capture_logs(caplog)
+    configured.script.fail_open_after = 1
+    configured.script.fail_close = True
+    # when
+    await failing(setup(["default", "other"]), FakeOpenError)
+    # then
+    assert mention_count(errors_logged(caplog), "failed to close") == 1
+
+
+async def test_setup_rollback_still_raises_the_open_error_when_a_close_fails(configured):
+    # given
+    configured.script.fail_open_after = 1
+    configured.script.fail_close = True
+    # when / then
+    with pytest.raises(FakeOpenError):
+        await setup(["default", "other"])
+
+
+async def test_setup_without_configure_raises_improperly_configured_naming_the_app(fake):
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="INSTALLED_APPS"):
+        await setup()
+
+
+async def test_setup_without_configure_opens_nothing(fake):
+    # given
+    await failing(setup(), ImproperlyConfigured)
+    # when
+    built = fake.recorder.built
+    # then
+    assert built == []

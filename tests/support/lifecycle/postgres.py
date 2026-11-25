@@ -221,3 +221,25 @@ async def ensure_after_rename(alias: str = "default") -> Any:
     configure()
     with patched_alias_settings(alias, NAME="renamed_after_configure"):
         return await ensure_driver(alias)
+
+
+def alias_value_during_and_after(
+    key: str, value: Any, alias: str = "default"
+) -> tuple[Any, Any, Any]:
+    """`DATABASES[alias][key]` before, inside and after `patched_alias_settings(alias, key=value)`."""
+    from django.db import connections
+
+    before = connections.settings[alias].get(key)
+    with patched_alias_settings(alias, **{key: value}):
+        during = connections.settings[alias].get(key)
+    return before, during, connections.settings[alias].get(key)
+
+
+def other_alias_value_during(key: str, value: Any, alias: str, other: str) -> tuple[Any, Any]:
+    """`DATABASES[other][key]` before and inside a patch of `alias`."""
+    from django.db import connections
+
+    before = connections.settings[other].get(key)
+    with patched_alias_settings(alias, **{key: value}):
+        during = connections.settings[other].get(key)
+    return before, during

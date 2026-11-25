@@ -113,7 +113,8 @@ def purge_closed_loops() -> None:
     for key, found in list(_entries.items()):
         if not key[1].is_closed():
             continue
-        del _entries[key]
+        if _entries.pop(key, None) is None:
+            continue  # another thread's purge got it first
         if found.driver is not None:
             _leaked.append(key)
             logger.error(

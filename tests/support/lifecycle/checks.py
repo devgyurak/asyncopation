@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 
 async def dispose_environment() -> None:
     """Per-test teardown of the fake environment: asserts that no driver leaked (see below)."""
@@ -49,10 +51,19 @@ def drain_in_flight(alias: str) -> None:
         registry.statement_finished(alias)
 
 
-def assert_registry_clean() -> None:
-    """Fail when a test left a driver in the registry (or one was dropped with a closed loop)."""
+async def assert_registry_clean() -> None:
+    """Fail when a test left a driver in the registry (or one was dropped with a closed loop).
+
+    Leftovers of this loop are closed first (bounded) so that they do not stay open for the rest
+    of the session; the test still fails.
+    """
     from asyncopation.connection import registry
+    from asyncopation.connection.lifecycle import close
 
     leftovers = [*registry.entries(), *registry.take_leaked()]
-    registry.reset()
+    try:
+        with contextlib.suppress(Exception):
+            await close(timeout=1.0)
+    finally:
+        registry.reset()
     assert leftovers == [], f"the test left drivers in the registry: {leftovers}"

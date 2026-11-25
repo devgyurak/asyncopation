@@ -11,6 +11,7 @@ from asyncopation.connection import lifecycle, registry
 from asyncopation.connection.lifecycle import ensure_driver
 from tests.support.lifecycle.fakes import uncopiable_options
 from tests.support.lifecycle.helpers import entry_aliases, prepared_aliases
+from tests.support.lifecycle.scenarios import elapsed_of_timed_out_close
 
 
 async def test_top_level_setup_opens_the_configured_drivers(configured):
@@ -114,9 +115,12 @@ async def test_top_level_close_without_a_timeout_uses_the_default_close_timeout(
         await asyncopation.close()
 
 
-async def test_top_level_close_with_an_explicit_timeout_uses_it(flights):
+async def test_top_level_close_with_an_explicit_timeout_uses_it(flights, monkeypatch):
     # given
+    monkeypatch.setattr(lifecycle, "DEFAULT_CLOSE_TIMEOUT", 3600.0)
     registry.statement_started("default")
-    # when / then
-    with pytest.raises(TimeoutError):
-        await asyncopation.close(timeout=0.05)
+    # when
+    elapsed, error = await elapsed_of_timed_out_close(0.05)
+    # then
+    assert error == "TimeoutError"
+    assert elapsed < 2.0

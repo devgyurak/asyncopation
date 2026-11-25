@@ -37,8 +37,8 @@ application = LifespanApp(get_asgi_application())
 ```
 
 Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
-themselves. A query before `setup()` still works (the pool is opened once, lazily, with a logged
-warning that recommends the lifespan wrapper). `setup()` opens every database whose engine is
+themselves. Using a database before `setup()` (the future query path) opens its pool once, lazily, with a logged
+warning that recommends the lifespan wrapper. `setup()` opens every database whose engine is
 supported and skips the others; pass `LifespanApp(app, aliases=[...])` or `setup(aliases=[...])` to
 choose. MySQL/MariaDB are not supported yet.
 

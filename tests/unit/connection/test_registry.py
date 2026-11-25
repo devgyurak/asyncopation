@@ -6,7 +6,13 @@ from asyncopation.connection import configure, registry
 from asyncopation.connection.lifecycle import ensure_driver
 from asyncopation.drivers.base import PoolStats
 from tests.support.lifecycle.fakes import FakeInfo
-from tests.support.lifecycle.loops import fresh_loop, in_flight_in_other_loop
+from tests.support.lifecycle.logs import capture_logs, errors_logged, mention_count
+from tests.support.lifecycle.loops import (
+    fresh_loop,
+    in_flight_in_other_loop,
+    leave_open_in_other_loop,
+    purge_from_threads,
+)
 
 
 def test_registry_is_empty_before_anything_opens(fake):
@@ -142,3 +148,36 @@ async def test_in_flight_is_counted_per_loop(flights):
     other = await in_flight_in_other_loop("default")
     # then
     assert other == 0
+
+
+async def test_a_concurrent_purge_of_a_leaked_pool_raises_nothing(configured):
+    # given
+    await leave_open_in_other_loop("default")
+    # when
+    errors = await purge_from_threads()
+    # then
+    assert errors == []
+    assert len(registry.take_leaked()) == 1
+
+
+async def test_a_concurrent_purge_of_a_leaked_pool_logs_it_once(configured, caplog):
+    # given
+    capture_logs(caplog)
+    await leave_open_in_other_loop("default")
+    # when
+    await purge_from_threads()
+    registry.take_leaked()  # consumed: the teardown check must not fail on it
+    # then
+    assert mention_count(errors_logged(caplog), "was closed without") == 1
+
+
+async def test_purging_twice_logs_the_leaked_pool_once(configured, caplog):
+    # given
+    capture_logs(caplog)
+    await leave_open_in_other_loop("default")
+    # when
+    registry.purge_closed_loops()
+    registry.purge_closed_loops()
+    registry.take_leaked()  # consumed: the teardown check must not fail on it
+    # then
+    assert mention_count(errors_logged(caplog), "was closed without") == 1

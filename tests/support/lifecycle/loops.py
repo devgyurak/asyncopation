@@ -139,3 +139,21 @@ def purge_and_report_leaks() -> list[str]:
 
     registry.purge_closed_loops()
     return aliases_of(registry.take_leaked())
+
+
+async def purge_from_threads(count: int = 4) -> list[str]:
+    """`registry.purge_closed_loops()` from `count` threads at once; the errors they raised."""
+    from asyncopation.connection import registry
+
+    errors: list[str] = []
+    barrier = threading.Barrier(count)
+
+    def worker() -> None:
+        barrier.wait()
+        try:
+            registry.purge_closed_loops()
+        except Exception as exc:
+            errors.append(repr(exc))
+
+    await asyncio.gather(*(asyncio.to_thread(worker) for _ in range(count)))
+    return errors

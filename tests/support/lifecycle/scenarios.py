@@ -307,11 +307,16 @@ class ConcurrentOpenScenario:
         tasks = [t for t in (self.b, self.setup_task) if t is not None and not t.done()]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        async with asyncio.timeout(self.within):  # a task that ignores cancel must not hang us
+            await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _four_acquires(counter: LockCounter) -> bool:
     return counter.acquired >= 4
+
+
+async def _first_driver_closed(env: FakeEnv) -> bool:
+    return not env.recorder.built[0].is_open
 
 
 async def _rollback_is_closing(recorder: Recorder) -> bool:
@@ -358,6 +363,13 @@ class RollbackScenario:
         self.setup_task.cancel()
         await asyncio.gather(self.setup_task, return_exceptions=True)
 
+    async def release_and_settle(self) -> None:
+        """Let the rollback's `driver.close()` finish and wait until it did."""
+        from tests.support.aio import wait_until
+
+        self.release()
+        await wait_until(lambda: _first_driver_closed(self.env))
+
     def release(self) -> None:
         if self.env.script.close_gate is not None:
             self.env.script.close_gate.set()
@@ -393,6 +405,7 @@ class HungClose:
     elapsed: float
     close_error: BaseException | None
     opener_outcome: Any
+    total: float = 0.0  # including the bounded wait for the opener
 
 
 async def close_while_open_hangs(scenario: OpeningScenario, close_timeout: float) -> HungClose:
@@ -412,5 +425,127 @@ async def close_while_open_hangs(scenario: OpeningScenario, close_timeout: float
         error = exc
     elapsed = loop.time() - started
     assert scenario.task is not None
+    outcome = await settle_task(scenario.task, scenario.env)
+    return HungClose(elapsed, error, outcome, loop.time() - started)
+
+
+async def settle_task(task: asyncio.Task[Any], env: FakeEnv, within: float = 2.0) -> Any:
+    """The outcome of `task`; when it is still not done after `within`, release the gates and
+    cancel it, so that the helper itself can never hang (the cancelled error is the outcome)."""
+    done, _pending = await asyncio.wait({task}, timeout=within)
+    if not done:
+        gate, env.script.gate = env.script.gate, None
+        if gate is not None:
+            gate.set()
+        task.cancel()
+    async with asyncio.timeout(within):
+        return (await asyncio.gather(task, return_exceptions=True))[0]
+
+
+async def stuck_opener_close(scenario: OpeningScenario, close_timeout: float) -> HungClose:
+    """`close_while_open_hangs`, but the opener the scenario waits for never ends by itself
+    (a stand-in for a regression where close() does not stop the open)."""
+    stuck = asyncio.create_task(asyncio.Event().wait())
+    scenario.task = stuck
+    return await close_while_open_hangs(scenario, close_timeout)
+
+
+async def _closes_started(recorder: Recorder, count: int) -> bool:
+    return recorder.closes >= count
+
+
+async def _not_closing(_unused: None = None) -> bool:
+    return not await _is_closing()
+
+
+async def close_cancelled_twice_while_the_driver_closes(
+    env: FakeEnv, scenario: ClosingScenario
+) -> BaseException | None:
+    """A statement holds `close()`; cancel it, then cancel it again while `driver.close()` runs.
+
+    The driver's close is released afterwards; returns how `close()` ended.
+    """
+    from tests.support.aio import wait_until
+
+    env.script.close_gate = asyncio.Event()
+    await scenario.begin()
+    assert scenario.task is not None
+    scenario.task.cancel()  # first: while waiting for the statement
+    await wait_until(lambda: _closes_started(env.recorder, 1))
+    scenario.task.cancel()  # second: while the shielded driver close runs
     outcome = (await asyncio.gather(scenario.task, return_exceptions=True))[0]
-    return HungClose(elapsed, error, outcome)
+    env.script.close_gate.set()
+    await wait_until(_not_closing)
+    return outcome if isinstance(outcome, BaseException) else None
+
+
+@dataclass
+class DiscardObservation:
+    error: BaseException | None
+    task_done_during_close: bool
+    lock_held_during_close: bool
+    driver_open_after: bool
+    lock_held_after: bool
+
+
+async def cancel_opener_while_the_discarded_driver_closes(
+    env: FakeEnv, alias: str = "default"
+) -> DiscardObservation:
+    """The probe fails, the cleanup `driver.close()` is held by the script, and the opener is
+    cancelled meanwhile; the close is then released."""
+    from asyncopation.connection import registry
+    from asyncopation.connection.lifecycle import ensure_driver
+    from tests.support.aio import wait_until
+
+    env.script.fail_probes = 1
+    env.script.close_gate = asyncio.Event()
+    task = asyncio.create_task(ensure_driver(alias))
+    await wait_until(lambda: _closes_started(env.recorder, 1))
+    task.cancel()
+    for _ in range(5):  # let the cancellation be delivered
+        await asyncio.sleep(0)
+    entry = registry.entry(alias, asyncio.get_running_loop())
+    assert entry is not None
+    done_during, lock_during = task.done(), entry.lock.locked()
+    env.script.close_gate.set()
+    outcome = (await asyncio.gather(task, return_exceptions=True))[0]
+    return DiscardObservation(
+        outcome if isinstance(outcome, BaseException) else None,
+        done_during,
+        lock_during,
+        env.recorder.built[0].is_open,
+        entry.lock.locked(),
+    )
+
+
+async def cancel_opener_while_close_waits(scenario: OpeningScenario) -> list[Any]:
+    """`close()` waits for the open; the opener's caller is cancelled meanwhile.
+
+    Returns the outcomes of the opener and of `close()`.
+    """
+    from asyncopation.connection.lifecycle import close
+    from tests.support.aio import wait_until
+
+    assert scenario.task is not None
+    close_task = asyncio.create_task(close())
+    await wait_until(_is_closing)
+    scenario.task.cancel()
+    return list(await asyncio.gather(scenario.task, close_task, return_exceptions=True))
+
+
+async def elapsed_of_timed_out_close(
+    close_timeout: float, within: float = 3.0
+) -> tuple[float, str]:
+    """Time and error name of the top-level `asyncopation.close(timeout=...)` while a statement
+    is in flight; bounded by `within` so that an ignored timeout fails fast."""
+    import asyncopation
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    name = "none"
+    try:
+        async with asyncio.timeout(within):
+            await asyncopation.close(timeout=close_timeout)
+    except TimeoutError as exc:
+        name = type(exc).__name__
+    return loop.time() - started, name

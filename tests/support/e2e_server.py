@@ -11,6 +11,7 @@ Registry state lives in the server process; tests read it through two harness ho
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import socket
@@ -103,4 +104,42 @@ def _wait_healthy(server: ServerProcess, timeout: float) -> None:
             pass
         time.sleep(0.1)
     server.proc.kill()
+    server.proc.wait(timeout=5)  # reap it: no zombie, and the log is complete
     raise RuntimeError(f"uvicorn not healthy after {timeout}s:\n{server.log()}")
+
+
+class RecordingProc:
+    """A stand-in process that never exits by itself and records `kill()` and `wait()`."""
+
+    def __init__(self) -> None:
+        self.killed = False
+        self.waited = False
+
+    def poll(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.waited = self.killed
+        return -9
+
+
+def unhealthy_server_outcome(log_dir: Path) -> RecordingProc:
+    """`_wait_healthy` on a server that is never healthy (zero timeout): the process is killed
+    and waited for before the error is raised."""
+    proc = RecordingProc()
+    log_path = log_dir / "unhealthy.log"
+    log_path.write_text("")
+    server = ServerProcess("http://127.0.0.1:1", proc, log_path)  # ty: ignore[invalid-argument-type]
+    with contextlib.suppress(RuntimeError):
+        _wait_healthy(server, 0.0)
+    return proc
+
+
+def server_with_log(log_dir: Path, text: str) -> ServerProcess:
+    """A `ServerProcess` whose log holds `text` (to test the log parsing)."""
+    log_path = log_dir / "server.log"
+    log_path.write_text(text)
+    return ServerProcess("http://127.0.0.1:1", RecordingProc(), log_path)  # ty: ignore[invalid-argument-type]

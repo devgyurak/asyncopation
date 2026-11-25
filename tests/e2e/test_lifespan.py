@@ -57,7 +57,8 @@ def test_the_server_reported_no_sessions_after_the_shutdown_completed(
     # when
     lifespan_server.stop()
     # then
-    _before, after = lifespan_server.sessions_around_shutdown()
+    before, after = lifespan_server.sessions_around_shutdown()
+    assert before >= 1  # the precondition: there was something to close
     assert after == 0
 
 

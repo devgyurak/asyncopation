@@ -31,6 +31,9 @@ async def spy_env(
 ) -> AsyncIterator[Recorder]:
     """Real engine, recorded; sessions tagged with `app_name`; registry empty and NOT configured
     (the test calls `configure()`)."""
+    from asyncopation.connection import registry
+
+    registry.reset()  # an earlier test's configuration or entries must not leak in
     recorder = Recorder()
     install_spy_engine(monkeypatch, recorder)
     forget_wrapper("default")

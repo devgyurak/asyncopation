@@ -24,7 +24,7 @@ def configure() -> None:
 
 
 async def setup(aliases: Iterable[str] | None = None) -> None:
-    """Open the drivers (default: every alias) in the running loop; see ``connection.lifecycle``."""
+    """Open the drivers in the running loop (default: every alias with a supported engine)."""
     from asyncopation.connection import lifecycle
 
     await lifecycle.setup(aliases)

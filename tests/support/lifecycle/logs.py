@@ -43,3 +43,23 @@ def info_messages(caplog: Any) -> list[str]:
 
 def mention_count(messages: list[str], fragment: str) -> int:
     return sum(1 for m in messages if fragment in m)
+
+
+def debug_messages(caplog: Any) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == LAZY_LOGGER and r.levelno == logging.DEBUG
+    ]
+
+
+def exception_logs(caplog: Any, fragment: str) -> list[logging.LogRecord]:
+    """ERROR records of the connection logger that carry a traceback (`logger.exception`)."""
+    return [
+        r
+        for r in caplog.records
+        if r.name == LAZY_LOGGER
+        and r.levelno >= logging.ERROR
+        and r.exc_info is not None
+        and fragment in r.getMessage()
+    ]

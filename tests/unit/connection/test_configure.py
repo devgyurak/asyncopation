@@ -400,22 +400,22 @@ async def test_options_that_cannot_be_deep_copied_still_open_a_driver(fake):
 
 
 @pytest.mark.parametrize(
-    ("change", "alias"),
+    ("change", "alias", "named"),
     [
-        pytest.param("host", "default", id="host"),
-        pytest.param("options", "default", id="options"),
-        pytest.param("engine", "default", id="engine"),
-        pytest.param("use_tz", "default", id="use-tz"),
-        pytest.param("time_zone", "default", id="time-zone"),
+        pytest.param("host", "default", "DATABASES", id="host"),
+        pytest.param("options", "default", "DATABASES", id="options"),
+        pytest.param("engine", "default", "DATABASES", id="engine"),
+        pytest.param("use_tz", "default", "USE_TZ", id="use-tz"),
+        pytest.param("time_zone", "default", "TIME_ZONE", id="time-zone"),
     ],
 )
-async def test_opening_fails_closed_when_the_settings_changed_after_configure(
-    configured, settings, change, alias
+async def test_opening_fails_closed_naming_the_setting_that_changed_after_configure(
+    configured, settings, change, alias, named
 ):
     # given
     apply_change(configured, settings, change)
     # when / then
-    with pytest.raises(ImproperlyConfigured, match="changed since configure"):
+    with pytest.raises(ImproperlyConfigured, match=f"^{named} changed since configure"):
         await ensure_driver(alias)
 
 

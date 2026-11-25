@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
-- Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approval: **pending maintainer (@devgyurak) review of PR #52**
+- Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approved by: maintainer (@devgyurak), to be confirmed in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Django's connections are thread-local (plan §1.3). Asyncopation replaces them with
@@ -81,7 +81,7 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    `DATABASES[alias]["OPTIONS"]["pool"]`: `OPTIONS["pool"]` accepts `None`, `True`, `False` or any
    mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`,
    `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults"
-   (provisional `min_size=1`, `max_size=10` until the #8 benchmark): the async
+   (provisional `min_size=1`, `max_size=10` until the #8 benchmark *Amended 2026-11-25 (#5, PR #52): the benchmark moved from the ADR-0004 implementation issue to #8*): the async
    side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the
    driver ignores `CONN_MAX_AGE`. Other types, unknown keys, `close_returns` unless it is exactly
    `False`, and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes

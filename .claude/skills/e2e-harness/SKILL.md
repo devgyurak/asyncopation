@@ -11,6 +11,7 @@ description: End-to-end tests against a real uvicorn process serving the harness
   session. Server logs are attached to failures.
 - Client: `httpx.AsyncClient(base_url=live_server_url)` via the `http` fixture.
 - Lifespan: the harness ASGI app is wrapped in `LifespanApp` on PostgreSQL (ADR-0004); `GET /diag/pool`
+  (and `ASYNCOPATION_APP_NAME`, which tags the server's database sessions for `pg_stat_activity` counts)
   returns the server process's registry (`entries`, `server_info`, per-alias `PoolStats`) and the
   wrapper prints `ASYNCOPATION_DIAG after-shutdown ...` after shutdown. Use the `lifespan_server` /
   `lifespan_http` fixtures (tests/e2e/conftest.py, tests/support/e2e_server.py) for lifecycle tests.

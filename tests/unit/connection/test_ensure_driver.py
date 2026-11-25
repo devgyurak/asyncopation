@@ -20,9 +20,16 @@ from tests.support.lifecycle.helpers import (
     errors_in,
     failing,
 )
-from tests.support.lifecycle.logs import all_mention, capture_logs, lazy_warnings
+from tests.support.lifecycle.logs import (
+    all_mention,
+    capture_logs,
+    errors_logged,
+    lazy_warnings,
+    mention_count,
+)
 from tests.support.lifecycle.loops import open_in_second_loop
 from tests.support.lifecycle.scenarios import (
+    cancel_opener_while_the_discarded_driver_closes,
     close_while_opening,
     count_locks,
     ensure_many,
@@ -384,3 +391,50 @@ async def test_the_queued_caller_that_meets_closing_opens_no_second_driver(parke
     await waiter_meets_closing(parked_opening)
     # then
     assert len(parked_opening.env.recorder.built) == 1
+
+
+async def test_a_failing_close_after_a_failed_probe_is_logged_at_error(configured, caplog):
+    # given
+    capture_logs(caplog)
+    configured.script.fail_probes = 1
+    configured.script.fail_closes = 1
+    # when
+    await failing(ensure_driver("default"), FakeProbeError)
+    # then
+    assert mention_count(errors_logged(caplog), "discarded driver") == 1
+
+
+async def test_a_failing_close_after_a_failed_injection_is_logged_at_error(configured, caplog):
+    # given
+    capture_logs(caplog)
+    configured.script.fail_injects = 1
+    configured.script.fail_closes = 1
+    # when
+    await failing(ensure_driver("default"), FakeInjectError)
+    # then
+    assert mention_count(errors_logged(caplog), "discarded driver") == 1
+
+
+async def test_the_discarded_driver_is_closed_while_the_entry_lock_is_held_even_if_cancelled(
+    configured,
+):
+    # when
+    seen = await cancel_opener_while_the_discarded_driver_closes(configured)
+    # then
+    assert seen.task_done_during_close is False
+    assert seen.lock_held_during_close is True
+
+
+async def test_the_cancelled_opener_ends_cancelled_after_the_discarded_driver_closed(configured):
+    # when
+    seen = await cancel_opener_while_the_discarded_driver_closes(configured)
+    # then
+    assert error_names([seen.error]) == ["CancelledError"]
+    assert seen.driver_open_after is False
+
+
+async def test_the_entry_lock_is_free_after_a_cancelled_discard(configured):
+    # when
+    seen = await cancel_opener_while_the_discarded_driver_closes(configured)
+    # then
+    assert seen.lock_held_after is False

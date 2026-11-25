@@ -10,6 +10,7 @@ from tests.support.lifecycle.scenarios import (
     LockCounter,
     OpeningScenario,
     count_locks,
+    stuck_opener_close,
 )
 
 
@@ -53,3 +54,21 @@ async def test_the_lock_counter_counts_each_acquisition(configured, monkeypatch)
         pass
     # then
     assert (counter.created, counter.acquired) == (1, 1)
+
+
+async def test_a_hung_close_scenario_whose_opener_never_ends_still_returns_within_a_bound(opening):
+    # given
+    await opening.begin()
+    # when
+    hung = await stuck_opener_close(opening, 0.1)
+    # then
+    assert hung.total < 8.0
+
+
+async def test_a_hung_close_scenario_whose_opener_never_ends_reports_it_cancelled(opening):
+    # given
+    await opening.begin()
+    # when
+    hung = await stuck_opener_close(opening, 0.1)
+    # then
+    assert type(hung.opener_outcome).__name__ == "CancelledError"

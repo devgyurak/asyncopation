@@ -135,3 +135,19 @@ def driver_form_verdicts(module: str, name: str, path: str) -> dict[str, bool]:
         form: has_violation(source, path, "A104", "")
         for form, source in driver_forms(module, name).items()
     }
+
+
+CONNECTIONS_SRC = "src/asyncopation/_django/connections.py"
+
+
+def real_connections_module() -> str:
+    """The repository's own `_django/connections.py` source."""
+    from pathlib import Path
+
+    return (Path(__file__).parents[2] / CONNECTIONS_SRC).read_text()
+
+
+def reader_with(*lines: str) -> str:
+    """A `configured_databases` reader whose body is `lines` after the `connections` import."""
+    head = "def configured_databases():\n    from django.db import connections\n\n"
+    return head + "".join(f"    {x}\n" for x in lines)

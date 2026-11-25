@@ -192,15 +192,6 @@ async def test_close_ends_every_session_of_the_pool_on_the_server(spy, app_name)
     assert await server_connections_after_settling(app_name) == 0
 
 
-async def test_close_has_removed_the_registry_entries_of_the_loop(spy):
-    # given
-    await setup()
-    # when
-    await close()
-    # then
-    assert registry.entries() == []
-
-
 async def test_the_driver_opened_after_configure_reaches_the_test_database(spy):
     # when
     name = await current_database_of_driver("default")

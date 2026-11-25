@@ -1,8 +1,9 @@
 # Architecture
 
-Status: Phase 1 in progress. The driver layer is implemented for PostgreSQL (psycopg3) together with
-the recording driver; the MySQL/asyncmy driver, the registry/lifecycle, executors and transactions
-are still contracts only. ADR-0001..0007 are Accepted (ADR-0001 and ADR-0003/0004 carry
+Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
+`LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
+the recording driver; the MySQL/asyncmy driver, the executors (5b) and transactions are still
+contracts only. ADR-0001..0007 are Accepted (ADR-0001 and ADR-0003/0004 carry
 implementation amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
@@ -154,7 +155,7 @@ close on shutdown, with a lock-guarded lazy fallback:
 
 Implementation (`asyncopation.connection`): `configure()` reads Django's *configured* `DATABASES`
 through `_django.connections.configured_databases()` (a structure copy: dicts and lists copied, leaves shared; Django fills the defaults in
-place) and may be called again until a driver is open (the test runner renames `NAME` after
+place) and may be called again until a driver is open or opening (the test runner renames `NAME` after
 `ready()`); `engines` maps an ENGINE to its driver factory / probe / injection and imports psycopg
 lazily, so `import asyncopation` imports no driver; `registry` holds drivers by `(alias, loop)`,
 server info by alias, read-only `PoolStats` and the in-flight statement counter (used by the
@@ -173,6 +174,6 @@ until #7.
 | `harness/settings.py` | Django settings for tests, e2e and benchmarks (`ASYNCOPATION_DB`) |
 | `harness/catalog/` | test models: every relation kind, a composite-pk model (`BookEdition`) + `FieldZoo` for type conversion |
 | `harness/seed.py` | deterministic dataset |
-| `harness/site/` | Django site with `/sync`, `/core`, `/aopt` variants per scenario |
+| `harness/site/` | Django site with `/sync`, `/core`, `/aopt` variants per scenario; on PostgreSQL the ASGI app is wrapped in `LifespanApp`, `GET /diag/pool` shows the registry, and `ASYNCOPATION_APP_NAME` tags the server's database sessions (e2e lifecycle tests count them in `pg_stat_activity`) |
 | `tests/support/` | differential runner, snapshots, Hypothesis strategies |
 | `bench/` | micro-benchmarks, k6 load orchestrator, comparison |

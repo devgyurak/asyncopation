@@ -47,6 +47,8 @@ class _InnerLifespan:
             await app(scope, self._receive, self._from_app.put)
         except Exception as exc:
             self._error = exc
+            if not self._consumed:
+                logger.debug("asyncopation: the wrapped app does not handle lifespan: %r", exc)
         finally:
             self._from_app.put_nowait(_DONE)  # wakes a waiting exchange()
 
@@ -87,6 +89,8 @@ class LifespanApp:
     """
 
     def __init__(self, app: ASGIApp, aliases: Iterable[str] | None = None) -> None:
+        if isinstance(aliases, str):
+            raise TypeError("LifespanApp(aliases) takes an iterable of alias names, not a str")
         self.app = app
         self.aliases = None if aliases is None else list(aliases)
 
@@ -143,5 +147,6 @@ class LifespanApp:
             try:
                 await close()
             except Exception as exc:
+                logger.exception("asyncopation: close() failed at lifespan shutdown")
                 failure = failure or {"type": "lifespan.shutdown.failed", "message": str(exc)}
         await send(failure or {"type": "lifespan.shutdown.complete"})

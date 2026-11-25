@@ -5,18 +5,24 @@ import pytest
 from asyncopation.connection.asgi import LifespanApp
 from tests.support.lifecycle.asgi import (
     CrashingApp,
-    DuplicateReplyApp,
     FakeApp,
     HangingApp,
     LifespanAwareApp,
     NonLifespanApp,
+    StaleFailureApp,
     call_with_scope,
     run_lifespan,
     run_lifespan_cancelled_while_app_hangs,
     run_lifespan_counting_tasks,
 )
 from tests.support.lifecycle.helpers import entry_aliases
-from tests.support.lifecycle.logs import capture_logs, errors_logged, mention_count
+from tests.support.lifecycle.logs import (
+    capture_logs,
+    debug_messages,
+    errors_logged,
+    exception_logs,
+    mention_count,
+)
 
 
 async def test_startup_opens_the_drivers_and_reports_complete(configured):
@@ -324,7 +330,7 @@ async def test_an_app_that_crashes_after_startup_still_gets_our_drivers_closed(
 
 async def test_a_stale_reply_of_an_earlier_phase_is_dropped_at_shutdown(configured):
     # given
-    app = LifespanApp(DuplicateReplyApp())
+    app = LifespanApp(StaleFailureApp())
     # when
     run = await run_lifespan(app)
     # then
@@ -353,3 +359,50 @@ async def test_a_failing_close_after_a_failed_app_startup_still_sends_the_apps_f
     # then
     assert run.types == ["lifespan.startup.failed"]
     assert run.sent[0]["message"] == "app boom"
+
+
+async def test_our_startup_failure_while_the_app_waits_in_receive_leaves_no_task_behind(configured):
+    # given
+    configured.script.fail_opens = 1
+    app = LifespanApp(LifespanAwareApp())
+    # when
+    _run, before, after = await run_lifespan_counting_tasks(app)
+    # then
+    assert after == before
+
+
+async def test_startup_without_configure_reports_startup_failed_naming_the_app(fake):
+    # given
+    app = LifespanApp(FakeApp())
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.failed"]
+    assert "INSTALLED_APPS" in run.sent[0]["message"]
+
+
+def test_a_single_str_as_aliases_raises_type_error_at_construction():
+    # when / then
+    with pytest.raises(TypeError):
+        LifespanApp(FakeApp(), aliases="default")
+
+
+async def test_a_failing_close_at_shutdown_is_logged_with_its_traceback(configured, caplog):
+    # given
+    capture_logs(caplog)
+    configured.script.fail_close = True
+    app = LifespanApp(FakeApp())
+    # when
+    await run_lifespan(app)
+    # then
+    assert len(exception_logs(caplog, "lifespan shutdown")) == 1
+
+
+async def test_an_app_that_does_not_support_lifespan_is_logged_at_debug(configured, caplog):
+    # given
+    capture_logs(caplog)
+    app = LifespanApp(NonLifespanApp())
+    # when
+    await run_lifespan(app)
+    # then
+    assert mention_count(debug_messages(caplog), "does not handle lifespan") == 1

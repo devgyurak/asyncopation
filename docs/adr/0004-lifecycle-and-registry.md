@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
-- Amended: 2026-11-25 (#5, PR #52) - Decision 1 (`configure()` is re-callable until a driver is open or opening and reads the configured settings through `_django`; `asyncopation.apps` is a top-level entry module; a per-alias preparation failure or unsupported ENGINE is recorded and raised at that alias's first open, never in `ready()`; an open fails closed when `DATABASES` changed since `configure()`), Decision 2 (the probe is a pure synchronous function published with `setdefault`; server info survives `close()`), Decision 3 (`setup()` opens only aliases with a supported engine by default; explicit aliases must be usable; all or nothing for the drivers it opened), Decision 5 (`close(timeout)` semantics, bounded wait for an open in progress, overlapping closes), Decision 7 (`LifespanApp(app, aliases=None)`, the `lifespan` scope is also forwarded to the wrapped app), Consequences (loops that end without `close()`), new Implementation note (pool sizing -> #8, see ADR-0001 D8) and Validation items; approval: **pending maintainer (@devgyurak) review of PR #52**; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #52) - Decision 1 (`configure()` is re-callable until a driver is open or opening and reads the configured settings through `_django`; `asyncopation.apps` is a top-level entry module; a per-alias preparation failure or unsupported ENGINE is recorded and raised at that alias's first open, never in `ready()`; an open fails closed when `DATABASES` changed since `configure()`), Decision 2 (the probe is a pure synchronous function published with `setdefault`; server info survives `close()`), Decision 3 (`setup()` opens only aliases with a supported engine by default; explicit aliases must be usable; all or nothing for the drivers it opened), Decision 5 (`close(timeout)` semantics, bounded wait for an open in progress, overlapping closes), Decision 7 (`LifespanApp(app, aliases=None)`, the `lifespan` scope is also forwarded to the wrapped app), Consequences (loops that end without `close()`), new Implementation note (pool sizing -> #8, see ADR-0001 D8) and Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first
@@ -39,19 +39,21 @@ Prior art:
 **C.**
 
 1. **Configure** (`AppConfig.ready()`; `asyncopation` must be in `INSTALLED_APPS`): build per-alias
-   config/factory objects from `DATABASES`. No I/O, no asyncio objects.
+   config/factory objects from `DATABASES`. No database I/O, no asyncio objects (and never inside the
+   running loop: it reads the tz database from disk; *Amended 2026-11-25 (#5, PR #52)*).
    *Amended 2026-11-25 (#5, PR #52): the input is Django's configured `DATABASES` (defaults applied),
    read through `asyncopation._django.connections.configured_databases()` (a structure copy; dict/list structure copied, leaves shared; ADR-0008
    Decision 6, ledger `BaseConnectionHandler.settings`). `configure()` is idempotent and callable
-   again until a driver is open (`RuntimeError` afterwards): the test runner renames `NAME` after
+   again until a driver is open or opening (`RuntimeError` afterwards): the test runner renames `NAME` after
    `ready()`, so tests call it again once the test database exists; an alias whose configuration
    changed loses its server info. For PostgreSQL `build_config()` runs here (it reads the tz
    database), never inside the loop. An ENGINE without a driver yet (MySQL/MariaDB until #7) is
    recorded and raises `ImproperlyConfigured` at the first open / `setup()`, not in `ready()`, so
    projects that never open a driver keep starting. The app config `asyncopation.apps` is a
    top-level entry module above every layer and reaches `connection` only inside `ready()`.
-   One alias never breaks `ready()`: a `build_config` `ImproperlyConfigured` or a missing driver
-   library (`ImportError`) is recorded for that alias and raised by its first open. Because the test
+   One alias never breaks `ready()`: any exception raised while preparing that alias (e.g. a
+   `build_config` `ImproperlyConfigured`, a bad per-database `TIME_ZONE`, a missing driver library)
+   is recorded for that alias and raised by its first open. Because the test
    runner changes `DATABASES` after `ready()`, an open compares the live configured settings with
    the configured snapshot and fails closed (`ImproperlyConfigured`: call
    `asyncopation.configure()` after the test databases are created) instead of reaching the
@@ -101,7 +103,9 @@ Prior art:
    (shielded from cancellation) even when the wait timed out, then raises `TimeoutError`; the
    marker is cleared afterwards so a restarted lifespan can reopen. An open in progress gets until
    the same `timeout` deadline (its driver is then closed); after that it is cancelled, so a hung
-   connect cannot make shutdown outlast `timeout`. Only the current loop is touched.*
+   connect cannot make shutdown outlast `timeout` (only an open is cancelled; a hung `driver.close()`
+   is not bounded). A driver that fails to close is raised in preference to the `TimeoutError`
+   (the timeout is logged). Only the current loop is touched.*
 6. **Registry:** process-global, owned by `asyncopation.connection`, keyed by `(alias, loop)` for
    drivers/pools and by `alias` for server info. Never in a contextvar (the transient `compile_scope` swap of ADR-0008 uses asgiref's contextvar-backed storage but carries no state across an `await`), never populated at import.
    It exposes read-only pool stats per entry (in use / idle / waiting) for tests and metrics.

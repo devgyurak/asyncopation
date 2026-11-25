@@ -137,8 +137,9 @@ class CrashingApp:
                 return
 
 
-class DuplicateReplyApp:
-    """Answers startup twice: the second `startup.complete` is stale by the time of shutdown."""
+class StaleFailureApp:
+    """Answers startup with `complete`, then (stale) `startup.failed`: the second reply is still
+    queued when the shutdown phase starts."""
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] != "lifespan":
@@ -147,7 +148,7 @@ class DuplicateReplyApp:
             message = await receive()
             if message["type"] == "lifespan.startup":
                 await send({"type": "lifespan.startup.complete"})
-                await send({"type": "lifespan.startup.complete"})
+                await send({"type": "lifespan.startup.failed", "message": "stale"})
             elif message["type"] == "lifespan.shutdown":
                 await send({"type": "lifespan.shutdown.complete"})
                 return

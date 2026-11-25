@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -10,8 +10,8 @@ from tests.support.lifecycle.checks import assert_registry_clean
 
 
 @pytest.fixture(autouse=True)
-def registry_left_clean() -> Iterator[None]:
+async def registry_left_clean() -> AsyncIterator[None]:
     """Torn down last: records leftover entries (including pools of loops that were closed
     without `close()`) BEFORE resetting, and fails the test when there are any."""
     yield
-    assert_registry_clean()
+    await assert_registry_clean()

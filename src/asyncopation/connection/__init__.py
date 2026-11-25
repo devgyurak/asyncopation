@@ -8,6 +8,6 @@ and the observer/interceptor hooks (ADR-0005).
 Importing this package imports no database driver: engines are wired lazily (``engines``).
 """
 
-from asyncopation.connection.lifecycle import close, configure, ensure_driver, setup
+from asyncopation.connection.lifecycle import close, configure, setup
 
-__all__ = ["close", "configure", "ensure_driver", "setup"]
+__all__ = ["close", "configure", "setup"]  # lifecycle.ensure_driver stays internal (5b executors)

@@ -9,7 +9,6 @@ lazy fallback both use it: build the driver, ``open()`` it, probe, inject, in th
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import weakref
 from collections.abc import Iterable
@@ -120,15 +119,33 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
             config.engine.inject(alias, config.settings_dict, info)
             registry.publish_server_info(alias, info)  # only after a successful injection
         except BaseException:
-            # a failing close must not mask the probe/injection error, nor leak the pool when
-            # this task is cancelled again meanwhile
-            with contextlib.suppress(Exception):
-                await asyncio.shield(driver.close())
+            await _discard(driver)  # still holding the entry lock until the pool is closed
             raise
         entry.driver = driver
         task = asyncio.current_task()
         entry.opener = None if task is None else weakref.ref(task)
         return driver
+
+
+async def _discard(driver: AsyncDriver) -> None:
+    """Close a driver that must not be kept, to completion even when this task is cancelled again.
+
+    A failing close is logged, never raised (it must not mask the error that made us discard the
+    driver); a cancellation that arrived meanwhile is re-raised once the pool is closed.
+    """
+    closing = asyncio.ensure_future(driver.close())
+    cancelled: asyncio.CancelledError | None = None
+    while not closing.done():
+        try:
+            await asyncio.shield(closing)
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+        except Exception:
+            break  # reported below
+    if not closing.cancelled() and (error := closing.exception()) is not None:
+        logger.error("asyncopation: closing a discarded driver failed: %r", error)
+    if cancelled is not None:
+        raise cancelled
 
 
 def _closing_error(alias: str) -> RuntimeError:
@@ -141,25 +158,32 @@ def _check_unchanged(alias: str, config: AliasConfig) -> None:
     Opening with the stale configuration would reach the original database instead of the test
     database.
     """
-    if (
-        configured_databases().get(alias) != config.settings_dict
-        or bool(settings.USE_TZ) != config.use_tz
-        or str(settings.TIME_ZONE) != config.time_zone
-    ):
+    changed = []
+    if configured_databases().get(alias) != config.settings_dict:
+        changed.append("DATABASES")
+    if bool(settings.USE_TZ) != config.use_tz:
+        changed.append("USE_TZ")
+    if str(settings.TIME_ZONE) != config.time_zone:
+        changed.append("TIME_ZONE")
+    if changed:
         raise ImproperlyConfigured(
-            "DATABASES changed since configure(); call asyncopation.configure() after the test "
-            "databases are created"
+            f"{', '.join(changed)} changed since configure(); call asyncopation.configure() "
+            "after the test databases are created"
         )
 
 
-def _config(alias: str) -> AliasConfig:
+def _require_configured() -> dict[str, AliasConfig]:
     configs = registry.configs()
     if not configs:
         raise ImproperlyConfigured(
             "asyncopation is not configured: add 'asyncopation' to INSTALLED_APPS "
             "(or call asyncopation.configure())"
         )
-    config = configs.get(alias)
+    return configs
+
+
+def _config(alias: str) -> AliasConfig:
+    config = _require_configured().get(alias)
     if config is None:
         raise ImproperlyConfigured(f"asyncopation: unknown database alias {alias!r}")
     if config.error is not None:
@@ -187,6 +211,7 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
     """
     if isinstance(aliases, str):
         raise TypeError("setup(aliases) takes an iterable of alias names, not a single str")
+    _require_configured()  # before any name is computed from an empty configuration
     names = _supported_aliases() if aliases is None else list(aliases)
     loop = asyncio.get_running_loop()
     opened: list[registry.Entry] = []
@@ -209,8 +234,7 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
                 True  # a concurrent opener now fails instead of opening on a doomed entry
             )
         try:
-            with contextlib.suppress(Exception):
-                await asyncio.shield(_close_entries(opened))
+            await asyncio.shield(_close_entries(opened))  # logs the failures it cannot raise
         finally:
             for entry in opened:
                 registry.forget(entry)
@@ -238,7 +262,8 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
 
     New opens are refused first, then in-flight statements get ``timeout`` seconds to finish.
     The drivers are closed either way; ``TimeoutError`` is raised afterwards when statements were
-    still running. Pools of other loops are not touched. An open in progress is awaited first (its
+    still running; a driver that failed to close is raised instead (and the timeout is logged).
+    Pools of other loops are not touched. An open in progress is awaited first (its
     driver is then closed, and its caller gets a ``RuntimeError``) until the timeout, then it is
     cancelled. Overlapping ``close()`` calls are safe: each one
     removes only the entries it began with.
@@ -248,25 +273,18 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
     mine = registry.begin_closing(loop)
     timed_out = False
     failures: list[Exception] = []
-    interrupted = False
     try:
         try:
             async with asyncio.timeout(timeout):
                 await registry.wait_idle(loop)
         except TimeoutError:
             timed_out = True
-    except BaseException:
-        interrupted = True  # close() itself is being cancelled: nobody would see the failures
-        raise
     finally:
         failures = await asyncio.shield(_close_and_end(loop, mine, deadline))
-        if interrupted:
-            for failure in failures:
-                logger.error("asyncopation: a driver failed to close: %r", failure)
-    for extra in failures[1:]:
-        logger.error("asyncopation: another driver failed to close: %r", extra)
     if failures:
-        raise failures[0]
+        if timed_out:
+            logger.error("asyncopation: statements were still in flight after %ss", timeout)
+        raise failures[0]  # every failure was logged where it happened
     if timed_out:
         raise TimeoutError(f"statements still in flight after {timeout}s; drivers were closed")
 
@@ -310,6 +328,7 @@ async def _close_entries(
                 try:
                     await driver.close()
                 except Exception as exc:
+                    logger.error("asyncopation: a driver failed to close: %r", exc)
                     failures.append(exc)
         finally:
             entry.lock.release()

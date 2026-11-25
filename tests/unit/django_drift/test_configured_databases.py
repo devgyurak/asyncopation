@@ -1,4 +1,4 @@
-"""`_django.connections.configured_databases()`: Django's configured DATABASES, as a deep copy.
+"""`_django.connections.configured_databases()`: Django's configured DATABASES, as a structure copy (dicts and lists copied, leaves shared).
 
 Drift protection: Django's `ConnectionHandler.configure_settings` fills defaults (TIME_ZONE None,
 OPTIONS {}, TEST {}, ...); the engines rely on them being present (ADR-0004 Decision 1).

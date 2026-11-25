@@ -7,7 +7,7 @@ from django.db.models import Count
 from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
-from tests.support.alist_cases import manager_differential
+from tests.support.alist_cases import manager_differential, related_manager_identity
 from tests.support.alist_probe import (
     alist_row_count_and_statements,
     alist_statements,
@@ -224,6 +224,16 @@ async def test_alist_of_a_related_manager_matches_sync(async_env, author_with_bo
     # then
     assert len(result.async_outcome.rows) > 0
     assert result.async_outcome == result.sync_outcome
+
+
+async def test_alist_of_a_related_manager_caches_the_owner_instance_on_every_row(
+    async_env, author_with_books
+):
+    # when
+    outcome = await related_manager_identity(author_with_books)
+    # then
+    assert outcome.rows > 0
+    assert outcome.shared_with_owner == [True] * outcome.rows
 
 
 @given(spec=queryset_specs())

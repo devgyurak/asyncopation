@@ -2,7 +2,7 @@
 a transaction closes the raw connection, and `rollback()` afterwards is a no-op."""
 
 from tests.support.drivers import POSTGRES_ONLY
-from tests.support.executors.driver_contract import cancel_then_rollback
+from tests.support.executors.driver_contract import cancel_then_reuse, cancel_then_rollback
 
 pytestmark = POSTGRES_ONLY
 
@@ -35,3 +35,13 @@ async def test_cancelled_statement_outside_a_transaction_keeps_the_backend(drive
     # then
     assert outcome.cancelled is True
     assert outcome.backend_ended is False
+
+
+async def test_connection_is_idle_and_usable_right_after_a_cancelled_statement(single_driver):
+    # when
+    outcome = await cancel_then_reuse(single_driver)
+    # then
+    assert outcome.cancelled is True
+    assert outcome.next_rows == [(1,)]
+    assert outcome.idle_after is True
+    assert outcome.pid_after == outcome.pid_before

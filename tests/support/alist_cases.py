@@ -59,6 +59,22 @@ async def manager_differential(author: Author) -> DifferentialResult:
     return await run_differential(build, _manager_evaluator())
 
 
+@dataclass(frozen=True)
+class KnownRelatedIdentity:
+    rows: int
+    shared_with_owner: list[bool]
+
+
+async def related_manager_identity(author: Author) -> KnownRelatedIdentity:
+    """Whether every book of `await aq(author.books).alist()` caches `author` itself."""
+    from asyncopation import aq
+
+    books = await aq(books_manager_of(author)).alist()
+    return KnownRelatedIdentity(
+        len(books), [book._state.fields_cache.get("author") is author for book in books]
+    )
+
+
 async def wait_pool_settled(alias: str = ALIAS) -> None:
     """Wait until no connection of the alias is in use or waited for (replacements finished)."""
     from asyncopation.connection import registry

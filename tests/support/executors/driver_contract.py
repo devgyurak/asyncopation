@@ -8,7 +8,7 @@ from typing import Any
 
 from tests.support.aio import wait_until
 from tests.support.drivers.admin import admin_scalar, backend_ends, backend_exists, settled_stats
-from tests.support.drivers.probes import backend_pid
+from tests.support.drivers.probes import backend_pid, in_transaction
 from tests.support.executors.ops import raised_by
 
 SLEEP = 30
@@ -61,3 +61,38 @@ async def cancel_then_rollback(driver: Any, *, begin: bool) -> CancelAndRollback
     async with driver.connection() as fresh:
         fresh_pid = await backend_pid(fresh)
     return CancelAndRollback(statement.cancelled(), rollback_error, ended, pid, fresh_pid)
+
+
+@dataclass(frozen=True)
+class CancelThenReuse:
+    cancelled: bool
+    pid_before: int
+    pid_after: int
+    idle_after: bool
+    next_rows: list
+
+
+async def cancel_then_reuse(driver: Any) -> CancelThenReuse:
+    """Cancel a slow autocommit statement, then use the same borrowed connection right away."""
+    marker = f"reuse_{id(driver)}"
+    async with driver.connection() as connection:
+        pid = await backend_pid(connection)
+        statement = asyncio.create_task(
+            connection.fetch_all(f"SELECT pg_sleep({SLEEP}) /* {marker} */", None)
+        )
+
+        async def running() -> bool:
+            count = await admin_scalar(
+                "SELECT count(*) FROM pg_stat_activity "
+                "WHERE pid = %s AND query LIKE %s AND state = 'active'",
+                (pid, f"%{marker}%"),
+            )
+            return count > 0
+
+        await wait_until(running)
+        statement.cancel()
+        await asyncio.wait([statement])
+        rows = await connection.fetch_all("SELECT 1", None)
+        idle = not await in_transaction(connection)
+        pid_after = await backend_pid(connection)
+    return CancelThenReuse(statement.cancelled(), pid, pid_after, idle, rows)

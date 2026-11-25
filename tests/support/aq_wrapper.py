@@ -22,6 +22,34 @@ def unimplemented_async_names() -> list[str]:
     return sorted(names)
 
 
+def async_coroutine_names_of_django() -> list[str]:
+    """Every `a<name>` coroutine method Django's QuerySet defines (read from Django, not from us)."""
+    names = [
+        name
+        for name, member in inspect.getmembers(QuerySet)
+        if inspect.iscoroutinefunction(member) and name.startswith("a")
+    ]
+    return sorted(names)
+
+
+def unhandled_django_coroutines() -> list[str]:
+    """Django coroutine names that are neither implemented on the wrapper nor refused as pending."""
+    from asyncopation.query import AsyncQuerySet
+    from asyncopation.query.queryset import _DJANGO_COROUTINES
+
+    implemented = {n for n in async_coroutine_names_of_django() if n in vars(AsyncQuerySet)}
+    return sorted(set(async_coroutine_names_of_django()) - implemented - _DJANGO_COROUTINES)
+
+
+def unlisted_sync_evaluators() -> list[str]:
+    """Sync names whose async twin (`a<name>`) Django defines but `_SYNC_EVALUATORS` lacks."""
+    from asyncopation.query.queryset import _SYNC_EVALUATORS
+
+    twins = {name[1:] for name in async_coroutine_names_of_django()}
+    sync_names = {name for name in twins if callable(getattr(QuerySet, name, None))}
+    return sorted(sync_names - set(_SYNC_EVALUATORS))
+
+
 def call_named(wrapper: Any, name: str) -> Any:
     """Access `wrapper.<name>` and call it with no arguments (either step may raise)."""
     return getattr(wrapper, name)()
@@ -64,6 +92,10 @@ class DuckSource:
         return fresh_books()
 
 
+def read_attribute(obj: Any, name: str) -> Any:
+    return getattr(obj, name)
+
+
 def has_attribute(wrapper: Any, name: str) -> bool:
     return hasattr(wrapper, name)
 
@@ -76,3 +108,21 @@ def sql_of(value: Any) -> str:
     """SQL of a QuerySet or of a wrapper around one."""
     queryset = getattr(value, "queryset", value)
     return str(queryset.query)
+
+
+def uninitialised_wrapper() -> Any:
+    """An AsyncQuerySet whose `_queryset` slot was never filled (what `copy`/`pickle` can create)."""
+    from asyncopation.query import AsyncQuerySet
+
+    return object.__new__(AsyncQuerySet)
+
+
+def cached_wrapper() -> Any:
+    """A wrapper over a QuerySet whose result cache is already filled."""
+    return aq_of(prefilled_queryset([]))
+
+
+def aq_of(queryset: Any) -> Any:
+    from asyncopation import aq
+
+    return aq(queryset)

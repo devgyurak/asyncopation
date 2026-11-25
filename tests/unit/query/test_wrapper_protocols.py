@@ -12,11 +12,14 @@ from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
     DuckSource,
+    cached_wrapper,
     filtered_pair,
     fresh_books,
     has_attribute,
+    read_attribute,
     related_books_manager,
     sql_of,
+    uninitialised_wrapper,
 )
 
 
@@ -83,8 +86,10 @@ def test_pickling_a_wrapper_raises_sync_evaluation_error_and_runs_no_query(no_sq
     [
         pytest.param(lambda a, b: aq(a) | aq(b), lambda a, b: a | b, id="or-both-wrapped"),
         pytest.param(lambda a, b: aq(a) & aq(b), lambda a, b: a & b, id="and-both-wrapped"),
+        pytest.param(lambda a, b: aq(a) ^ aq(b), lambda a, b: a ^ b, id="xor-both-wrapped"),
         pytest.param(lambda a, b: aq(a) | b, lambda a, b: a | b, id="or-right-plain"),
         pytest.param(lambda a, b: aq(a) & b, lambda a, b: a & b, id="and-right-plain"),
+        pytest.param(lambda a, b: aq(a) ^ b, lambda a, b: a ^ b, id="xor-right-plain"),
     ],
 )
 def test_combined_wrapper_sql_equals_the_sql_of_the_plain_operator(no_sql, combine, plain):
@@ -97,9 +102,45 @@ def test_combined_wrapper_sql_equals_the_sql_of_the_plain_operator(no_sql, combi
     assert sql_of(combined) == sql_of(plain(left, right))
 
 
-def test_hasattr_of_a_sync_evaluator_name_raises_sync_evaluation_error():
+def test_hasattr_of_a_sync_evaluator_name_raises_sync_evaluation_error(no_sql):
     # given
     wrapper = aq(fresh_books())
     # when / then
     with pytest.raises(SyncEvaluationError):
         has_attribute(wrapper, "count")
+
+
+def test_an_uninitialised_wrapper_raises_attribute_error_for_its_slot_name():
+    # given
+    wrapper = uninitialised_wrapper()
+    # when / then
+    with pytest.raises(AttributeError):
+        read_attribute(wrapper, "_queryset")
+
+
+def test_a_dunder_lookup_the_wrapper_lacks_is_not_proxied_to_the_queryset(no_sql):
+    # given
+    wrapper = aq(fresh_books())
+    # when
+    found = has_attribute(wrapper, "__setstate__")
+    # then
+    assert found is False
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_copying_a_wrapper_does_not_share_the_queryset(no_sql, duplicate):
+    # given
+    wrapper = aq(fresh_books())
+    # when
+    duplicated = duplicate(wrapper)
+    # then
+    assert duplicated.queryset is not wrapper.queryset
+
+
+def test_shallow_copy_of_a_wrapper_with_a_result_cache_drops_the_cache(no_sql):
+    # given
+    wrapper = cached_wrapper()
+    # when
+    duplicated = copy.copy(wrapper)
+    # then
+    assert duplicated.queryset._result_cache is None

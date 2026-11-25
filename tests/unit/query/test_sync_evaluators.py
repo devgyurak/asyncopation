@@ -6,7 +6,13 @@ from django.db.models import Count
 import asyncopation
 from asyncopation import aq
 from asyncopation.errors import SyncEvaluationError
-from tests.support.aq_wrapper import call_named, fresh_books, sync_evaluator_names
+from tests.support.aq_wrapper import (
+    call_named,
+    fresh_books,
+    sync_evaluator_names,
+    unhandled_django_coroutines,
+    unlisted_sync_evaluators,
+)
 
 EVALUATORS = [
     pytest.param(lambda w: list(w), id="iter"),
@@ -74,3 +80,17 @@ def test_slicing_with_a_slice_does_not_raise(no_sql):
     # then
     assert sliced.queryset.query.low_mark == 1
     assert sliced.queryset.query.high_mark == 3
+
+
+def test_every_django_coroutine_is_implemented_or_refused_as_pending():
+    # when
+    unhandled = unhandled_django_coroutines()
+    # then
+    assert unhandled == []
+
+
+def test_every_sync_evaluator_with_a_django_async_twin_is_listed():
+    # when
+    unlisted = unlisted_sync_evaluators()
+    # then
+    assert unlisted == []

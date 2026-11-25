@@ -8,7 +8,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "harness.settings")
 
 # e2e: tag this process's database sessions so tests (and the diagnostics below) can count them
 _APP_NAME = os.environ.get("ASYNCOPATION_APP_NAME")
-if _APP_NAME:
+if _APP_NAME and os.environ.get("ASYNCOPATION_DB", "postgresql") == "postgresql":
     settings.DATABASES["default"].setdefault("OPTIONS", {})["application_name"] = _APP_NAME
 
 _django_application = get_asgi_application()
@@ -36,13 +36,21 @@ async def _session_count() -> int:
     return int(row[0]) if row else 0
 
 
+async def _safe_session_count() -> int:
+    """-1 when the diagnostic connection fails: diagnostics must never break the real shutdown."""
+    try:
+        return await _session_count()
+    except Exception:
+        return -1
+
+
 async def _count_after_the_server_reaped_closed_sessions() -> int:
-    count = await _session_count()
+    count = await _safe_session_count()
     for _ in range(40):
         if count == 0:
             break
         await asyncio.sleep(0.1)
-        count = await _session_count()
+        count = await _safe_session_count()
     return count
 
 
@@ -60,7 +68,7 @@ def _wrap_with_lifespan(app):
         async def counting_receive():
             message = await receive()
             if message["type"] == "lifespan.shutdown":
-                state["before"] = await _session_count()  # the pools are still open here
+                state["before"] = await _safe_session_count()  # the pools are still open here
             return message
 
         async def report(message):

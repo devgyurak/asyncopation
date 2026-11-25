@@ -10,13 +10,17 @@ from tests.support.lifecycle import (
     POSTGIS_ENGINE,
     FakeInfo,
     aliases_of,
+    apply_change,
     capture_logs,
     entry_aliases,
     errors_logged,
     failing,
     info_messages,
     lazy_warnings,
+    leave_closing_and_flight_in_a_closed_loop,
     mention_count,
+    pg_engine,
+    purge_and_report_leaks,
     uncopiable_options,
 )
 
@@ -191,6 +195,15 @@ async def test_setup_with_a_single_string_raises_type_error(configured):
     # when / then
     with pytest.raises(TypeError):
         await setup("default")
+
+
+async def test_setup_with_a_single_string_opens_nothing(configured):
+    # given
+    await failing(setup("default"), TypeError)
+    # when
+    aliases = entry_aliases()
+    # then
+    assert aliases == []
 
 
 async def test_ensure_driver_without_configure_raises_improperly_configured_naming_the_app(fake):
@@ -381,3 +394,106 @@ async def test_options_that_cannot_be_deep_copied_still_open_a_driver(fake):
     driver = await ensure_driver("default")
     # then
     assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+@pytest.mark.parametrize(
+    ("change", "alias"),
+    [
+        pytest.param("host", "default", id="host"),
+        pytest.param("options", "default", id="options"),
+        pytest.param("engine", "default", id="engine"),
+        pytest.param("use_tz", "default", id="use-tz"),
+        pytest.param("time_zone", "default", id="time-zone"),
+        pytest.param("alias_added", "late", id="alias-added"),
+    ],
+)
+async def test_opening_fails_closed_when_the_settings_changed_after_configure(
+    configured, settings, change, alias
+):
+    # given
+    apply_change(configured, settings, change)
+    # when / then
+    with pytest.raises(ImproperlyConfigured):
+        await ensure_driver(alias)
+
+
+async def test_a_bad_time_zone_on_a_secondary_alias_does_not_break_configure(fake):
+    # given
+    fake.add_alias("tz", "tz_db", PG_ENGINE)
+    fake.override("tz", TIME_ZONE="Nowhere/Land")
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_a_bad_time_zone_raises_improperly_configured_at_that_aliass_open(fake):
+    # given
+    fake.add_alias("tz", "tz_db", PG_ENGINE)
+    fake.override("tz", TIME_ZONE="Nowhere/Land")
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="cannot be used"):
+        await ensure_driver("tz")
+
+
+async def test_a_bad_time_zone_leaves_the_other_aliases_usable(fake):
+    # given
+    fake.add_alias("tz", "tz_db", PG_ENGINE)
+    fake.override("tz", TIME_ZONE="Nowhere/Land")
+    configure()
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+def test_the_real_postgresql_engine_prepares_options_that_cannot_be_deep_copied():
+    # given
+    from tests.support.compile_wrappers import PG_SETTINGS
+    from tests.support.lifecycle import uncopiable_options
+
+    settings_dict = {**PG_SETTINGS, "OPTIONS": uncopiable_options()}
+    # when
+    factory = pg_engine().prepare("default", settings_dict, use_tz=True, time_zone="UTC")
+    # then
+    assert callable(factory)
+
+
+def test_a_real_postgresql_alias_with_uncopiable_options_configures_without_error(fake):
+    # given
+    fake.add_alias("pg", "pg_db", PG_ENGINE)
+    fake.set_options("pg", uncopiable_options())
+    # when
+    configure()
+    # then
+    assert registry.configs()["pg"].error is None
+
+
+async def test_purge_clears_the_closing_mark_of_a_closed_loop(configured):
+    # given
+    state = await leave_closing_and_flight_in_a_closed_loop("default")
+    purge_and_report_leaks()
+    # when
+    remains = state.closing_mark_remains()
+    # then
+    assert remains is False
+
+
+async def test_purge_clears_the_in_flight_counters_of_a_closed_loop(configured):
+    # given
+    state = await leave_closing_and_flight_in_a_closed_loop("default")
+    purge_and_report_leaks()
+    # when
+    remains = state.flights_remain()
+    # then
+    assert remains is False
+
+
+async def test_purge_reports_the_driver_of_a_closed_loop_as_leaked(configured):
+    # given
+    await leave_closing_and_flight_in_a_closed_loop("default")
+    # when
+    leaked = purge_and_report_leaks()
+    # then
+    assert leaked == ["default"]

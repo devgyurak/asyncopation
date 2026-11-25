@@ -96,7 +96,7 @@ Prior art:
    warning recommending the lifespan wrapper.
 5. **Close** (`await asyncopation.close()`): stop new acquires, wait for in-flight statements up to a
    configurable timeout, then close the pools of the current loop and drop their registry entries.
-   *Amended 2026-11-25 (#5, PR #52): `close(timeout=10.0)` marks the loop as closing (a per-loop counter, so overlapping closes are safe and each removes only the entries it began with) (`ensure_driver` raises
+   *Amended 2026-11-25 (#5, PR #52): `close(timeout)` (default `DEFAULT_CLOSE_TIMEOUT`, 10 s) marks the loop as closing (a per-loop counter, so overlapping closes are safe and each removes only the entries it began with) (`ensure_driver` raises
    `RuntimeError` meanwhile), waits on the per-`(alias, loop)` in-flight counter, closes the drivers
    (shielded from cancellation) even when the wait timed out, then raises `TimeoutError`; the
    marker is cleared afterwards so a restarted lifespan can reopen. Only the current loop is

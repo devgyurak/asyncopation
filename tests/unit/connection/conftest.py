@@ -9,10 +9,12 @@ import pytest
 from asyncopation.connection import registry
 from tests.support.lifecycle import (
     ClosingScenario,
+    ConcurrentOpenScenario,
     FakeEnv,
     OpeningScenario,
     OverlappingClose,
     ThreadLoop,
+    count_locks,
     dispose_environment,
     drain_in_flight,
     hold_driver_in_live_loop,
@@ -65,6 +67,21 @@ async def opening(configured: FakeEnv) -> AsyncIterator[OpeningScenario]:
     scenario = OpeningScenario(configured)
     yield scenario
     await scenario.cleanup()
+
+
+@pytest.fixture
+async def parked_opening(
+    configured: FakeEnv, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[OpeningScenario]:
+    """An opening scenario whose lock acquisitions are counted (a queued waiter shows up)."""
+    scenario = OpeningScenario(configured, counter=count_locks(monkeypatch))
+    yield scenario
+    await scenario.cleanup()
+
+
+@pytest.fixture
+def concurrent_open(configured: FakeEnv, monkeypatch: pytest.MonkeyPatch) -> ConcurrentOpenScenario:
+    return ConcurrentOpenScenario(configured, count_locks(monkeypatch))
 
 
 @pytest.fixture

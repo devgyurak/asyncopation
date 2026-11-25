@@ -67,9 +67,15 @@ def test_configured_databases_shares_leaves_that_cannot_be_deep_copied():
     assert facts["leaf_is_shared"] is True
 
 
-def test_configured_databases_copies_the_dict_and_list_structure_around_those_leaves():
+def test_configured_databases_copies_the_options_dict_around_those_leaves():
     # when
     facts = uncopiable_snapshot_facts()
     # then
     assert facts["options_dict_is_copied"] is True
+
+
+def test_configured_databases_copies_nested_lists_around_those_leaves():
+    # when
+    facts = uncopiable_snapshot_facts()
+    # then
     assert facts["nested_list_is_copied"] is True

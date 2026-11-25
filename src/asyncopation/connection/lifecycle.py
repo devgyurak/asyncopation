@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from collections.abc import Iterable
 from typing import Any
 
@@ -62,7 +63,7 @@ def _prepare(
     try:
         engine = factory()
         driver_factory = engine.prepare(alias, settings_dict, use_tz=use_tz, time_zone=time_zone)
-    except (ImproperlyConfigured, ImportError) as exc:
+    except Exception as exc:  # whatever is wrong with this alias must not break the others
         logger.warning("asyncopation: database %r cannot be prepared: %s", alias, exc)
         return AliasConfig(name, settings_dict, use_tz, time_zone, error=exc)
     return AliasConfig(name, settings_dict, use_tz, time_zone, engine, driver_factory)
@@ -96,7 +97,7 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         if config.engine is None or config.factory is None:  # narrowed by _config
             raise ImproperlyConfigured(f"asyncopation: {alias!r} has no engine")
         driver: AsyncDriver = config.factory()
-        await driver.open()
+        await driver.open()  # cleans up after itself when it fails or is cancelled (ADR-0003)
         try:
             if entry.closing:  # a close() began while we were opening: it must not get this pool
                 raise _closing_error(alias)
@@ -112,6 +113,7 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
                 await asyncio.shield(driver.close())
             raise
         entry.driver = driver
+        entry.opener = asyncio.current_task()
         return driver
 
 
@@ -125,7 +127,11 @@ def _check_unchanged(alias: str, config: AliasConfig) -> None:
     Opening with the stale configuration would reach the original database instead of the test
     database.
     """
-    if configured_databases().get(alias) != config.settings_dict:
+    if (
+        configured_databases().get(alias) != config.settings_dict
+        or bool(settings.USE_TZ) != config.use_tz
+        or str(settings.TIME_ZONE) != config.time_zone
+    ):
         raise ImproperlyConfigured(
             "DATABASES changed since configure(); call asyncopation.configure() after the test "
             "databases are created"
@@ -175,13 +181,17 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
             before = registry.entry(alias, loop)
             was_open = before is not None and before.driver is not None
             await ensure_driver(alias, lazy=False)
-            if not was_open:
-                opened.append(registry.entry_or_create(alias, loop))
+            entry = registry.entry_or_create(alias, loop)
+            # only a driver this very call opened: a concurrent task may have opened it meanwhile
+            if not was_open and entry.opener is asyncio.current_task():
+                opened.append(entry)
     except BaseException:
-        with contextlib.suppress(Exception):
-            await asyncio.shield(_close_entries(opened))
-        for entry in opened:
-            registry.forget(entry)
+        try:
+            with contextlib.suppress(Exception):
+                await asyncio.shield(_close_entries(opened))
+        finally:
+            for entry in opened:
+                registry.forget(entry)
         raise
 
 
@@ -223,6 +233,9 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
             timed_out = True
     finally:
         failures = await asyncio.shield(_close_and_end(loop, mine))
+        if sys.exc_info()[0] is not None:  # close() itself is being cancelled: nobody sees them
+            for failure in failures:
+                logger.error("asyncopation: a driver failed to close: %r", failure)
     for extra in failures[1:]:
         logger.error("asyncopation: another driver failed to close: %r", extra)
     if failures:

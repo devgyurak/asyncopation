@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
 from django.db import Error as DjangoDbError
 
 from asyncopation.compile.server_info import PostgreSQLServerInfo
@@ -17,9 +18,10 @@ from tests.support.lifecycle import (
     counts,
     current_database_of_driver,
     distinct,
+    ensure_after_rename,
     ensure_many,
-    ensure_raises_after_rename,
     fail_first_open_then_recover,
+    failing,
     injected_aliases,
     last_prepared_name,
     live_database_name,
@@ -177,19 +179,14 @@ async def test_a_compile_wrapper_that_was_never_injected_does_attempt_a_sync_con
     assert attempts == 1
 
 
-async def test_setup_opens_sessions_on_the_server(spy, app_name):
-    # when
-    await setup()
-    # then
-    assert await server_connections(app_name) >= 1
-
-
 async def test_close_ends_every_session_of_the_pool_on_the_server(spy, app_name):
     # given
     await setup()
+    open_before_close = await server_connections(app_name)
     # when
     await close()
     # then
+    assert open_before_close >= 1
     assert await server_connections_after_settling(app_name) == 0
 
 
@@ -210,8 +207,15 @@ async def test_the_driver_opened_after_configure_reaches_the_test_database(spy):
 
 
 async def test_a_rename_after_configure_is_refused_instead_of_reaching_the_old_database(spy):
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="changed since configure"):
+        await ensure_after_rename("default")
+
+
+async def test_a_refused_rename_leaves_no_entry(spy):
+    # given
+    await failing(ensure_after_rename("default"), ImproperlyConfigured)
     # when
-    error = await ensure_raises_after_rename("default")
+    entries = registry.entries()
     # then
-    assert type(error).__name__ == "ImproperlyConfigured"
-    assert registry.entries() == []
+    assert entries == []

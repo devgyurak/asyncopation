@@ -1,4 +1,4 @@
-"""Fakes, spies and scenarios for the lifecycle / registry / probe tests (ADR-0004, issue #5a).
+"""Fakes, spies and scenarios for the lifecycle / registry / probe tests (ADR-0004, issue #5, PR #52).
 
 Everything under test is imported lazily inside functions, so that a missing module makes the
 tests that need it fail (not the collection of unrelated tests), and so that the isolated
@@ -66,6 +66,7 @@ class Script:
     fail_injects: int = 0
     gate: asyncio.Event | None = None  # `open()` waits for it (created in the running loop)
     gate_after: int | None = None  # the gate only holds opens once this many succeeded
+    gate_driver_index: int | None = None  # the gate only holds the N-th driver built
     version: tuple[int, ...] = FAKE_VERSION
     stats: PoolStats = DEFAULT_STATS
 
@@ -94,9 +95,10 @@ class Recorder:
 
 
 class FakeDriver:
-    def __init__(self, recorder: Recorder, script: Script) -> None:
+    def __init__(self, recorder: Recorder, script: Script, index: int = 0) -> None:
         self._recorder = recorder
         self._script = script
+        self.index = index
         self.is_open = False
 
     @property
@@ -110,6 +112,8 @@ class FakeDriver:
     async def open(self) -> None:
         self._recorder.open_attempts += 1
         held = self._script.gate_after is None or self._recorder.opens >= self._script.gate_after
+        only = self._script.gate_driver_index
+        held = held and (only is None or only == self.index)
         if self._script.gate is not None and held:
             await self._script.gate.wait()
         await asyncio.sleep(0)  # a real open awaits: concurrent callers interleave here
@@ -142,7 +146,7 @@ def make_engine(recorder: Recorder, script: Script) -> Any:
         recorder.prepares.append(Prepared(alias, settings_dict["NAME"], use_tz, time_zone))
 
         def factory() -> FakeDriver:
-            driver = FakeDriver(recorder, script)
+            driver = FakeDriver(recorder, script, len(recorder.built))
             recorder.built.append(driver)
             return driver
 
@@ -183,6 +187,7 @@ class FakeEnv:
         self.names = {"default": "fake_db", "other": "fake_other_db"}
         self.engines = {"default": FAKE_ENGINE, "other": FAKE_ENGINE}
         self.options: dict[str, dict[str, Any]] = {}
+        self.updates: dict[str, dict[str, Any]] = {}
         engine = make_engine(self.recorder, self.script)
         monkeypatch.setitem(engines.FACTORIES, FAKE_ENGINE, lambda: engine)
         self._apply()
@@ -194,6 +199,7 @@ class FakeEnv:
         for alias, name in self.names.items():
             entry = database_entry(name, self.engines[alias])
             entry["OPTIONS"] = dict(self.options.get(alias, {}))
+            entry.update(self.updates.get(alias, {}))
             databases[alias] = entry
         self._monkeypatch.setitem(connections.__dict__, "settings", databases)
 
@@ -223,6 +229,11 @@ class FakeEnv:
         key = f"tests.broken.{alias}"
         self._monkeypatch.setitem(engines.FACTORIES, key, factory)
         self.add_alias(alias, f"{alias}_db", key)
+
+    def override(self, alias: str, **settings_dict: Any) -> None:
+        """Set DATABASES[alias][key] = value for every given key."""
+        self.updates.setdefault(alias, {}).update(settings_dict)
+        self._apply()
 
     def set_options(self, alias: str, options: dict[str, Any]) -> None:
         self.options[alias] = options
@@ -692,6 +703,14 @@ async def setup_and_ensure_concurrently(alias: str) -> tuple[None, Any]:
     return await asyncio.gather(setup([alias]), ensure_driver(alias))
 
 
+async def _two_acquires(counter: LockCounter) -> bool:
+    return counter.acquired >= 2
+
+
+async def _three_acquires(counter: LockCounter) -> bool:
+    return counter.acquired >= 3
+
+
 async def _opener_started(recorder: Recorder) -> bool:
     return recorder.open_attempts >= 1
 
@@ -699,9 +718,12 @@ async def _opener_started(recorder: Recorder) -> bool:
 class OpeningScenario:
     """A first `ensure_driver` that is held inside `driver.open()` by the script's gate."""
 
-    def __init__(self, env: FakeEnv, alias: str = "default") -> None:
+    def __init__(
+        self, env: FakeEnv, alias: str = "default", counter: LockCounter | None = None
+    ) -> None:
         self.env = env
         self.alias = alias
+        self.counter = counter  # counts lock acquisitions: a second one means a parked waiter
         self.task: asyncio.Task[Any] | None = None
 
     async def begin(self) -> None:
@@ -835,8 +857,10 @@ async def waiter_meets_closing(scenario: OpeningScenario) -> list[Any]:
     from tests.support.aio import wait_until
 
     assert scenario.task is not None
+    assert scenario.counter is not None
+    counter = scenario.counter
     waiter = asyncio.create_task(ensure_driver(scenario.alias))
-    await asyncio.sleep(0)  # one turn: the waiter runs up to the lock and queues behind the opener
+    await wait_until(lambda: _two_acquires(counter))  # the waiter is parked behind the opener
     close_task = asyncio.create_task(close())
     await wait_until(_is_closing)
     gate, scenario.env.script.gate = scenario.env.script.gate, None
@@ -951,7 +975,7 @@ def application_name_override(name: str, alias: str = "default") -> Generator[No
 
 
 async def server_connections(name: str) -> int:
-    """Sessions of the test database whose `application_name` is `name` (pg_stat_activity)."""
+    """Sessions on the server whose `application_name` is `name` (pg_stat_activity)."""
     from tests.support.drivers.admin import admin_scalar
 
     return int(
@@ -983,18 +1007,14 @@ async def current_database_of_driver(alias: str = "default") -> str:
     return rows[0][0]
 
 
-async def ensure_raises_after_rename(alias: str = "default") -> BaseException | None:
-    """`configure()` against the live name, rename `NAME`, then open: the error (if any)."""
+async def ensure_after_rename(alias: str = "default") -> Any:
+    """`configure()` against the live name, rename `NAME`, then open: raises (fail closed)."""
     from asyncopation.connection import configure
     from asyncopation.connection.lifecycle import ensure_driver
 
     configure()
     with patched_alias_settings(alias, NAME="renamed_after_configure"):
-        try:
-            await ensure_driver(alias)
-        except Exception as exc:
-            return exc
-    return None
+        return await ensure_driver(alias)
 
 
 def assert_registry_clean() -> None:
@@ -1031,3 +1051,88 @@ async def failing(coroutine: Any, expected: type[BaseException]) -> BaseExceptio
     except expected as exc:
         return exc
     raise AssertionError(f"expected {expected.__name__}, but nothing was raised")
+
+
+def apply_change(env: FakeEnv, settings: Any, kind: str) -> None:
+    """Change the settings the way a test runner (or a careless caller) could after `configure()`."""
+    if kind == "host":
+        env.override("default", HOST="somewhere-else")
+    elif kind == "options":
+        env.set_options("default", {"connect_timeout": 3})
+    elif kind == "engine":
+        env.use_engine("default", UNSUPPORTED_ENGINE)
+    elif kind == "use_tz":
+        settings.USE_TZ = not settings.USE_TZ
+    elif kind == "time_zone":
+        settings.TIME_ZONE = "Asia/Seoul"
+    elif kind == "alias_added":
+        env.add_alias("late", "late_db", FAKE_ENGINE)
+    else:
+        raise ValueError(kind)
+
+
+class ConcurrentOpenScenario:
+    """Task B holds `other`'s open lock (its driver is gated); `setup([default, other, third])`
+    opens `default`, parks behind B, and fails on `third` once B has opened `other`."""
+
+    def __init__(self, env: FakeEnv, counter: LockCounter) -> None:
+        self.env = env
+        self.counter = counter
+        self.b: asyncio.Task[Any] | None = None
+        self.setup_task: asyncio.Task[None] | None = None
+
+    async def run(self) -> list[Any]:
+        from asyncopation.connection import configure
+        from asyncopation.connection.lifecycle import ensure_driver, setup
+        from tests.support.aio import wait_until
+
+        script = self.env.script
+        self.env.add_alias("third", "fake_third_db", FAKE_ENGINE)
+        configure()  # the new alias is part of the configuration
+        script.gate = asyncio.Event()
+        script.gate_driver_index = 0  # B's driver is the first one built
+        script.fail_open_after = 2  # the third open (after default and other) fails
+        self.b = asyncio.create_task(ensure_driver("other"))
+        await wait_until(lambda: _opener_started(self.env.recorder))
+        self.setup_task = asyncio.create_task(setup(["default", "other", "third"]))
+        await wait_until(lambda: _three_acquires(self.counter))  # setup is parked behind B
+        script.gate.set()
+        script.gate = None
+        return list(await asyncio.gather(self.b, self.setup_task, return_exceptions=True))
+
+
+class ClosedLoopState:
+    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+        self.loop = loop
+
+    def closing_mark_remains(self) -> bool:
+        from asyncopation.connection import registry
+
+        return self.loop in registry._closing_loops
+
+    def flights_remain(self) -> bool:
+        from asyncopation.connection import registry
+
+        return any(key[1] is self.loop for key in registry._flights)
+
+
+async def leave_closing_and_flight_in_a_closed_loop(alias: str = "default") -> ClosedLoopState:
+    """In a loop that is then closed: open `alias`, start a statement and begin closing."""
+    from asyncopation.connection import registry
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    async def run() -> ClosedLoopState:
+        await ensure_driver(alias)
+        registry.statement_started(alias)
+        registry.begin_closing(asyncio.get_running_loop())
+        return ClosedLoopState(asyncio.get_running_loop())
+
+    return await run_in_thread_loop(run())
+
+
+def purge_and_report_leaks() -> list[str]:
+    """Purge closed loops, return (and so consume) the leaked entries' aliases."""
+    from asyncopation.connection import registry
+
+    registry.purge_closed_loops()
+    return aliases_of(registry.take_leaked())

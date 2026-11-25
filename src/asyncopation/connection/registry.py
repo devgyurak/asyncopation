@@ -41,10 +41,11 @@ class AliasConfig:
 class Entry:
     """One ``(alias, loop)``. Created inside that loop, so its lock belongs to it (rule 5)."""
 
-    __slots__ = ("closing", "driver", "lock", "warned")
+    __slots__ = ("closing", "driver", "lock", "opener", "warned")
 
     def __init__(self) -> None:
         self.driver: AsyncDriver | None = None
+        self.opener: asyncio.Task[Any] | None = None  # the task that ran this driver's open()
         self.lock = asyncio.Lock()
         self.warned = False
         self.closing = False
@@ -103,11 +104,14 @@ def purge_closed_loops() -> None:
     ERROR log, and remembered in ``take_leaked()`` for test teardown. Without this a discarded
     loop would block ``configure()`` for the rest of the process.
     """
+    for loop in [loop for loop in list(_closing_loops) if loop.is_closed()]:
+        del _closing_loops[loop]
+    for key in [key for key in list(_flights) if key[1].is_closed()]:
+        del _flights[key]
     for key, found in list(_entries.items()):
         if not key[1].is_closed():
             continue
         del _entries[key]
-        _flights.pop(key, None)
         if found.driver is not None:
             _leaked.append(key)
             logger.error(

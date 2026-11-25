@@ -239,3 +239,18 @@ async def test_a_close_that_finishes_first_keeps_the_other_closes_mark(opened, o
     # then
     assert error_names(outcome) == ["TimeoutError"]
     assert await ensure_is_refused("default") is True
+
+
+async def test_setup_rollback_leaves_a_driver_another_task_opened_concurrently(concurrent_open):
+    # when
+    results = await concurrent_open.run()
+    # then
+    assert error_names(results) == ["ok", "FakeOpenError"]
+    assert entry_aliases() == ["other"]
+
+
+async def test_setup_rollback_closes_only_the_drivers_it_opened_itself(concurrent_open):
+    # when
+    await concurrent_open.run()
+    # then
+    assert concurrent_open.env.recorder.closes == 1

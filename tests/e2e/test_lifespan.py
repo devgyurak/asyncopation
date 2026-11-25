@@ -5,13 +5,14 @@ import pytest
 from harness.settings import VENDOR
 from tests.support.e2e_server import ServerProcess
 
-pytestmark = pytest.mark.skipif(
+PG_ONLY = pytest.mark.skipif(
     VENDOR != "postgresql",
-    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; the lifespan e2e runs on "
-    "PostgreSQL only until then",
+    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; there is no pool to count "
+    "(on those backends the harness serves plain Django, so only the route tests run)",
 )
 
 
+@PG_ONLY
 async def test_startup_opens_the_pool_before_any_request(lifespan_http):
     # when
     diag = (await lifespan_http.get("/diag/pool")).json()
@@ -20,7 +21,8 @@ async def test_startup_opens_the_pool_before_any_request(lifespan_http):
     assert diag["server_info"] is True
 
 
-async def test_pool_holds_connections_after_startup(lifespan_http):
+@PG_ONLY
+async def test_the_registry_reports_a_pool_with_connections_after_startup(lifespan_http):
     # when
     diag = (await lifespan_http.get("/diag/pool")).json()
     # then
@@ -28,6 +30,7 @@ async def test_pool_holds_connections_after_startup(lifespan_http):
     assert stats["in_use"] + stats["idle"] > 0
 
 
+@PG_ONLY
 def test_shutdown_completes_the_lifespan_protocol(lifespan_server: ServerProcess):
     # when
     lifespan_server.stop()
@@ -36,7 +39,8 @@ def test_shutdown_completes_the_lifespan_protocol(lifespan_server: ServerProcess
     assert logged is True
 
 
-def test_the_server_holds_sessions_until_the_shutdown_closes_them(
+@PG_ONLY
+def test_the_server_had_sessions_open_when_the_shutdown_began(
     lifespan_server: ServerProcess,
 ):
     # when
@@ -46,7 +50,8 @@ def test_the_server_holds_sessions_until_the_shutdown_closes_them(
     assert before >= 1
 
 
-def test_the_server_has_no_sessions_left_once_the_shutdown_completed(
+@PG_ONLY
+def test_the_server_reported_no_sessions_after_the_shutdown_completed(
     lifespan_server: ServerProcess,
 ):
     # when
@@ -74,6 +79,7 @@ async def test_health_is_served_through_the_wrapper(lifespan_http, readonly_db):
     assert response.status_code == 200
 
 
+@PG_ONLY
 def test_startup_opens_the_pools_without_the_lazy_open_warning(lifespan_server: ServerProcess):
     # when
     clean = lifespan_server.lacks("lazily on first use")

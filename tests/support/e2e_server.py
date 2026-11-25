@@ -58,7 +58,10 @@ class ServerProcess:
     def sessions_around_shutdown(self) -> tuple[int, ...]:
         """(sessions before close, sessions after shutdown) the server printed, or ()."""
         found = DIAG_LINE.search(self.log())
-        return tuple(int(g) for g in found.groups()) if found else ()
+        assert found is not None, (
+            f"no ASYNCOPATION_DIAG line in the server log:\n{self.log()[-2000:]}"
+        )
+        return tuple(int(g) for g in found.groups())
 
 
 def _free_port() -> int:
@@ -68,7 +71,7 @@ def _free_port() -> int:
 
 
 def start_server(
-    db_name: str, log_dir: Path, app_name: str, *, timeout: float = 30.0
+    db_name: str, log_dir: Path, app_name: str, *, lifespan: str = "on", timeout: float = 30.0
 ) -> ServerProcess:
     port = _free_port()
     log_path = log_dir / f"server-{port}.log"
@@ -80,7 +83,7 @@ def start_server(
     with log_path.open("w") as log:
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "harness.site.asgi:application",
-             "--host", "127.0.0.1", "--port", str(port), "--no-access-log", "--lifespan", "on"],
+             "--host", "127.0.0.1", "--port", str(port), "--no-access-log", "--lifespan", lifespan],
             cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
         )  # fmt: skip
     server = ServerProcess(f"http://127.0.0.1:{port}", proc, log_path)

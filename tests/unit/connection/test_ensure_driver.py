@@ -364,19 +364,21 @@ async def test_close_closes_the_driver_the_interrupted_open_had_built(opening):
     assert opening.env.recorder.closes == 1
 
 
-async def test_a_caller_waiting_on_the_open_lock_that_meets_closing_raises_runtime_error(opening):
+async def test_a_caller_waiting_on_the_open_lock_that_meets_closing_raises_runtime_error(
+    parked_opening,
+):
     # given
-    await opening.begin()
+    await parked_opening.begin()
     # when
-    results = await waiter_meets_closing(opening)
+    results = await waiter_meets_closing(parked_opening)
     # then
     assert error_names(results) == ["RuntimeError", "RuntimeError", "ok"]
 
 
-async def test_the_queued_caller_that_meets_closing_opens_no_second_driver(opening):
+async def test_the_queued_caller_that_meets_closing_opens_no_second_driver(parked_opening):
     # given
-    await opening.begin()
+    await parked_opening.begin()
     # when
-    await waiter_meets_closing(opening)
+    await waiter_meets_closing(parked_opening)
     # then
-    assert len(opening.env.recorder.built) == 1
+    assert len(parked_opening.env.recorder.built) == 1

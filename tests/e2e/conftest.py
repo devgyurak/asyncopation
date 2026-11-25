@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from harness.settings import VENDOR
 from tests.support.e2e_server import ServerProcess, start_server
 from tests.support.lifecycle import new_application_name
 
@@ -84,7 +85,12 @@ def lifespan_server(seeded_db: None, tmp_path) -> Iterator[ServerProcess]:
     """A fresh uvicorn with `--lifespan on` per test; stopped (gracefully) at teardown."""
     from django.db import connection
 
-    server = start_server(connection.settings_dict["NAME"], tmp_path, new_application_name())
+    server = start_server(
+        connection.settings_dict["NAME"],
+        tmp_path,
+        new_application_name(),
+        lifespan="on" if VENDOR == "postgresql" else "off",
+    )
     yield server
     server.stop()
 

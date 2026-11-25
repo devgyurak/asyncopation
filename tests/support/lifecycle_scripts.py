@@ -71,3 +71,17 @@ def run_isolated(script: str) -> Ran:
         [sys.executable, "-I", "-c", script], capture_output=True, text=True, timeout=60
     )
     return Ran(done.returncode, done.stdout.strip(), done.stderr.strip())
+
+
+PSYCOPG_MISSING_OPEN = PSYCOPG_MISSING.replace(
+    'print("configured")',
+    """import asyncio
+from asyncopation.connection.lifecycle import ensure_driver
+from django.core.exceptions import ImproperlyConfigured
+try:
+    asyncio.run(ensure_driver("default"))
+except ImproperlyConfigured as exc:
+    print("raised ImproperlyConfigured")
+else:
+    print("opened")""",
+)

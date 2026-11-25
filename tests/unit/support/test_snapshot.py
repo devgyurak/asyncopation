@@ -3,11 +3,21 @@ from decimal import Decimal
 import pytest
 
 from harness.catalog.models import Book, Publisher
-from tests.support.snapshot import annotation_names, related_snapshot, snapshot, snapshot_result
+from tests.support.snapshot import (
+    annotation_names,
+    field_snapshot,
+    related_snapshot,
+    snapshot,
+    snapshot_result,
+)
 from tests.support.snapshot_graphs import (
+    cache_related,
     cached_related,
+    forbid_refresh_from_db,
     make_author,
     make_book,
+    make_book_with_deferred_publisher_name,
+    make_deferred_author,
     make_one_to_one_cycle,
     make_publisher,
 )
@@ -263,3 +273,137 @@ def test_related_snapshot_raises_for_relation_that_was_not_loaded():
     # when / then
     with pytest.raises(KeyError):
         related_snapshot(book, "author")
+
+
+def test_deferred_field_snapshot_differs_from_loaded_field_snapshot():
+    # given
+    deferred, loaded = make_deferred_author("email"), make_deferred_author()
+    # when
+    result = field_snapshot(snapshot(deferred), "email") == field_snapshot(
+        snapshot(loaded), "email"
+    )
+    # then
+    assert result is False
+
+
+def test_deferred_field_snapshot_leaves_other_fields_unchanged():
+    # given
+    deferred, loaded = make_deferred_author("email"), make_deferred_author()
+    # when
+    result = field_snapshot(snapshot(deferred), "name") == field_snapshot(snapshot(loaded), "name")
+    # then
+    assert result
+
+
+def test_deferred_field_differs_from_field_loaded_as_none():
+    # given
+    deferred, loaded_none = make_deferred_author("publisher_id"), make_deferred_author()
+    vars(loaded_none).update(publisher_id=None)
+    # when
+    result = snapshot(deferred) == snapshot(loaded_none)
+    # then
+    assert result is False
+
+
+def test_instances_deferring_different_fields_produce_different_snapshots():
+    # given
+    left, right = make_deferred_author("email"), make_deferred_author("name")
+    # when
+    result = snapshot(left) == snapshot(right)
+    # then
+    assert result is False
+
+
+def test_snapshot_never_calls_refresh_from_db_for_deferred_fields(monkeypatch):
+    # given
+    forbid_refresh_from_db(monkeypatch)
+    author = make_deferred_author("email", "name")
+    # when
+    result = snapshot(author)
+    # then
+    assert (field_snapshot(result, "email"), field_snapshot(result, "name")) == (
+        ("<deferred>", None),
+        ("<deferred>", None),
+    )
+
+
+def test_deferred_foreign_key_attname_is_marker_while_cached_relation_is_recorded():
+    # given
+    author = make_deferred_author("publisher_id")
+    cache_related(author, "publisher", make_publisher())
+    # when
+    result = snapshot(author)
+    # then
+    assert field_snapshot(result, "publisher_id") == ("<deferred>", None)
+
+
+def test_cached_relation_is_still_recorded_when_its_foreign_key_attname_is_deferred():
+    # given
+    author = make_deferred_author("publisher_id")
+    cache_related(author, "publisher", make_publisher())
+    # when
+    related = related_snapshot(snapshot(author), "publisher")
+    # then
+    assert related == snapshot(make_publisher())
+
+
+def test_deferred_field_two_levels_deep_is_recorded_as_marker():
+    # given
+    book = make_book_with_deferred_publisher_name()
+    # when
+    recorded = field_snapshot(snapshot(book), "name", "author", "publisher")
+    # then
+    assert recorded == ("<deferred>", None)
+
+
+def test_field_snapshot_raises_key_error_for_unknown_field():
+    # given
+    result = snapshot(make_author())
+    # when / then
+    with pytest.raises(KeyError):
+        field_snapshot(result, "nope")
+
+
+def test_field_snapshot_raises_lookup_error_for_relation_loaded_as_none():
+    # given
+    result = snapshot(make_author(publisher=None))
+    # when / then
+    with pytest.raises(LookupError):
+        field_snapshot(result, "name", "publisher")
+
+
+def test_instances_deferring_the_same_field_produce_equal_snapshots():
+    # given
+    left, right = make_deferred_author("email"), make_deferred_author("email")
+    # when
+    result = snapshot(left) == snapshot(right)
+    # then
+    assert result
+
+
+def test_snapshot_of_deferred_field_records_marker_without_loading_it():
+    # given: no django_db mark, so reading the field (refresh_from_db) would fail
+    author = make_deferred_author("email")
+    # when
+    recorded = field_snapshot(snapshot(author), "email")
+    # then
+    assert recorded == ("<deferred>", None)
+
+
+def test_deferred_field_of_a_cached_related_object_is_recorded_as_marker():
+    # given
+    book = make_book(make_deferred_author("email"))
+    # when
+    recorded = field_snapshot(snapshot(book), "email", "author")
+    # then
+    assert recorded == ("<deferred>", None)
+
+
+def test_field_loaded_with_the_marker_text_differs_from_a_deferred_field():
+    # given
+    deferred, loaded = make_deferred_author("name"), make_deferred_author()
+    loaded.name = "<deferred>"
+    # when
+    result = snapshot(deferred) == snapshot(loaded)
+    # then
+    assert result is False

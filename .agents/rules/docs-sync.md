@@ -31,7 +31,7 @@ Update them **in the same commit/PR** as the change - never "docs later", never 
 | `docker-compose.yml` services/ports, env vars in `harness/settings.py` | `test-db` skill, `AGENTS.md`, `README.md`, `bench/run.py` |
 | `harness/catalog` models or `harness/seed.py` sizes | `EXPECTED_COUNTS`, a new migration (`makemigrations catalog`), strategies in `tests/support/strategies.py` |
 | Scenarios in `harness/site` or `bench/k6` | all three variants (`/sync`, `/core`, `/aopt`), `perf-bench` and `e2e-harness` skills |
-| Dependencies, Python or Django versions | `README.md` requirements, `pyproject.toml` classifiers, CI matrix, ledger `verified_against` |
+| Dependencies, Python or Django versions | `README.md` requirements, `pyproject.toml` `Framework :: Django :: X.Y` classifiers (the drift test checks them against the `django` pin), CI matrix, ledger `verified_against` |
 | `.github/workflows/` or the branch flow | `docs/workflow.md`, `commit` skill |
 | An English document that has `-XX` translations | the translation + `uv run python -m tools.guards i18n-stamp <file>` |
 

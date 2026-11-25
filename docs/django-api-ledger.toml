@@ -11,8 +11,10 @@
 #                 the first segment must be listed in `names`. `names` is required (`"*"` = the whole
 #                 module). `ported = true` marks code that is ported but never imported (e.g. the
 #                 MySQL backend, which imports MySQLdb): names may then be dotted, `signatures` are
-#                 not allowed, A202 skips the entry, the drift test reads the module source instead
-#                 and importing it is still an A201. `"*"` is not allowed: name what was ported.
+#                 not allowed, A202 checks each `used_by` file instead of imports (it must be a .py under
+#                 src/asyncopation/, exist, and carry a `# Ported from django/<module path>.py`
+#                 comment - `__init__.py` for a package; not a string or docstring), the drift test
+#                 reads the module source instead and importing it is still an A201. `"*"` is not allowed: name what was ported.
 #   [[attribute]] every private attribute we access directly, inside _django or not (`owner` is
 #                 the dotted class path, e.g. qs._fetch_mode; `signatures` is allowed for methods).
 #                 The guard cannot find such accesses; arch review does. Register them so the
@@ -20,7 +22,8 @@
 # `used_by`, `reason` and `verified_against` are required on every entry. Unknown keys, duplicate
 # entries, missing fields and wrong types make the guard fail with a message.
 # A202 flags an [[internal]] item (not `ported`) not imported under _django (any absolute import,
-# asgiref included), and an [[attribute]] name never accessed in src. tests/unit/django_drift checks every entry against Django.
+# asgiref included), a `ported` entry whose `used_by` file is missing or lacks the `# Ported from`
+# header, and an [[attribute]] name never accessed in src. tests/unit/django_drift checks every entry against Django.
 #
 # Entry template:
 #   [[internal]]

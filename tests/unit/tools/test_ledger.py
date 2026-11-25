@@ -55,6 +55,15 @@ def test_only_ported_entries_are_in_the_ported_set():
     assert (QUERY, "Query") not in ledger.ported
 
 
+def test_ported_used_by_holds_only_ported_entries_paths():
+    # when
+    ledger = Ledger.from_toml(FULL)
+    # then
+    assert ledger.ported_used_by == {
+        ("django.db.backends.mysql.base", "src/asyncopation/_django/x.py")
+    }
+
+
 def test_wildcard_entry_covers_any_name_of_the_module():
     # given
     ledger = Ledger.from_toml(BASE + '[[internal]]\nmodule = "m"\nnames = ["*"]\n' + REC)

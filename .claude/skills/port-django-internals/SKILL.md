@@ -15,6 +15,11 @@ description: Procedure for porting or reusing Django internals (ModelIterable, p
    # Ported from django/db/models/query.py::ModelIterable.__iter__ @ 6.1.3
    # Changes: cursor iteration -> await driver.fetchmany(); otherwise identical.
    ```
+   A202 enforces the header for `ported = true` entries: every `used_by` file must be a `.py` under
+   `src/asyncopation/` and hold a *comment* with `Ported from django/<module path>.py` (the module
+   `django.db.utils` -> `django/db/utils.py`; a package also accepts `.../__init__.py`; the path must
+   directly follow `Ported from`, one header per Django file, not on a continuation line). Strings and
+   docstrings do not count; the version and names are not compared (the drift test owns them).
 4. **Ledger**: add or extend an `[[internal]]` entry in `docs/django-api-ledger.toml`
    (`module`, `names` (required; `"*"` = the whole module), `used_by`, `reason`, `verified_against = "<django version>"`; optional
    `signatures = { "Name.method" = "<str(inspect.signature(obj))>" }` with dotted keys quoted;

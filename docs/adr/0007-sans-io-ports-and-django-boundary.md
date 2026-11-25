@@ -69,9 +69,12 @@ differential tests of the core itself. - generator protocol is less familiar.
    attribute access cannot be detected without false positives, so arch-guardian reviews it.
 6. **Ledger semantics.** Ledger entries keep `used_by` listing the real consumers (not just
    `_django`); A202 flags an `[[internal]]` entry that nothing under `_django` imports (unless it is
-   `ported`) and an `[[attribute]]` never accessed in `src/`. The drift-test list is the ledger itself: `[[internal]]` entries (optionally with `signatures`) and
+   `ported`; a `ported` entry is checked instead for a `used_by` file that exists under
+   `src/asyncopation/` and carries a `# Ported from django/<module path>.py` comment) and an
+   `[[attribute]]` never accessed in `src/`. The drift-test list is the ledger itself: `[[internal]]` entries (optionally with `signatures`) and
    `[[attribute]]` entries (every private attribute we access directly, inside `_django` or not, with its owner class). Code that
    is ported but never imported (e.g. the MySQL backend) is marked `ported = true`.
+   *Amended 2026-11-25 (#50): A202 now also checks `ported` entries (the `used_by` file exists and carries the `# Ported from` header); maintainer confirmation of this wording requested in the PR.*
 7. The **sync runner** over Django's own cursor lives in `tests/support/` (`src/` cannot import
    `django.db.connections`).
 

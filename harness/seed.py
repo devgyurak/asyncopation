@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from django.apps import apps
 from django.db import connection, models, transaction
 
 if TYPE_CHECKING:
@@ -42,6 +43,7 @@ EXPECTED_COUNTS = {
     "Comment": N_BOOKS + N_AUTHORS,
     "FieldZoo": 4,
 }
+PG_EXPECTED_COUNTS = {"PgFieldZoo": 4}  # harness.pgcatalog, installed on PostgreSQL only
 
 _EPOCH = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
 
@@ -147,6 +149,8 @@ def seed() -> None:
             ]
         )
         FieldZoo.objects.bulk_create(_field_zoo_rows())
+        if apps.is_installed("harness.pgcatalog"):
+            _seed_pgcatalog()
         # Deterministic without `rnd`: drawing from it here would shift later seed data.
         BookEdition.objects.bulk_create(
             BookEdition(
@@ -199,6 +203,37 @@ def _field_zoo_rows() -> list[FieldZoo]:
     ]  # fmt: skip
 
 
+def _seed_pgcatalog() -> None:
+    from harness.pgcatalog.models import PgFieldZoo
+
+    PgFieldZoo.objects.bulk_create(
+        [
+            PgFieldZoo(hstore={}, nullable_hstore=None, citext=""),  # empty containers
+            PgFieldZoo(
+                hstore={"a": "1", "b": None},
+                nullable_hstore=None,
+                hstore_list=[{"k": "v"}, {}],
+                citext="MiXeD",
+                citext_list=["Alpha", "beta"],
+            ),
+            PgFieldZoo(
+                hstore={"한글": "값 ✓", 'q"uote': "c,o=>m\\a", "": ""},
+                nullable_hstore={},
+                hstore_list=[{"x": None}],
+                citext="",
+                citext_list=[],
+            ),
+            PgFieldZoo(
+                hstore={"NULL": "null", "space key": " padded "},
+                nullable_hstore={"only": None},
+                hstore_list=[],
+                citext="ÄÖÜ",
+                citext_list=["a,b", '"q"'],
+            ),
+        ]
+    )
+
+
 def reset() -> None:
     """Delete everything and seed again (used after tests that write)."""
     from harness.catalog.models import (
@@ -219,6 +254,10 @@ def reset() -> None:
         Tag.objects.all().delete()
         FieldZoo.objects.all().delete()
         Comment.objects.all().delete()
+        if apps.is_installed("harness.pgcatalog"):
+            from harness.pgcatalog.models import PgFieldZoo
+
+            PgFieldZoo.objects.all().delete()
     seed()
 
 

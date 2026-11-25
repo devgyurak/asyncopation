@@ -9,7 +9,9 @@ from psycopg_pool import AsyncConnectionPool
 
 from asyncopation.drivers.base import Capabilities, PoolStats
 from asyncopation.drivers.errors import raise_mapped
+from asyncopation.drivers.postgresql import contrib_types
 from asyncopation.drivers.postgresql.connection import PostgresConnection
+from asyncopation.drivers.postgresql.contrib_types import ContribTypes
 from asyncopation.drivers.postgresql.errors import is_disconnect, translate_errors
 from asyncopation.drivers.postgresql.settings import PostgresConfig, build_config
 
@@ -24,15 +26,31 @@ class PostgresDriver:
 
     @classmethod
     def from_settings(
-        cls, alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
+        cls,
+        alias: str,
+        settings_dict: dict[str, Any],
+        *,
+        use_tz: bool,
+        time_zone: str,
+        register_contrib_types: bool = False,
     ) -> PostgresDriver:
         """Build from a ``DATABASES`` entry plus ``settings.USE_TZ`` / ``settings.TIME_ZONE``.
 
         Call it from the configure phase (``AppConfig.ready()``, ADR-0004), never from inside the
         running event loop: resolving a time zone name reads the tz database from disk
-        (``zoneinfo``), which is blocking I/O.
+        (``zoneinfo``), which is blocking I/O. ``register_contrib_types`` says whether
+        ``django.contrib.postgres`` is installed (hstore/citext handlers, ADR-0003); a direct
+        caller opts in, the lifecycle wiring reads it from the app registry.
         """
-        return cls(build_config(alias, settings_dict, use_tz=use_tz, time_zone=time_zone))
+        return cls(
+            build_config(
+                alias,
+                settings_dict,
+                use_tz=use_tz,
+                time_zone=time_zone,
+                register_contrib_types=register_contrib_types,
+            )
+        )
 
     @property
     def capabilities(self) -> Capabilities:
@@ -47,22 +65,28 @@ class PostgresDriver:
         unknown database or an invalid ``assume_role`` fail at once with the same ``django.db``
         exception Django's sync backend raises - psycopg_pool would only retry in the background
         and report a ``PoolTimeout`` after its timeout. It also yields the server version without
-        a query. Nothing is left open when this raises.
+        a query. With ``django.contrib.postgres`` installed it also reads the hstore/citext type
+        OIDs there (two catalog queries, once per ``open()``) and every connection registers its
+        handlers from them without further I/O (ADR-0003 Decision 2). Nothing is left open when
+        this raises.
         """
         if self._pool is not None:
             return
         config = self._config
         # Constructing the pool first validates its sizes (psycopg_pool raises ``ValueError`` for
         # min_size > max_size) before any connection is made; nothing runs until it is opened.
+        # One immutable value per open(): filled once by the probe, read by this pool's configure
+        # step only, so an overlapping close()/open() never shares or clears it.
+        contrib: list[ContribTypes] = []
         pool = AsyncConnectionPool(
             "",
             kwargs=config.conn_kwargs,
-            configure=self._configure,
+            configure=lambda raw: self._configure_pooled(raw, contrib),
             name=config.alias,
             open=False,
             **config.pool_kwargs,
         )
-        server_version = await self._probe()
+        server_version = await self._probe(contrib)
         try:
             with translate_errors():
                 await pool.open(wait=True)
@@ -102,19 +126,39 @@ class PostgresDriver:
         size, available = stats["pool_size"], stats["pool_available"]
         return PoolStats(in_use=size - available, idle=available, waiting=stats["requests_waiting"])
 
-    async def _probe(self) -> tuple[int, ...]:
+    async def _probe(self, contrib: list[ContribTypes]) -> tuple[int, ...]:
+        """First, direct connection: configured like a pooled one; yields the server version and,
+        with ``register_contrib_types``, appends the type OIDs to ``contrib``."""
         with translate_errors():
             connection_class = (
                 self._config.pool_kwargs.get("connection_class") or psycopg.AsyncConnection
             )
             raw = await connection_class.connect(**self._config.conn_kwargs)
             try:
-                await self._configure(raw)
+                await self._configure_session(raw)
+                if self._config.register_contrib_types:
+                    # After SET ROLE, as in Django, where the handlers register on the configured
+                    # connection. Registering on the (about to close) probe connection too keeps
+                    # it identical to pool members, and a registration error fails open() at once.
+                    contrib.append(await contrib_types.fetch_contrib_oids(raw))
+                    contrib_types.register_contrib_types(raw, contrib[0])
                 return divmod(raw.info.server_version, 10000)
             finally:
                 await raw.close()
 
-    async def _configure(self, raw: psycopg.AsyncConnection) -> None:
+    async def _configure_pooled(
+        self, raw: psycopg.AsyncConnection, contrib: list[ContribTypes]
+    ) -> None:
+        """Pool ``configure`` hook: session setup, then the (sync, I/O free) type registration."""
+        await self._configure_session(raw)
+        if self._config.register_contrib_types:
+            # Invariant, unreachable through open(): the probe fills `contrib` before the pool
+            # opens. Never skip silently (hstore would read back as str).
+            if not contrib:
+                raise RuntimeError("contrib.postgres type OIDs are unknown: the probe did not run")
+            contrib_types.register_contrib_types(raw, contrib[0])
+
+    async def _configure_session(self, raw: psycopg.AsyncConnection) -> None:
         """Per physical connection; port of Django's ``get_new_connection`` + ``_configure_*``."""
         # Ported from django/db/backends/postgresql/base.py::_configure_timezone,
         # _configure_role and get_new_connection @ 6.1.3

@@ -25,7 +25,7 @@ engine         CompiledQuery, materializer (results_iter seam), sans-I/O runner
 transaction    async_atomic, savepoints, async on_commit
 connection     executors (borrowed/pinned), registry (alias, loop), lifecycle, hooks
 drivers | compile
-_django        sole importer of non-public Django APIs
+_django        sole importer of non-public Django APIs (and the one reader of the app registry, `_django.apps`)
 ```
 - `drivers/` is the **only** place that imports `psycopg`, `psycopg_pool`, `asyncmy`.
   Postgres and MySQL drivers never import each other.

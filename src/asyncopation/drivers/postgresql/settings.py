@@ -53,6 +53,8 @@ class PostgresConfig:
     assume_role: str | None
     server_side_binding: bool
     server_side_cursors: bool
+    register_contrib_types: bool = False
+    """``django.contrib.postgres`` is installed: register hstore/citext handlers (ADR-0003)."""
 
 
 def resolve_timezone(
@@ -69,9 +71,18 @@ def resolve_timezone(
 
 
 def build_config(
-    alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
+    alias: str,
+    settings_dict: dict[str, Any],
+    *,
+    use_tz: bool,
+    time_zone: str,
+    register_contrib_types: bool = False,
 ) -> PostgresConfig:
-    """Resolve a ``DATABASES`` entry (see the module docstring); raises ``ImproperlyConfigured``."""
+    """Resolve a ``DATABASES`` entry (see the module docstring); raises ``ImproperlyConfigured``.
+
+    ``register_contrib_types`` says whether ``django.contrib.postgres`` is installed; the engine
+    wiring reads it from the app registry, a direct caller opts in explicitly.
+    """
     # Ported from django/db/backends/postgresql/base.py::get_connection_params and
     # django/db/backends/base/base.py::check_settings @ 6.1.3
     # Changes: OPTIONS is copied, not mutated; cursor classes are the async psycopg ones; the pool
@@ -157,6 +168,7 @@ def build_config(
         assume_role=assume_role,
         server_side_binding=server_side_binding,
         server_side_cursors=not settings_dict.get("DISABLE_SERVER_SIDE_CURSORS", False),
+        register_contrib_types=register_contrib_types,
     )
 
 

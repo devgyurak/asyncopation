@@ -6,6 +6,7 @@
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-24 (#3, PR #45) - Context (Django's `get_adapters_template` reaches the driver through the `_django/postgresql_adapters.py` boundary), Consequences (A104 confinement of psycopg re-exports, the adapter boundary module importable only by `drivers/postgresql`, Django's `mogrify` unused, drivers export no psycopg objects), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-25 (#43) - Decision 2 (hstore/citext registration implemented: gated on `django.contrib.postgres` being installed at `configure()`, OIDs read once per `open()` on the first connection, registered per physical connection and never on the shared adapters template, not refreshed until the next `open()`), Option D note (the "no probe query" statement concerns capabilities), Validation (`HStoreField` / `ArrayField(HStoreField)` / `citext[]` round-trip); approved by: maintainer (@devgyurak), 2026-11-25 (issue #43 design session); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs
@@ -44,7 +45,7 @@ connection setup exactly.
 + core code is vendor-agnostic; no second source of truth for SQL shape. - needs a probe at
 startup (ADR-0004).
 *Amended 2026-11-24 (#2, PR #46): for PostgreSQL the capabilities come from the driver's `open()`
-connection (startup parameters, no probe query); ADR-0004 Decision 2.*
+connection (startup parameters, no probe query for capabilities; `open()` may run the two contrib.postgres catalog queries, Decision 2); ADR-0004 Decision 2.*
 
 ## Decision
 **B + D**, with a typed protocol in `asyncopation.drivers`:
@@ -95,11 +96,32 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
    `CLIENT.FOUND_ROWS`. *Amended 2026-11-24 (#2, PR #46): the cursor selection (default
    `AsyncClientCursor`, `AsyncCursor` with `OPTIONS["server_side_binding"] = True`) mirrors
    Django's sync backend; the former text named `AsyncClientCursor` only.*
-2. **contrib.postgres:** the PostgreSQL driver's connection-configure step registers hstore/citext
-   handlers asynchronously (**deferred to #43**: the harness has no `contrib.postgres` yet).
-   *Amended 2026-11-24 (#2, PR #46): this registration is NOT implemented yet - the sentence above
-   is a plan, not current behaviour; tracked in #43.*
-   `connection_created` is **not** sent for our connections (documented).
+2. **contrib.postgres:** when `django.contrib.postgres` is in `INSTALLED_APPS` at `configure()`
+   time (Django registers its handlers only then; the flag is read with `apps.is_installed`
+   through the `_django` boundary and handed to the driver as configuration), the PostgreSQL
+   driver registers hstore and citext handlers on each physical connection, as Django's
+   `register_type_handlers` does on `connection_created`. `open()` reads the type OIDs once on its
+   first, direct connection with Django's query (`SELECT oid, typarray FROM pg_type WHERE typname
+   = %s` for `hstore` and `citext`, every schema's type, not `TypeInfo.fetch`) and keeps them in
+   an immutable value bound to that open's pool. Every connection's configure step, the first
+   connection and each pooled one, then registers synchronously and without I/O:
+   `register_hstore` for each hstore OID and the array loader only for each citext array OID (so
+   `citext[]` loads as `list[str]` and scalar `citext` as `str`, as in Django). Registration goes
+   on the connection's own adapters, never on the shared adapters template. A missing extension
+   yields empty OIDs: nothing is registered and nothing fails. A pool configure step that finds
+   the OIDs missing raises instead of skipping. Without `django.contrib.postgres` nothing is
+   queried or registered (hstore reads as `str`, like the sync backend). The OIDs are not
+   refreshed while the driver stays open: an extension created or re-created after `open()` takes
+   effect on the next `close()` and `open()` (Django caches them per process until
+   `CreateExtension` runs). A database dropped and re-created while the driver is open gets new
+   OIDs too: its hstore then silently reads as `str` until the next `open()`, and with
+   `server_side_binding` a dict parameter fails with `InternalError` because the dumper still
+   names the stale OID (reproduced with a non-existent OID). The flag is fixed at `configure()`
+   like `USE_TZ`. The catalog queries use the raw connection, so ADR-0005 observers do not see
+   them. The compile-only wrapper needs no hstore handling: its `compose_sql` renders only exact
+   built-in types and rejects the rest. `connection_created` is **not** sent for our connections (documented).
+   *Amended 2026-11-25 (#43): implemented as described (the earlier text was a plan, deferred
+   to #43).*
 3. **Single source of truth for SQL shape:** the compile-only wrapper's `features`. `Capabilities`
    holds only driver/runtime facts. Core code never reads vendor strings; it reads `Capabilities`
    or the wrapper's `features`.
@@ -141,4 +163,4 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
 - *Amended 2026-11-24 (#2, PR #46):* integration: `server_side_binding=True` statements and streams
   behave like the sync backend (values, cursors, withhold)
 - *Amended 2026-11-24 (#3, PR #45): new Validation items:* the A104 table in `tools/guards/reexports.py` lists every psycopg name the installed Django's PostgreSQL, MySQL and PostGIS modules bind (drift test), and `mogrify` of a Django module appears nowhere in `src`.
-- integration: `HStoreField` round-trip once `contrib.postgres` is in the harness.
+- integration (PostgreSQL; `django.contrib.postgres` installed through the harness's `harness.pgcatalog` app; `server_side_binding` off and on): `HStoreField`, `ArrayField(HStoreField())`, `citext[]` and scalar `citext` round-trip with the sync ORM's values and types, including dict parameters; without the app the hstore column reads as `str`; with no extension installed `open()` succeeds and registers nothing; `open()` queries the OIDs once (never per pool connection) and a `close()` / `open()` pair queries again; the shared adapters template has no hstore loader afterwards; a reconnected pool connection is registered.

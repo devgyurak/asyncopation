@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=0a53deac35cd -->
+<!-- i18n: source=docs/design/plan.md source-sha256=91376f84510e -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -276,6 +276,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] `as_sql()` 도중 sync 커넥션이 열리는 경로 탐지 (`SynchronousOnlyOperation` 발생 지점 기록) - 스파이크 결과는 ADR-0008에 있음 (#29, ADR-0008 Accepted)
 - [x] 컴파일 전용 `DatabaseWrapper`(PostgreSQL) + 동기 `compile_scope` 교체 (#3, ADR-0008); MySQL/MariaDB 합성 wrapper → #6
 - [x] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입 (PostgreSQL; #5, ADR-0004; MySQL/MariaDB 프로브 → #7)
+- [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [ ] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, 현재 strict xfail)
 - [ ] asyncmy로 같은 흐름 재현
 

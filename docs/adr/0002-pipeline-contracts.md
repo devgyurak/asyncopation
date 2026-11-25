@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.1 fixes *what* is reused (Django's `as_sql()`) and *what* is replaced (execution), but
@@ -43,6 +44,8 @@ QuerySet (Django, lazy)
   -> materialize (sync)   compiler.results_iter(results=[chunk]) -> ported post-execute
                           ModelIterable logic -> Model.from_db
 ```
+*Amended 2026-11-25 (#6, PR #65): the `CompiledQuery` box also holds `alias` and `values_names`
+(Decision 2).*
 
 1. **Layers.** A new layer `asyncopation.engine` (above `transaction`, below `fetch`) defines
    `CompiledQuery`, builds it from a QuerySet using the compile-only wrapper (`compile` provides
@@ -51,9 +54,15 @@ QuerySet (Django, lazy)
    driver-level types, so nothing points upward. The public facade (`asyncopation.query`) moves to
    the top, below `testing`, because evaluation calls prefetch and `adelete` calls deletion.
 2. **Execute contract.** The execute stage reproduces `execute_sql`'s non-I/O behaviour:
-   `EmptyResultSet` or empty SQL -> `result_kind=EMPTY`, no I/O, empty result; rows trimmed to
+   `EmptyResultSet` or empty SQL -> `result_kind=EMPTY`, no statement I/O (*Amended 2026-11-25 (#6, PR #65): the alias is still opened first*), empty result; rows trimmed to
    `col_count` when `has_extra_select`; SINGLE trimmed to `col_count`. `as_sql()` is called exactly
    once per compiler (it mutates compiler state), and `CompiledQuery` carries that same compiler.
+   *Amended 2026-11-25 (#6, PR #65): `CompiledQuery` also carries `alias` and `values_names`. The
+   alias is read once per evaluation (`queryset.db` runs the database routers, and a stateful
+   router must not answer differently for the compile and the materialize stage), by
+   `evaluate_list`, and compile and materialize reuse it. An EMPTY query does no statement I/O,
+   but `evaluate_list` still opens the alias first (ADR-0004 Decision 4), so `.none()` or
+   `pk__in=[]` may open the pool.*
 3. **Scope of the seam.** The `results_iter` seam covers MULTI evaluation: `ModelIterable`,
    `ValuesIterable`, `ValuesListIterable`, `FlatValuesListIterable`, `NamedValuesListIterable`.
    SINGLE paths (`acount` via `Query.get_aggregation`, `aexists` via `has_results`) are separate,
@@ -62,7 +71,11 @@ QuerySet (Django, lazy)
 4. **Streaming.** The materializer sets up once per query (`select`, `klass_info`, `init_list`,
    `related_populators`, `known_related_objects`, one shared `peers` list) and then calls
    `results_iter(results=[chunk])` for each fetched chunk; sharing `peers` across chunks matches
-   sync `FETCH_PEERS` semantics.
+   sync `FETCH_PEERS` semantics. *Amended 2026-11-25 (#6, PR #65): the key names of `values()` /
+   `values_list(named=True)` rows are read from the Query before `as_sql()` (Django reads them
+   before `execute_sql`): compiling a combined query ordered by an unselected column adds
+   `__orderbycol<N>` annotations that are not row keys. The compile stage stores them in
+   `CompiledQuery.values_names`.*
 5. Rows handed to `results_iter` are already normalized by the driver (ADR-0003). `CompiledQuery`
    is not cached across evaluations in v1; caching is a later, benchmarked change.
 
@@ -89,3 +102,8 @@ QuerySet (Django, lazy)
   `values_list("pk", ...)`).
 - unit: materializer over a recording driver returns the same instances as `results_iter` on
   fixed rows.
+- *Amended 2026-11-25 (#6, PR #65):* unit: with a router that answers differently on every call,
+  `evaluate_list` asks it once and the instances carry that alias in `_state.db`.
+- *Amended 2026-11-25 (#6, PR #65):* differential: `values()` / `values_list()` / `flat` / `named` of
+  a `union()` ordered by an unselected column, and of `distinct()` ordered by an unselected column,
+  return the same rows and keys as the sync ORM (no `__orderbycol<N>` keys, extra columns trimmed).

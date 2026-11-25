@@ -26,7 +26,7 @@ async def evaluate_list(queryset: Any) -> list[Any]:
     dq.iterable_kind(queryset)  # refuse unsupported iterables before any I/O
     if dq.has_prefetch(queryset):
         raise NotImplementedError("prefetch_related evaluation is not implemented yet (Phase 4)")
-    alias = queryset.db
+    alias = queryset.db  # the routers run here, once: compile and materialize reuse it
     if not lifecycle.is_configured_alias(alias):
         # What `connections[alias]` raises in the sync ORM, so error handling carries over.
         raise dq.ConnectionDoesNotExist(f"The connection '{alias}' doesn't exist.")
@@ -35,7 +35,7 @@ async def evaluate_list(queryset: Any) -> list[Any]:
     await lifecycle.ensure_driver(alias)
     executor = current_executor(alias)
     wrapper = lifecycle.compile_wrapper(alias)
-    compiled = compile_query(queryset, wrapper, autocommit=not executor.pinned)
+    compiled = compile_query(queryset, wrapper, alias=alias, autocommit=not executor.pinned)
     rows = await execute_multi(compiled, executor)
     cached = dq.cached_result(queryset)
     if (

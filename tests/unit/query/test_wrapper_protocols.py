@@ -144,3 +144,14 @@ def test_shallow_copy_of_a_wrapper_with_a_result_cache_drops_the_cache(no_sql):
     duplicated = copy.copy(wrapper)
     # then
     assert duplicated.queryset._result_cache is None
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_copying_a_wrapper_over_a_cached_queryset_keeps_the_raise_fetch_mode(no_sql, duplicate):
+    # given
+    wrapper = cached_wrapper()
+    # when
+    duplicated = duplicate(wrapper)
+    # then
+    assert isinstance(duplicated, AsyncQuerySet)
+    assert duplicated.queryset._fetch_mode is FETCH_RAISE

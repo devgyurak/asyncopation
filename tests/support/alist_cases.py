@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,7 @@ from django.db.models import QuerySet
 
 from harness.catalog.models import Author, Book
 from tests.support.aio import wait_until
+from tests.support.alist_probe import recorded_statements
 from tests.support.differential import (
     DifferentialResult,
     Outcome,
@@ -17,7 +19,7 @@ from tests.support.differential import (
     run_sync,
 )
 from tests.support.evaluators import ASYNCOPATION, Evaluator
-from tests.support.seeded import books_manager_of
+from tests.support.seeded import books_manager_of, in_sync
 from tests.support.snapshot import snapshot_result
 
 ALIAS = "default"
@@ -48,6 +50,20 @@ def _manager_evaluator() -> Evaluator:
     from asyncopation import aq
 
     return Evaluator("manager", lambda manager: list(manager.all()), lambda m: aq(m).alist())
+
+
+def _chain_evaluator(chain: Callable[[Any], Any]) -> Evaluator:
+    """Sync `list(chain(manager))` against `await chain(aq(manager)).alist()`."""
+    from asyncopation import aq
+
+    return Evaluator("chain", lambda m: list(chain(m)), lambda m: chain(aq(m)).alist())
+
+
+async def manager_chain_differential(
+    manager_of: Callable[[], Any], chain: Callable[[Any], Any]
+) -> DifferentialResult:
+    """A related manager followed by QuerySet methods (`chain`), sync against `aq(manager)`."""
+    return await run_differential(manager_of, _chain_evaluator(chain))
 
 
 async def manager_differential(author: Author) -> DifferentialResult:
@@ -181,3 +197,26 @@ async def alist_cache_placement() -> CacheOutcome:
     wrapper = aq(original)
     rows = await wrapper.alist()
     return CacheOutcome(original._result_cache, wrapper.queryset._result_cache, rows)
+
+
+@dataclass(frozen=True)
+class PrefetchOutcome:
+    statements: list[str]
+    async_pks: list[Any]
+    sync_pks: list[Any]
+
+
+def _author_with_prefetched_books() -> Any:
+    queryset = Author.objects.prefetch_related("books").filter(books__isnull=False)
+    return queryset.order_by("pk").first()
+
+
+async def alist_of_a_prefetched_manager() -> PrefetchOutcome:
+    """`aq(author.books)` after `prefetch_related("books")`: the cached rows, no statement."""
+    from asyncopation import aq
+
+    author = await in_sync(_author_with_prefetched_books)
+    with recorded_statements() as log:
+        rows = await aq(author.books).alist()
+    expected = author.books.all()
+    return PrefetchOutcome(list(log), [r.pk for r in rows], [r.pk for r in expected])

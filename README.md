@@ -80,9 +80,12 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 
 `aq()` applies `FETCH_RAISE`: touching an unloaded relation or a deferred field raises
 `FieldFetchBlocked` instead of querying synchronously. Synchronous evaluators (`list(aq(qs))`,
-`aq(qs).get()`, `len(...)`) raise `asyncopation.SyncEvaluationError`, and `a*` methods that are not
-implemented yet (`aget`, `afirst`, `acount`, `aexists`, `async for`, ...) raise `NotImplementedError`.
-Only `alist()` exists so far, on PostgreSQL, without `prefetch_related`; the rest of the read API and
+`aq(qs).get()`, `len(...)`, `aq(qs).iterator()`, a slice with a step such as `aq(qs)[::2]`) raise
+`asyncopation.SyncEvaluationError`, and `a*` methods that are not implemented yet (`aget`, `afirst`,
+`acount`, `aexists`, `aiterator`, `async for`, ...) raise `NotImplementedError`, as does `raw()`
+(it would return an unwrapped `RawQuerySet`). A `QuerySet` that cannot match (`.none()`,
+`pk__in=[]`) runs no statement, but `alist()` still opens the alias's pool first (ADR-0004). Only
+`alist()` exists so far, on PostgreSQL, without `prefetch_related`; the rest of the read API and
 MySQL/MariaDB follow.
 
 ## Concurrency and transactions

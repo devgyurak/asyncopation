@@ -271,8 +271,8 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 
 ### Phase 1 checklist (first spike)
 
-- [x] `alist` working with `as_sql()` + the async driver: `aq(qs).alist()` on PostgreSQL (#6 PR A; the differential suite on MySQL/MariaDB follows with the MySQL wrapper, #6 PR C / #7)
-- [x] Port `ModelIterable` logic (converters -> `Model.from_db`), plus the values / values_list / flat / named iterables (`engine.materialize`, #6 PR A)
+- [x] `alist` working with `as_sql()` + the async driver: `aq(qs).alist()` on PostgreSQL (#6, PR #65; the differential suite on MySQL/MariaDB follows with the MySQL wrapper, #6 PR C / #7)
+- [x] Port `ModelIterable` logic (converters -> `Model.from_db`), plus the values / values_list / flat / named iterables (`engine.materialize`, #6, PR #65)
 - [x] Detect paths that open a sync connection during `as_sql()` (record where `SynchronousOnlyOperation` is raised) - spike results in ADR-0008 (#29, ADR-0008 Accepted)
 - [x] Compile-only `DatabaseWrapper` (PostgreSQL) + synchronous `compile_scope` swap (#3, ADR-0008); MySQL/MariaDB composed wrapper -> #6
 - [x] Preload server info asynchronously -> inject into the compile-only connection (PostgreSQL; #5, ADR-0004; MySQL/MariaDB probe -> #7)

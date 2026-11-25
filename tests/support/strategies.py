@@ -8,7 +8,7 @@ build) and may appear in the ordering.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -48,6 +48,11 @@ _RELATED_FIELDS = {
 }
 _INVALID_ONE_IN = 20  # one deferral in this many may break a select_related traversal
 type Deferred = tuple[Literal["only", "defer"], tuple[str, ...]]
+# values() / values_list() / values_list(flat=True) / values_list(named=True) over these fields (and
+# the spec's annotations). A projection replaces only()/defer(): Django ignores them for rows that
+# are not model instances, so combining them would test nothing.
+type Projection = tuple[Literal["values", "values_list", "flat", "named"], tuple[str, ...]]
+_PROJECTION_FIELDS = ["title", "pages", "price", "published", "author__name", "tags__name"]
 
 # Aggregates use relations the seed populates: every author has books (never NULL), books have
 # 0-3 tags (NULL and non-NULL mixed, so NULL ordering is exercised). Combining aggregates over
@@ -82,6 +87,7 @@ class QuerySetSpec:
     window: tuple[int, int] | None
     annotations: tuple[str, ...] = ()  # names from ANNOTATIONS, sorted
     deferred: Deferred | None = None  # either only() or defer(), never both
+    projection: Projection | None = None  # set by `projected_specs`; no deferral then
 
 
 def _lookups(max_size: int) -> st.SearchStrategy[tuple[tuple[str, Any], ...]]:
@@ -138,6 +144,19 @@ def queryset_specs(draw: st.DrawFn) -> QuerySetSpec:
         annotations=annotations,
         deferred=draw(st.none() | _deferrals(select_related)),
     )
+
+
+@st.composite
+def projected_specs(draw: st.DrawFn) -> QuerySetSpec:
+    """Generated specs that end in values(), values_list(), flat or named rows."""
+    spec = draw(queryset_specs())
+    kind = draw(st.sampled_from(["values", "values_list", "flat", "named"]))
+    candidates = [*_PROJECTION_FIELDS, *spec.annotations]
+    size = 1 if kind == "flat" else draw(st.integers(1, 3))
+    fields = tuple(
+        draw(st.lists(st.sampled_from(candidates), min_size=size, max_size=size, unique=True))
+    )
+    return replace(spec, deferred=None, projection=(kind, fields))
 
 
 def annotated_spec(annotations: tuple[str, ...], order_by: tuple[str, ...]) -> QuerySetSpec:
@@ -238,6 +257,14 @@ def build_queryset(spec: QuerySetSpec) -> QuerySet[Book]:
     if spec.deferred:
         mode, fields = spec.deferred
         qs = qs.only(*fields) if mode == "only" else qs.defer(*fields)
+    if spec.projection:
+        kind, fields = spec.projection
+        qs = {
+            "values": lambda: qs.values(*fields),
+            "values_list": lambda: qs.values_list(*fields),
+            "flat": lambda: qs.values_list(*fields, flat=True),
+            "named": lambda: qs.values_list(*fields, named=True),
+        }[kind]()
     qs = qs.order_by(*spec.order_by, "pk")
     if spec.window:
         qs = qs[spec.window[0] : spec.window[1]]

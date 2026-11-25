@@ -87,6 +87,23 @@ QUERYSETS: dict[str, Builder] = {
     "book_filtered": lambda a: Book.objects.using(a).filter(pages=5, published=True),
     "book_for_update": lambda a: Book.objects.using(a).select_for_update(),
     "book_extra_select": lambda a: Book.objects.using(a).extra(select={"one": "1"}),
+    "book_union_values_unselected_order": lambda a: (
+        Book.objects.using(a)
+        .filter(pk__lt=5)
+        .union(Book.objects.using(a).filter(pk__gt=40))
+        .values("title")
+        .order_by("pages")
+    ),
+    "book_union_named_unselected_order": lambda a: (
+        Book.objects.using(a)
+        .filter(pk__lt=5)
+        .union(Book.objects.using(a).filter(pk__gt=40))
+        .values_list("title", named=True)
+        .order_by("pages")
+    ),
+    "book_values_extra": lambda a: (
+        Book.objects.using(a).extra(select={"x": "pages * 2"}).values("title", "x")
+    ),
     "book_ordering_column": lambda a: (
         Book.objects.using(a).values("title").distinct().order_by("pages")
     ),

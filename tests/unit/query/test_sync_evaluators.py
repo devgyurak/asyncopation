@@ -9,6 +9,7 @@ from asyncopation.errors import SyncEvaluationError
 from tests.support.aq_wrapper import (
     call_named,
     fresh_books,
+    sliced_with_step,
     sync_evaluator_names,
     unhandled_django_coroutines,
     unlisted_sync_evaluators,
@@ -94,3 +95,20 @@ def test_every_sync_evaluator_with_a_django_async_twin_is_listed():
     unlisted = unlisted_sync_evaluators()
     # then
     assert unlisted == []
+
+
+def test_iterator_error_says_aiterator_is_not_implemented_and_points_to_alist(no_sql):
+    # given
+    wrapper = aq(fresh_books())
+    # when / then
+    with pytest.raises(SyncEvaluationError, match=r"aiterator\(\) is not implemented yet.*alist"):
+        wrapper.iterator()
+
+
+@pytest.mark.parametrize("step", [2, -1])
+def test_slicing_with_a_step_raises_sync_evaluation_error(no_sql, step):
+    # given
+    wrapper = aq(fresh_books())
+    # when / then
+    with pytest.raises(SyncEvaluationError, match="step"):
+        sliced_with_step(wrapper, step)

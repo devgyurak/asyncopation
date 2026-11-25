@@ -19,13 +19,15 @@ from tests.support.snapshot import Snapshot, snapshot_result
 
 
 def compile_case(name: str, alias: str, *, autocommit: bool = True) -> CompiledQuery:
-    return compile_query(QUERYSETS[name](alias), make_wrapper(alias), autocommit=autocommit)
+    return compile_query(
+        QUERYSETS[name](alias), make_wrapper(alias), alias=alias, autocommit=autocommit
+    )
 
 
 def materialized(name: str, alias: str) -> list[Any]:
     """What `materialize` builds from the case's fixed rows."""
     queryset = QUERYSETS[name](alias)
-    compiled = compile_query(queryset, make_wrapper(alias), autocommit=True)
+    compiled = compile_query(queryset, make_wrapper(alias), alias=alias, autocommit=True)
     rows = ROWS[name]
     assert all(len(row) == compiled.col_count for row in rows), "fixed rows do not fit the SELECT"
     return materialize(queryset, compiled, rows)

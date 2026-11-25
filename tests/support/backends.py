@@ -15,8 +15,8 @@ POSTGRESQL_ONLY = pytest.mark.skipif(
 # Until then the registry has no engine for those backends, so the first open raises
 # `ImproperlyConfigured` ("not supported yet"); tests that capture errors into a differential
 # outcome see that as a mismatch, an `AssertionError`. Anything else (a driver import error, a
-# TypeError in the wrapper) is a real failure and is not xfailed. Derived from the code, not run
-# against MySQL/MariaDB locally.
+# TypeError in the wrapper) is a real failure and is not xfailed. The suites have been run on
+# MySQL and MariaDB (with `mysqlclient` built locally for the sync side), where these tests xfail.
 XFAIL_UNTIL_ASYNCMY = pytest.mark.xfail(
     VENDOR != "postgresql",
     raises=(AssertionError, ImproperlyConfigured),

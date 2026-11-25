@@ -26,7 +26,14 @@ logger = logging.getLogger("asyncopation.connection")
 
 DEFAULT_CLOSE_TIMEOUT = 10.0
 
-__all__ = ["close", "configure", "ensure_driver", "setup"]
+__all__ = [
+    "close",
+    "compile_wrapper",
+    "configure",
+    "ensure_driver",
+    "is_configured_alias",
+    "setup",
+]
 
 
 def configure() -> None:

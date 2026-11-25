@@ -9,7 +9,13 @@ the code that follows the ``execute_sql`` call in Django's iterables.
 # Changes: execute_sql() is replaced by the rows the execute stage fetched (results_iter(results=[rows]));
 # the generator is a list builder; Django-internal reads go through asyncopation._django.query.
 # Also ported (same file): ValuesIterable / ValuesListIterable / NamedValuesListIterable /
-# FlatValuesListIterable, with the same changes.
+# FlatValuesListIterable, with the same changes. Differences beyond that: the key names of
+# values() and values_list(named=True) rows are read by the compile stage BEFORE as_sql()
+# (CompiledQuery.values_names), as Django reads them before execute_sql; the NAMED rows are
+# `tuple.__new__(tuple_class, row)` over the same tuples ValuesListIterable yields, and the
+# namedtuple class is built once per evaluation by create_namedtuple_class (Django's own cached
+# helper), so `_fields` order is the queryset's `_fields` or the names above; the alias is the one
+# the compile stage resolved (the database routers run once per evaluation).
 
 from __future__ import annotations
 
@@ -28,26 +34,27 @@ def materialize(queryset: Any, compiled: CompiledQuery, rows: list[tuple[Any, ..
     kind = dq.iterable_kind(queryset)
     compiler = compiled.compiler
     if kind is dq.IterableKind.MODEL:
-        return _models(queryset, compiler, rows)
+        return _models(queryset, compiled, rows)
     if kind is dq.IterableKind.VALUES:
-        names = dq.values_names(queryset)
+        names = compiled.values_names
         indexes = range(len(names))
         return [
             {names[i]: row[i] for i in indexes} for row in compiler.results_iter(results=[rows])
         ]
+    if kind is dq.IterableKind.FLAT:
+        return [row[0] for row in compiler.results_iter(results=[rows])]
     tuples = compiler.results_iter(results=[rows], tuple_expected=True)
     if kind is dq.IterableKind.VALUES_LIST:
         return list(tuples)
-    if kind is dq.IterableKind.FLAT:
-        return [row[0] for row in compiler.results_iter(results=[rows])]
-    names = dq.queryset_fields(queryset) or dq.values_names(queryset)
+    names = dq.queryset_fields(queryset) or compiled.values_names
     tuple_class = dq.namedtuple_class(*names)
     new = tuple.__new__
     return [new(tuple_class, row) for row in tuples]
 
 
-def _models(queryset: Any, compiler: Any, rows: list[tuple[Any, ...]]) -> list[Any]:
-    db = queryset.db
+def _models(queryset: Any, compiled: CompiledQuery, rows: list[tuple[Any, ...]]) -> list[Any]:
+    db = compiled.alias  # the alias the query ran on; `queryset.db` would run the routers again
+    compiler = compiled.compiler
     fetch_mode = dq.queryset_fetch_mode(queryset)
     select = dq.select(compiler)
     klass_info = dq.klass_info(compiler)

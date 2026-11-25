@@ -305,6 +305,59 @@ reason = "State `as_sql()` computes (`setup_query`); the compile stage reads `co
 verified_against = "6.1.3"
 
 [[attribute]]
+owner = "django.db.models.sql.compiler.SQLCompiler"
+names = ["results_iter", "as_sql"]
+used_by = ["src/asyncopation/engine/compiled.py", "src/asyncopation/engine/materialize.py"]
+reason = "`as_sql()` is called exactly once by the compile stage (it mutates `select`, `klass_info`, `col_count`); `results_iter(results=[rows], tuple_expected=...)` applies the converters to the rows the execute stage fetched (ADR-0002 Decisions 2 and 4). The signatures are pinned: `results` is the parameter that replaces `execute_sql`. Keys of `compiler.klass_info` read by the materializer (not attributes, so pinned by tests/unit/django_drift/test_klass_info_drift.py): `model`, `select_fields`, `related_klass_infos`"
+verified_against = "6.1.3"
+signatures = { as_sql = "(self, with_limits=True, with_col_aliases=False)", results_iter = "(self, results=None, tuple_expected=False, chunked_fetch=False, chunk_size=100)" }
+
+[[attribute]]
+owner = "django.db.models.sql.query.Query"
+names = ["get_compiler"]
+used_by = ["src/asyncopation/engine/compiled.py"]
+reason = "Builds the compiler inside `compile_scope`, with the alias the evaluation resolved once (`using=`), as the iterables do with `queryset.db`"
+verified_against = "6.1.3"
+signatures = { get_compiler = "(self, using=None, connection=None, elide_empty=True)" }
+
+[[attribute]]
+owner = "django.db.models.query.RelatedPopulator"
+names = ["populate"]
+used_by = ["src/asyncopation/engine/materialize.py"]
+reason = "Called per row for every `select_related` populator, as ModelIterable does"
+verified_against = "6.1.3"
+signatures = { populate = "(self, row, from_obj)" }
+
+[[attribute]]
+owner = "django.db.models.fields.related.ForeignObject"
+names = ["from_fields"]
+used_by = ["src/asyncopation/engine/materialize.py"]
+reason = "Attribute names of the foreign-key columns the known related objects of a related manager are matched on (ModelIterable)"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.fields.mixins.FieldCacheMixin"
+names = ["is_cached"]
+used_by = ["src/asyncopation/engine/materialize.py"]
+reason = "Whether a relation is already cached (a `select_related` object wins over the known related object), as ModelIterable checks it"
+verified_against = "6.1.3"
+signatures = { is_cached = "(self, instance)" }
+
+[[attribute]]
+owner = "django.db.models.fetch_modes.FetchMode"
+names = ["track_peers"]
+used_by = ["src/asyncopation/engine/materialize.py"]
+reason = "Decides whether the instances of one evaluation share a peers list (FETCH_PEERS)"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.expressions.Col"
+names = ["target"]
+used_by = ["src/asyncopation/engine/materialize.py"]
+reason = "The model field behind a selected column; `attname`s of the selected columns become the `init_list` of `Model.from_db`"
+verified_against = "6.1.3"
+
+[[attribute]]
 owner = "django.db.models.sql.query.Query"
 names = ["selected", "extra_select", "values_select", "annotation_select"]
 used_by = ["src/asyncopation/_django/query.py"]

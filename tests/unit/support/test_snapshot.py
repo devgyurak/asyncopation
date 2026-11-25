@@ -22,6 +22,7 @@ from tests.support.snapshot_graphs import (
     make_deferred_edition,
     make_one_to_one_cycle,
     make_publisher,
+    named_row,
 )
 
 
@@ -445,3 +446,12 @@ def test_make_deferred_author_rejects_a_name_that_is_not_a_concrete_field():
     # when / then
     with pytest.raises(ValueError, match="emial"):
         make_deferred_author("emial")
+
+
+def test_named_tuples_with_different_field_names_produce_different_snapshots():
+    # given
+    left, right = named_row(["a", "b"], 1, 2), named_row(["b", "a"], 1, 2)
+    # when
+    same = snapshot_result([left]) == snapshot_result([right])
+    # then
+    assert same is False

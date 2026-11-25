@@ -11,25 +11,31 @@ from harness.catalog.models import Book
 
 IMPLEMENTED_ASYNC_METHODS = frozenset({"alist"})
 
+_EXECUTOR_STATEMENTS = ("fetch_all", "execute", "execute_many", "stream")
 
-def unimplemented_async_names() -> list[str]:
-    """Coroutine methods of Django's QuerySet that the wrapper does not implement yet."""
-    names = [
-        name
-        for name, member in inspect.getmembers(QuerySet)
-        if inspect.iscoroutinefunction(member) and name not in IMPLEMENTED_ASYNC_METHODS
-    ]
-    return sorted(names)
+
+def forbid_executor_statements(monkeypatch: Any, tripwire: Any) -> None:
+    """Replace every statement method of both executors with ``tripwire``."""
+    for cls in ("BorrowedExecutor", "PinnedExecutor"):
+        for method in _EXECUTOR_STATEMENTS:
+            monkeypatch.setattr(f"asyncopation.connection.executor.{cls}.{method}", tripwire)
+
+
+def _is_async_twin(name: str, member: Any) -> bool:
+    """`a<name>` is callable and `<name>` is a callable of QuerySet too (not a predicate on the kind
+    of function, so coroutines and async generators like `aiterator` are both found)."""
+    return name.startswith("a") and callable(member) and callable(getattr(QuerySet, name[1:], None))
 
 
 def async_coroutine_names_of_django() -> list[str]:
-    """Every `a<name>` coroutine method Django's QuerySet defines (read from Django, not from us)."""
-    names = [
-        name
-        for name, member in inspect.getmembers(QuerySet)
-        if inspect.iscoroutinefunction(member) and name.startswith("a")
-    ]
+    """Every `a<name>` async twin Django's QuerySet defines (read from Django, not from us)."""
+    names = [name for name, member in inspect.getmembers(QuerySet) if _is_async_twin(name, member)]
     return sorted(names)
+
+
+def unimplemented_async_names() -> list[str]:
+    """Async twins of Django's QuerySet that the wrapper does not implement yet."""
+    return sorted(set(async_coroutine_names_of_django()) - IMPLEMENTED_ASYNC_METHODS)
 
 
 def unhandled_django_coroutines() -> list[str]:
@@ -126,3 +132,33 @@ def aq_of(queryset: Any) -> Any:
     from asyncopation import aq
 
     return aq(queryset)
+
+
+def tag_books_manager() -> Any:
+    """`tag.books` (many-to-many reverse manager) of an unsaved tag with a primary key."""
+    from harness.catalog.models import Tag
+
+    return read_attribute(Tag(pk=1, name="x"), "books")
+
+
+def sliced_with_step(wrapper: Any, step: int) -> Any:
+    return wrapper[::step]
+
+
+def class_attribute_of(wrapper: Any) -> Any:
+    """`wrapper.model` is a class (the Django model), not a callable to wrap."""
+    return wrapper.model
+
+
+def raise_mode_books() -> QuerySet[Book]:
+    """A Book QuerySet that already carries FETCH_RAISE."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    return Book.objects.all().fetch_mode(FETCH_RAISE)
+
+
+async def alist_after_mutating_the_result(wrapper: Any) -> list[Any]:
+    """`alist()`, mutate the returned list, `alist()` again: the second result."""
+    first = await wrapper.alist()
+    first.append("mutated")
+    return await wrapper.alist()

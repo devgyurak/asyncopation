@@ -68,3 +68,19 @@ def test_compile_query_refuses_select_for_update_in_autocommit(alias):
     # when / then
     with pytest.raises(TransactionManagementError):
         compile_case("book_for_update", alias, autocommit=True)
+
+
+@pytest.mark.parametrize(
+    ("name", "names"),
+    [
+        ("book_union_values_unselected_order", ("title",)),
+        ("book_union_named_unselected_order", ("title",)),
+        ("book_values_extra", ("title", "x")),
+        ("book_all", ()),
+    ],
+)
+def test_compile_query_reads_the_values_names_before_compiling(alias, name, names):
+    # when
+    compiled = compile_case(name, alias)
+    # then
+    assert compiled.values_names == names

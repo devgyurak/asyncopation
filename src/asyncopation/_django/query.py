@@ -40,6 +40,7 @@ __all__ = [
     "related_populators",
     "select",
     "set_cached_result",
+    "set_fetch_mode",
     "set_peers",
     "values_names",
 ]
@@ -91,6 +92,11 @@ def queryset_fetch_mode(queryset: Any) -> Any:
     return queryset._fetch_mode
 
 
+def set_fetch_mode(queryset: Any, mode: Any) -> None:
+    """Set the fetch mode in place (``QuerySet.fetch_mode`` would clone and consume a sticky filter)."""
+    queryset._fetch_mode = mode
+
+
 def queryset_fields(queryset: Any) -> Any:
     return queryset._fields
 
@@ -99,9 +105,12 @@ def known_related_objects(queryset: Any) -> Any:
     return queryset._known_related_objects
 
 
-def values_names(queryset: Any) -> list[str]:
-    """The key names of a ``values()`` row (``ValuesIterable.__iter__``, Django 6.1)."""
-    query = queryset.query
+def values_names(query: Any) -> list[str]:
+    """The key names of a ``values()`` row (``ValuesIterable.__iter__``, Django 6.1).
+
+    Must be read from the Query BEFORE ``as_sql()``: compiling a combined query ordered by a column
+    that is not selected adds ``__orderbycol<N>`` annotations to it, which are not row keys.
+    """
     if query.selected:
         return list(query.selected)
     # extra(select=...) cols are always at the start of the row.

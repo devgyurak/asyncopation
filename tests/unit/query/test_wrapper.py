@@ -5,7 +5,14 @@ from django.db.models import FETCH_ONE, FETCH_RAISE, QuerySet  # ty: ignore[miss
 from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
-from tests.support.aq_wrapper import book_manager, fresh_books, prefilled_queryset
+from tests.support.aq_wrapper import (
+    book_manager,
+    class_attribute_of,
+    fresh_books,
+    prefilled_queryset,
+    raise_mode_books,
+    tag_books_manager,
+)
 
 
 def test_aq_of_a_queryset_returns_an_async_queryset():
@@ -65,3 +72,29 @@ def test_aq_of_an_unevaluated_queryset_clones_it():
     wrapper = aq(original)
     # then
     assert wrapper.queryset is not original
+
+
+def test_aq_of_a_queryset_that_is_already_fetch_raise_wraps_it_without_cloning():
+    # given
+    original = raise_mode_books()
+    # when
+    wrapper = aq(original)
+    # then
+    assert wrapper.queryset is original
+
+
+def test_aq_of_a_many_to_many_manager_keeps_the_pending_sticky_filter():
+    # when
+    wrapper = aq(tag_books_manager())
+    # then
+    assert wrapper.queryset.query.filter_is_sticky is True
+    assert wrapper.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_class_valued_attribute_is_returned_as_it_is():
+    # given
+    wrapper = aq(fresh_books())
+    # when
+    model = class_attribute_of(wrapper)
+    # then
+    assert model is Book

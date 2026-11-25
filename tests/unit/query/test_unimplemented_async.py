@@ -30,3 +30,26 @@ def test_unimplemented_names_cover_the_planned_methods():
     # then
     assert {"acreate", "aget", "afirst", "acount", "aexists", "aaggregate"} <= set(names)
     assert "alist" not in names
+
+
+def test_aiterator_raises_not_implemented_without_a_thread_hop(no_sql, no_thread_hop):
+    # given
+    wrapper = aq(fresh_books())
+    # when / then
+    with pytest.raises(NotImplementedError):
+        wrapper.aiterator()
+
+
+def test_unimplemented_names_include_the_async_generator_aiterator():
+    # when
+    names = unimplemented_async_names()
+    # then
+    assert "aiterator" in names
+
+
+def test_raw_raises_not_implemented_instead_of_returning_an_unwrapped_queryset(no_sql):
+    # given
+    wrapper = aq(fresh_books())
+    # when / then
+    with pytest.raises(NotImplementedError, match="RawQuerySet"):
+        wrapper.raw("SELECT 1")

@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+from tests.support.aq_wrapper import forbid_executor_statements
+
 
 def _forbidden(what: str) -> Callable[..., Any]:
     def tripwire(*args: Any, **kwargs: Any) -> Any:
@@ -17,10 +19,11 @@ def _forbidden(what: str) -> Callable[..., Any]:
 
 @pytest.fixture
 def no_sql(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Any attempt to execute SQL through Django's compiler fails the test."""
+    """Any attempt to execute SQL fails the test: Django's compiler and our async executors."""
     monkeypatch.setattr(
         "django.db.models.sql.compiler.SQLCompiler.execute_sql", _forbidden("SQL execution")
     )
+    forbid_executor_statements(monkeypatch, _forbidden("async SQL execution"))
 
 
 @pytest.fixture

@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=0c5a2f8bb970 -->
+<!-- i18n: source=README.md source-sha256=4ae39d832f4e -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs).alist()`로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -72,9 +72,13 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 
 `aq()`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
 실행하는 대신 `FieldFetchBlocked`가 발생한다. 동기 평가(`list(aq(qs))`, `aq(qs).get()`,
-`len(...)`)는 `asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`aget`,
-`afirst`, `acount`, `aexists`, `async for` 등)는 `NotImplementedError`를 낸다. 지금은 PostgreSQL의
-`alist()`만 있고 `prefetch_related`는 지원하지 않는다. 나머지 읽기 API와 MySQL/MariaDB는 뒤따른다.
+`len(...)`, `aq(qs).iterator()`, `aq(qs)[::2]` 같은 step 슬라이스)는
+`asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`aget`, `afirst`,
+`acount`, `aexists`, `aiterator`, `async for` 등)와 `raw()`(래핑되지 않은 `RawQuerySet`을
+돌려주게 된다)는 `NotImplementedError`를 낸다. 일치할 수 없는 `QuerySet`(`.none()`,
+`pk__in=[]`)은 SQL을 실행하지 않지만, `alist()`는 먼저 해당 alias의 풀을 연다(ADR-0004). 지금은
+PostgreSQL의 `alist()`만 있고 `prefetch_related`는 지원하지 않는다. 나머지 읽기 API와
+MySQL/MariaDB는 뒤따른다.
 
 ## 동시성과 트랜잭션
 

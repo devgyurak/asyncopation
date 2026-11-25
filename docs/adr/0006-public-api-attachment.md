@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
-- Amended: 2026-11-25 (#6, PR A) - Decisions 2 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods Django defines on `QuerySet`; `aq()` keeps a pre-filled result cache by not cloning); approved by: maintainer (@devgyurak), to be confirmed in the PR #6 PR A review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place on a Manager's own QuerySet, and a QuerySet that already has it is wrapped without cloning), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25 of the PR #65 amendment, changes applied)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -42,14 +42,20 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
 
 1. **`aq(obj)`** accepts a QuerySet or a Manager (including related managers, via
    `get_queryset()`) and returns an `AsyncQuerySet` wrapper. A pre-filled `_result_cache` (e.g. a
-   related manager after prefetch) is honoured: evaluation returns it with no I/O.
+   related manager after prefetch) is honoured: evaluation returns it with no I/O. *Amended
+   2026-11-25 (#6, PR #65): such a QuerySet is wrapped as it is, not cloned, because cloning drops
+   the cache; a result list is always a copy, so changing it never changes the cache.*
 2. **Proxying.** Attribute access is proxied and any call returning a `QuerySet` is re-wrapped, so
    user-defined chaining methods work. Evaluation methods are Asyncopation's own; any `a*` name not
    yet implemented raises `NotImplementedError` and **never** falls through to Django's
    `sync_to_async` methods. Sync evaluators (`__iter__`, `__len__`, `__bool__`, integer
    `__getitem__`, `get`, `first`, `count`, `exists`, `iterator`, `aggregate`, `update`, `delete`,
    `create`, `get_or_create`, `in_bulk`) raise `asyncopation.SyncEvaluationError`. `__repr__` never
-   evaluates.
+   evaluates. *Amended 2026-11-25 (#6, PR #65): "any `a*` name" is every coroutine method **and
+   async generator** (`aiterator`) Django defines on `QuerySet`, found by scanning the class, minus
+   those implemented; a slice with a step (`qs[::2]`, which Django evaluates) is a sync evaluator
+   too; `raw()` raises `NotImplementedError` (it returns an unwrapped `RawQuerySet`); the
+   `iterator()` error says `aiterator()` is not implemented yet and points to `alist()`.*
 3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and
@@ -57,24 +63,30 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `aobjects = AsyncObjects()`; third-party/swappable models (`auth.User`, `ContentType`) use
    `aq(Model.objects)` or `AsyncObjects.attach(Model)`. `Model` is never monkeypatched.
 4. **Fetch mode.** Both `aobjects` and `aq()` apply `FETCH_RAISE` (any other sync fetch mode would
-   do sync I/O on attribute access). Unloaded forward/one-to-one relations and deferred fields
-   raise `FieldFetchBlocked`; reverse FK / M2M managers are evaluated through `aq()`. `afetch()` is
-   explicit and non-recursive; batched peer loading returns results aligned with the parents.
+   do sync I/O on attribute access). *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
+   the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter
+   of a many-to-many related manager, so `aq(tag.books).filter(tags__name=x)` would differ from
+   Django's); a QuerySet that already is `FETCH_RAISE` or carries a result cache is wrapped as it
+   is; any other QuerySet is cloned with `fetch_mode(FETCH_RAISE)`, so the caller's is untouched.*
+   Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK
+   / M2M managers are evaluated through `aq()`. `afetch()` is explicit and non-recursive; batched
+   peer loading returns results aligned with the parents.
 5. Public names stay aligned with Django core's async work: `async_atomic(using, savepoint,
    durable)`, `on_commit` accepting async callables.
 6. `asyncopation.ConcurrentQueryError(RuntimeError)` is public API (ADR-0001 Decision 3); it lives
    in the import-free `asyncopation.errors` and is re-exported at the package root (*added
-   2026-11-25 (#5, PR #61)*).
+   2026-11-25 (#5, PR #61)*). *Amended 2026-11-25 (#6, PR #65):* `asyncopation.SyncEvaluationError`
+   is public API on the same terms, `aq` and `AsyncQuerySet` are exported lazily (see the note
+   below).
 
-*Amended 2026-11-25 (#6, PR A): `asyncopation.SyncEvaluationError(RuntimeError)` is public API;
-like `ConcurrentQueryError` it lives in the import-free `asyncopation.errors` and is re-exported at
-the root, while `aq` and `AsyncQuerySet` are exported lazily (PEP 562) so `import asyncopation`
-loads neither Django nor a driver. The names that raise `NotImplementedError` are the coroutine
-methods Django defines on `QuerySet` (found by scanning the class, so a Django upgrade that adds
-one is blocked too) minus those implemented. `aq()` wraps a QuerySet that already has a result
-cache without cloning it, because `fetch_mode()` clones and the clone drops the cache; evaluation
-methods fill the wrapped QuerySet's result cache as Django's `alist` does, and a chain re-wraps
-through `aq()`.*
+*Amended 2026-11-25 (#6, PR #65), Decision 6: `asyncopation.SyncEvaluationError(RuntimeError)` is
+public API; like `ConcurrentQueryError` it lives in the import-free `asyncopation.errors` and is
+re-exported at the root, while `aq` and `AsyncQuerySet` are exported lazily (PEP 562) so
+`import asyncopation` loads neither Django nor a driver. The names that raise `NotImplementedError` are the coroutine
+methods and async generators Django defines on `QuerySet` (found by scanning the class, so a Django
+upgrade that adds one is blocked too) minus those implemented. `aq()` wraps a QuerySet that already
+has a result cache, or is already `FETCH_RAISE`, without cloning it; evaluation methods fill the
+wrapped QuerySet's result cache as Django's `alist` does, and a chain re-wraps through `aq()`.*
 
 ## Consequences
 + Custom QuerySets, related managers and third-party QuerySet methods work.
@@ -91,3 +103,10 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   thread hop; `list(aq(qs))` raises `SyncEvaluationError`.
 - unit: a model declaring only `aobjects` still has `objects` as its default manager; `aobjects` on
   a model with a custom default manager exposes its QuerySet methods.
+- *Amended 2026-11-25 (#6, PR #65):* differential: `aq(tag.books).filter(tags__name=x)` (many-to-many
+  related manager, pending sticky filter) and chains on a reverse foreign-key manager return the
+  same rows as the sync ORM.
+- *Amended 2026-11-25 (#6, PR #65):* unit: `aq(qs).aiterator()` raises `NotImplementedError` without
+  a thread hop (it is an async generator, so a coroutine-only scan would miss it); `aq(qs)[::2]`
+  raises `SyncEvaluationError`; `aq(qs).raw(...)` raises `NotImplementedError`; copies keep
+  `FETCH_RAISE`.

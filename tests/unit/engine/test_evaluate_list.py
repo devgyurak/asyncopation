@@ -4,6 +4,7 @@ from tests.support.engine.evaluate import (
     evaluate,
     evaluate_in_pin,
     evaluate_outside_pin_error,
+    evaluate_routed,
     evaluate_unsupported,
     expected_statement,
 )
@@ -36,6 +37,13 @@ async def test_evaluate_list_fills_the_result_cache(compile_env):
     # then
     assert evaluation.cache == evaluation.result
     assert evaluation.cache_size == 3
+
+
+async def test_evaluate_list_returns_a_copy_of_the_cache_list(compile_env):
+    # when
+    evaluation = await evaluate(compile_env)
+    # then
+    assert evaluation.result_is_the_cache_list is False
 
 
 async def test_evaluate_list_a_second_call_returns_the_cache_without_io(compile_env):
@@ -72,3 +80,11 @@ async def test_evaluate_list_outside_a_pin_compiles_in_autocommit_mode(compile_e
     error = await evaluate_outside_pin_error(compile_env, "book_for_update")
     # then
     assert error == "TransactionManagementError"
+
+
+async def test_evaluate_list_asks_the_router_once_and_keeps_that_alias(compile_env):
+    # when
+    routed = await evaluate_routed(compile_env, ["default", "other", "other", "other"])
+    # then
+    assert routed.router_reads == 1
+    assert routed.instance_aliases == {"default"}

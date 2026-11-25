@@ -8,7 +8,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.db import connections
-from django.db.models import QuerySet
+from django.db.models import Count, QuerySet
 
 from harness.catalog.models import Author, Book, BookEdition
 
@@ -41,6 +41,11 @@ def editions_with_keys(keys: list[tuple[int, int]]) -> QuerySet[BookEdition]:
     return BookEdition.objects.filter(pk__in=keys).order_by("pk")
 
 
+def edition_with_key(key: tuple[int, int]) -> QuerySet[BookEdition]:
+    """The edition whose composite primary key equals `key` (an equality lookup on `pk`)."""
+    return BookEdition.objects.filter(pk=key)
+
+
 def _author_with_books() -> Any:
     return Author.objects.filter(books__isnull=False).order_by("pk").first()
 
@@ -57,3 +62,15 @@ def books_of(author: Any) -> QuerySet[Book]:
 
 def books_manager_of(author: Any) -> Any:
     return author.books
+
+
+def _tag_with_peer() -> tuple[Any, str]:
+    """A tag, and the name of another tag on one of its books (so a join on both has rows)."""
+    book: Any = Book.objects.annotate(n=Count("tags")).filter(n__gte=2).order_by("pk").first()
+    tag, peer = book.tags.order_by("pk")[:2]
+    return tag, peer.name
+
+
+async def seeded_tag_with_peer() -> tuple[Any, str]:
+    """A seeded tag and the name of a second tag sharing one of its books (read from the seed)."""
+    return await in_sync(_tag_with_peer)

@@ -8,10 +8,13 @@ from typing import Any
 
 from django.db.models import QuerySet
 from django.db.models.query import ModelIterable
+from django.test import override_settings
 
 from asyncopation.connection.executor import pin
 from asyncopation.engine.evaluate import evaluate_list
+from harness.catalog.models import Book
 from tests.support.compile_wrappers import make_wrapper
+from tests.support.engine import routers
 from tests.support.engine.catalog import QUERYSETS, ROWS
 from tests.support.engine.stages import compile_case
 from tests.support.executors.fakes import ExecEnv
@@ -67,6 +70,10 @@ class Evaluation:
     @property
     def statement_tuples(self) -> list[tuple[Any, ...]]:
         return [tuple(statement) for statement in self.statements]
+
+    @property
+    def result_is_the_cache_list(self) -> bool:
+        return self.result is self.cache
 
     @property
     def titles(self) -> list[str]:
@@ -127,3 +134,18 @@ async def evaluate_outside_pin_error(env: CompileEnv, name: str) -> str:
     except Exception as exc:
         return type(exc).__name__
     return "none"
+
+
+@dataclass(frozen=True)
+class RoutedEvaluation:
+    router_reads: int
+    instance_aliases: set[str | None]
+
+
+async def evaluate_routed(env: CompileEnv, answers: list[str]) -> RoutedEvaluation:
+    """Evaluate `Book.objects.all()` (no `using()`, so the router decides) with a scripted router."""
+    env.default.queue(ROWS["book_all"])
+    with override_settings(DATABASE_ROUTERS=[routers.PATH]):
+        routers.script(answers)
+        result = await evaluate_list(Book.objects.all())
+    return RoutedEvaluation(len(routers.ScriptedRouter.reads), {o._state.db for o in result})

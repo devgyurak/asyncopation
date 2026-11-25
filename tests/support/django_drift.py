@@ -414,3 +414,19 @@ def _assigns_self_attribute(cls: Any, name: str) -> bool:
         and node.value.id == "self"
         for node in ast.walk(tree)
     )
+
+
+def klass_info_key_problem(key: str) -> str | None:
+    """Why ``klass_info[key]`` is no longer set by the compiler or read by the query module, or None."""
+    from django.db.models import query
+    from django.db.models.sql import compiler
+
+    read = f'"{key}"' in inspect.getsource(query)
+    written = f'"{key}"' in inspect.getsource(compiler.SQLCompiler.setup_query) or (
+        f'klass_info["{key}"]' in inspect.getsource(compiler.SQLCompiler)
+    )
+    if read and written:
+        return None
+    return (
+        f"klass_info[{key!r}]: read in django.db.models.query={read}, set by the compiler={written}"
+    )

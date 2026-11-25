@@ -130,8 +130,10 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   autocommit it is swallowed and release retries it. A disconnected connection is closed so the pool
   replaces it. A released connection wrapper, and any stream iterator it handed out, raise
   `InterfaceError` when used afterwards.
-- `connection_created` is **not** sent for driver connections; hstore/citext registration is
-  tracked in #43. The recording driver (`asyncopation.testing.RecordingDriver`) implements the same
+- `connection_created` is **not** sent for driver connections. With `django.contrib.postgres`
+  installed (read at `configure()`), `open()` reads the hstore/citext OIDs once on its first
+  connection and every connection registers the handlers from them without I/O (ADR-0003
+  Decision 2); the OIDs are not refreshed until the next `close()` / `open()`. The recording driver (`asyncopation.testing.RecordingDriver`) implements the same
   protocol with queued results and a statement log for unit tests (its connections also raise
   `InterfaceError` after the borrow ends); `Capabilities` and `ExecResult` are re-exported from
   `asyncopation.testing`.
@@ -174,6 +176,7 @@ until #7.
 |---|---|
 | `harness/settings.py` | Django settings for tests, e2e and benchmarks (`ASYNCOPATION_DB`) |
 | `harness/catalog/` | test models: every relation kind, a composite-pk model (`BookEdition`) + `FieldZoo` for type conversion |
+| `harness/pgcatalog/` | PostgreSQL-only models (`HStoreField`, `citext`), installed with `django.contrib.postgres` only when `ASYNCOPATION_DB=postgresql` |
 | `harness/seed.py` | deterministic dataset |
 | `harness/site/` | Django site with `/sync`, `/core`, `/aopt` variants per scenario; on PostgreSQL the ASGI app is wrapped in `LifespanApp`, `GET /diag/pool` shows the registry, and `ASYNCOPATION_APP_NAME` tags the server's database sessions (e2e lifecycle tests count them in `pg_stat_activity`) |
 | `tests/support/` | differential runner, snapshots, Hypothesis strategies |

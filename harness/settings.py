@@ -55,6 +55,10 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "harness.catalog",
 ]
+if VENDOR == "postgresql":
+    # contrib.postgres fields (hstore, citext) exist on PostgreSQL only; keeping them in their own
+    # app keeps the MySQL/MariaDB migrations free of extension operations (#43).
+    INSTALLED_APPS += ["django.contrib.postgres", "harness.pgcatalog"]
 MIDDLEWARE: list[str] = []
 ROOT_URLCONF = "harness.site.urls"
 ASGI_APPLICATION = "harness.site.asgi.application"

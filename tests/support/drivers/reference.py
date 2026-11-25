@@ -1,4 +1,8 @@
-"""Reference values from Django's own sync PostgreSQL backend, compared with the async driver."""
+"""Reference values from Django's own sync PostgreSQL backend, compared with the async driver.
+
+The reference wrapper uses the alias ``default``: with ``django.contrib.postgres`` installed its
+``connection_created`` handler looks the alias up in ``connections`` (hstore/citext OIDs).
+"""
 
 from __future__ import annotations
 
@@ -89,7 +93,7 @@ async def sync_rows(
             options=options, db_time_zone=case.db_time_zone, overrides=overrides
         )
         with override_settings(USE_TZ=case.use_tz, TIME_ZONE=case.settings_time_zone):
-            wrapper = DatabaseWrapper(settings_dict, alias="drivers_reference")
+            wrapper = DatabaseWrapper(settings_dict, alias="default")
             try:
                 if transactional:
                     wrapper.set_autocommit(False)
@@ -117,7 +121,7 @@ async def sync_connect_error(
             options=options, db_time_zone=case.db_time_zone, overrides=overrides
         )
         with override_settings(USE_TZ=case.use_tz, TIME_ZONE=case.settings_time_zone):
-            wrapper = DatabaseWrapper(settings_dict, alias="drivers_reference")
+            wrapper = DatabaseWrapper(settings_dict, alias="default")
             try:
                 wrapper.ensure_connection()
             except Exception as exc:
@@ -137,7 +141,7 @@ async def sync_idle_timeout_error_name() -> str:
     holder: dict[str, Any] = {}
 
     def start() -> int:
-        wrapper = DatabaseWrapper(pg_settings(options=options), alias="drivers_reference")
+        wrapper = DatabaseWrapper(pg_settings(options=options), alias="default")
         holder["wrapper"] = wrapper  # created and used in the one sync worker thread
         wrapper.set_autocommit(False)
         with wrapper.cursor() as cursor:
@@ -170,9 +174,15 @@ async def compare_with_sync(
     *,
     case: TzCase = UTC_CASE,
     options: dict[str, Any] | None = None,
+    register_contrib_types: bool | None = None,
 ) -> RowsComparison:
     """Run `sql` through the async driver and through Django's sync cursor; normalise both."""
-    async with open_driver(case=case, options=options) as driver, driver.connection() as conn:
+    async with (
+        open_driver(
+            case=case, options=options, register_contrib_types=register_contrib_types
+        ) as driver,
+        driver.connection() as conn,
+    ):
         async_rows = await conn.fetch_all(sql, params)
     reference = await sync_rows(case, options, sql, params)
     return RowsComparison(normalise(async_rows), normalise(reference))

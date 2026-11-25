@@ -64,7 +64,9 @@ behind these decisions: [design/software-architecture.md](design/software-archit
 5. Every non-public Django import is recorded in [django-api-ledger.toml](django-api-ledger.toml)
    (A201), lives only in `asyncopation._django` (A203) and is still present in the pinned Django
    (drift test; ADR-0007). Every private Django attribute accessed directly is a ledger
-   `[[attribute]]` entry protected by the same drift test.
+   `[[attribute]]` entry protected by the same drift test. A third-party package whose runtime
+   behaviour we rely on without importing it (asgiref `Local`, ADR-0008) is a `[[dependency]]`
+   row: the drift test requires the installed version to equal its `verified_against`.
 6. Results are identical to the sync ORM on PostgreSQL, MySQL and MariaDB (differential tests).
 
 ## Drivers

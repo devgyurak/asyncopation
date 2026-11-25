@@ -126,6 +126,7 @@ name = "django-asyncopation"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "asgiref" },
     { name = "django" },
 ]
 
@@ -165,6 +166,7 @@ mysql-sync = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asgiref", specifier = ">=3.13" },
     { name = "asyncmy", marker = "extra == 'mysql'", specifier = ">=0.2.18" },
     { name = "django", specifier = ">=6.1,<6.2" },
     { name = "psycopg", extras = ["pool"], marker = "extra == 'postgresql'", specifier = ">=3.3" },

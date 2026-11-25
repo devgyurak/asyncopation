@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=64d0f3481453 -->
+<!-- i18n: source=docs/workflow.md source-sha256=853d520ae4fb -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -92,7 +92,7 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 포맷, 린트 | ruff | 편집 훅, `make lint`, pre-commit, CI |
 | 타입 | ty | `make typecheck`, CI |
 | 레이어 | import-linter | `make guard`, pre-commit, CI |
-| 아키텍처 규칙 (A1xx/A2xx, A102 포함: `django.db.connections`는 `_django/connections.py`의 `swapped` 교체로만 쓰고 `compile/scope.py`만 import하고, 같은 모듈의 읽기 전용 `configured_databases()`는 `connection/lifecycle.py`만 import; A103: 동적 import와 introspection 속성; A104: psycopg와 Django 모듈이 재노출하는 psycopg 이름은 `drivers/`에서만 (표: `tools/guards/reexports.py`; 어댑터 헬퍼는 `_django/postgresql_adapters.py` 경유이며 이 모듈은 `drivers/postgresql`만 import; Django 모듈의 `mogrify`는 어디서도 금지); A203: 비공개 Django import는 `asyncopation._django`에서만) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
+| 아키텍처 규칙 (A1xx/A2xx, A102 포함: `django.db.connections`는 `_django/connections.py`의 `swapped` 교체로만 쓰고 `compile/scope.py`만 import하고, 같은 모듈의 읽기 전용 `configured_databases()`는 `connection/lifecycle.py`만 import; A103: 동적 import와 introspection 속성; A104: psycopg와 Django 모듈이 재노출하는 psycopg 이름은 `drivers/`에서만 (표: `tools/guards/reexports.py`; 어댑터 헬퍼는 `_django/postgresql_adapters.py` 경유이며 이 모듈은 `drivers/postgresql`만 import; Django 모듈의 `mogrify`는 어디서도 금지); A203: 비공개 Django import는 `asyncopation._django`에서만; ledger의 `[[dependency]]` 행(예: asgiref)은 guard가 형식만 검사하고 A202가 아니라 drift 테스트가 고정) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
 | 테스트 규칙: GWT, 제어문 0개 (T1xx-T3xx) | `tools/guards` | 위와 동일 |
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |

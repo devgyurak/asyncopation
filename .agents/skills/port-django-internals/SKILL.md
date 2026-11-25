@@ -27,6 +27,9 @@ description: Procedure for porting or reusing Django internals (ModelIterable, p
    `src/asyncopation/_django/` (A203). Every private attribute you access directly (`qs._fetch_mode`), inside `_django` or not,
    gets an `[[attribute]]` entry (`owner` dotted class path, `names`, `used_by`, `reason`,
    `verified_against`). `tests/unit/django_drift` verifies every entry against installed Django.
+   A third-party package we rely on without importing it (asgiref `Local`) gets a `[[dependency]]`
+   row (`package`, `names`, `used_by`, `reason`, exact `verified_against`); the installed version
+   must equal it.
 5. **Tests**: differential tests covering every branch you ported (backends included).
 6. **Verify**: `uv run python -m tools.guards` (no A201/A202/A203), `uv run lint-imports`.
 

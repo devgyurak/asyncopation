@@ -85,3 +85,20 @@ except ImproperlyConfigured as exc:
 else:
     print("opened")""",
 )
+
+
+_LIGHT_REPORT = (
+    "print(sorted(m for m in sys.modules "
+    "if m.split('.')[0] in {'django', 'psycopg', 'psycopg_pool', 'psycopg_binary', 'asyncmy'}))"
+)
+_ASYNCOPATION_REPORT = "print(sorted(m for m in sys.modules if m.split('.')[0] == 'asyncopation'))"
+
+
+def light_import_script(statement: str) -> str:
+    """Run `statement`; report the django and driver modules it loaded (none for a light import)."""
+    return _HEAD + statement + "\n" + _LIGHT_REPORT
+
+
+def asyncopation_modules_script(statement: str) -> str:
+    """Run `statement`; report the `asyncopation` modules it loaded."""
+    return _HEAD + statement + "\n" + _ASYNCOPATION_REPORT

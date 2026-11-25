@@ -295,7 +295,7 @@ class PostgresConnection:
             if not raw.autocommit:
                 # A cancelled statement inside a transaction: rolling back silently would let the
                 # caller carry on in a new implicit transaction. The transaction is lost, so the
-                # connection is too (ADR-0001 6c; the transaction layer marks it broken, #5).
+                # connection is too (ADR-0001 6c; the pinned executor marks the transaction broken).
                 await self._discard()
             elif raw.pgconn.transaction_status != _IDLE:
                 async with asyncio.timeout(_RECOVERY_TIMEOUT):

@@ -3,7 +3,8 @@
 Complements import-linter (layering, see pyproject.toml) with rules import-linter cannot express.
 
 Codes
-    A101  banned module import (sync bridges, threads, sync drivers, sync transaction API,
+    A101  banned module import (sync bridges, threads, sync drivers, sync transaction API - except
+          ``from django.db.transaction import TransactionManagementError`` in ``_django/transaction.py`` -,
           dynamic-import helpers: ``importlib`` / ``importlib.util`` / ``importlib.machinery`` /
           ``importlib.abc`` / ``pkgutil`` / ``runpy`` / ``pydoc`` / ``builtins``)
     A102  Django's thread-local connection handlers or sync transaction API, however reached;
@@ -422,7 +423,9 @@ def check(path: str, source: str, ledger: Ledger | None = None) -> list[Violatio
 
     for node in ast.walk(tree):
         for line, module, names in _imports(node):
-            if hit := _banned_module(module):
+            if (hit := _banned_module(module)) and not _allowed_banned_import(
+                path, module, names, node
+            ):
                 out.append(
                     Violation(
                         path, line, "A101", f"`{module}` is banned in src: {BANNED_MODULES[hit]}"
@@ -684,6 +687,25 @@ def _banned_importlib(module: str, names: list[str]) -> bool:
         # `from importlib import metadata` is fine; `import importlib` / `import_module` are not
         return module != "importlib" or not names or not set(names) <= IMPORTLIB_ALLOWED_NAMES
     return False
+
+
+# The one name of a banned module that may be imported, and only in the one file that re-exports
+# it (ADR-0001 Decision 6c amendment, ADR-0007 Decision 5): Django's error for a broken
+# transaction, never its sync machinery.
+ALLOWED_BANNED_IMPORTS = {
+    "src/asyncopation/_django/transaction.py": {
+        ("django.db.transaction", "TransactionManagementError")
+    }
+}
+
+
+def _allowed_banned_import(path: str, module: str, names: list[str], node: ast.AST) -> bool:
+    allowed = ALLOWED_BANNED_IMPORTS.get(path, set())
+    return (
+        isinstance(node, ast.ImportFrom)
+        and bool(names)
+        and all((module, name) in allowed for name in names)
+    )
 
 
 def _banned_module(module: str) -> str | None:

@@ -32,7 +32,10 @@ saying why (prefer the stack in the plan; otherwise justify in the PR).
 ## Non-negotiables
 1. **No thread hops in `src/`.** No `sync_to_async`/`async_to_sync`, threads, executors, or
    Django's sync connection/transaction machinery (sole exceptions: the synchronous `compile_scope`
-   swap and the read-only `configured_databases()` in `_django.connections`, ADR-0008). SQL generation stays sync; I/O is async.
+   swap and the read-only `configured_databases()` in `_django.connections`, ADR-0008; and
+   `from django.db.transaction import TransactionManagementError` in `_django/transaction.py`,
+   ADR-0007 D5, ADR-0001 6c). The list above is closed: no further exceptions, and guards A101/A102 are never narrowed for one (maintainer decision, 2026-11-25).
+   SQL generation stays sync; I/O is async.
 2. **Layering** is enforced (`make guard`). Drivers are the only importers of psycopg/asyncmy.
 3. **Tests:** Given/When/Then markers and **zero control flow** (`for/while/if/try/match/
    comprehensions/ternaries`) in test modules. Logic goes to `tests/support/`.

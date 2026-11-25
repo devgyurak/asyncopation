@@ -10,4 +10,8 @@ Importing this package imports no database driver: engines are wired lazily (``e
 
 from asyncopation.connection.lifecycle import close, configure, setup
 
-__all__ = ["close", "configure", "setup"]  # lifecycle.ensure_driver stays internal (5b executors)
+__all__ = [
+    "close",
+    "configure",
+    "setup",
+]  # lifecycle.ensure_driver stays internal (used by connection.executor)

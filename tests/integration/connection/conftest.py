@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -50,3 +50,20 @@ def spy(spy_env: Recorder) -> Recorder:
 
     configure()
     return spy_env
+
+
+@pytest.fixture
+def tight_spy(spy_env: Recorder, lifecycle_configured: None) -> Iterator[Recorder]:
+    """`spy` with a pool of exactly one connection (a second borrower has to wait for it)."""
+    from django.db import connections
+
+    from asyncopation.connection import configure
+    from tests.support.lifecycle.postgres import patched_alias_settings
+
+    options = {
+        **connections.settings["default"].get("OPTIONS", {}),
+        "pool": {"min_size": 1, "max_size": 1, "timeout": 5},
+    }
+    with patched_alias_settings("default", OPTIONS=options):
+        configure()
+        yield spy_env

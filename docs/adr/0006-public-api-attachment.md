@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -60,6 +61,9 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    explicit and non-recursive; batched peer loading returns results aligned with the parents.
 5. Public names stay aligned with Django core's async work: `async_atomic(using, savepoint,
    durable)`, `on_commit` accepting async callables.
+6. `asyncopation.ConcurrentQueryError(RuntimeError)` is public API (ADR-0001 Decision 3); it lives
+   in the import-free `asyncopation.errors` and is re-exported at the package root (*added
+   2026-11-25 (#5, PR #61)*).
 
 ## Consequences
 + Custom QuerySets, related managers and third-party QuerySet methods work.

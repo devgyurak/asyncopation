@@ -20,9 +20,10 @@ deletion | prefetch   sans-I/O cores (Collector, prefetch_one_level)
 fetch
 engine         CompiledQuery, materializer (results_iter seam), sans-I/O runner
 transaction    async_atomic, savepoints, async on_commit
-connection     executors (borrowed/pinned), registry (alias, loop), lifecycle, hooks
+connection     executors (borrowed/pinned, `executor.py`), registry (alias, loop), lifecycle, hooks
 drivers | compile
 _django        sole importer of non-public Django APIs (and the one reader of the app registry, `_django.apps`)
+errors         (outside the stack) public exceptions such as ConcurrentQueryError; imports nothing
 ```
 - `drivers/` is the **only** place that imports `psycopg`, `psycopg_pool`, `asyncmy`.
   Postgres and MySQL drivers never import each other.
@@ -50,7 +51,11 @@ deviating needs a superseding ADR.
 ## Forbidden in src/ (tools/guards: A1xx)
 - `asgiref.sync` (`sync_to_async`, `async_to_sync`), `threading`, `concurrent.futures`,
   `multiprocessing` - a thread hop is exactly what this project removes.
-- `django.db.connection(s)`, `django.db.transaction`, `django.db.router` sync machinery.
+- `django.db.connection(s)`, `django.db.transaction`, `django.db.router` sync machinery (the only
+  exceptions: the `compile_scope` swap and the read-only `configured_databases()` in
+  `_django/connections.py`, ADR-0008, and `from django.db.transaction import
+  TransactionManagementError` in `asyncopation/_django/transaction.py`, for the broken-transaction
+  error of ADR-0001 6c). The list above is closed: no further exceptions, and guards A101/A102 are never narrowed for one (maintainer decision, 2026-11-25).
 - `time.sleep`, `asyncio.run`, `asyncio.get_event_loop`, `run_until_complete`.
 - Sync drivers (`psycopg2`, `MySQLdb`, `pymysql`).
 - Dynamic imports and code evaluation that bypass the import guards: `importlib` (except
@@ -85,7 +90,8 @@ the drift test. See the `port-django-internals` skill.
 
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `configure()` / `setup()` /
-`close()`, the ASGI lifespan wrapper, `observe()` / `intercept()`, fetch-mode constants and
+`close()`, the ASGI lifespan wrapper, `ConcurrentQueryError` (`asyncopation.errors`, re-exported at the
+root; imports nothing), `observe()` / `intercept()`, fetch-mode constants and
 `asyncopation.testing` (`__all__`: `RecordingDriver`, `RecordingConnection`, `Statement`,
 `NoQueuedResult`, `Capabilities`, `ExecResult`). `asyncopation.drivers` is internal and
 experimental, not public API.

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from asyncopation.errors import ConcurrentQueryError
+
 __version__ = "0.0.0"
-__all__ = ["close", "configure", "setup"]
+__all__ = ["ConcurrentQueryError", "close", "configure", "setup"]
 
 
 def configure() -> None:

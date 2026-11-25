@@ -253,11 +253,12 @@ def render(payload: dict[str, Any]) -> str:
         cpu = f"{row['cpu_us']:.1f}" if "cpu_us" in row else "-"
         ratios = [
             f"{row[key]['median']:.2f}x [{row[key]['q1']:.2f}-{row[key]['q3']:.2f}] vs {key[6:]}"
-            for key in ("ratio_raw", "ratio_getconn")
+            for key in ("ratio_raw", "ratio_getconn", "ratio_driver")
             if key in row
         ]
-        d = row.get("diff_getconn_us")
-        diff = f"{d['median']:+.2f} [{d['q1']:+.2f}..{d['q3']:+.2f}]" if d else "-"
+        d = row.get("diff_getconn_us") or row.get("diff_driver_us")
+        suffix = " vs driver" if "diff_driver_us" in row else ""
+        diff = f"{d['median']:+.2f} [{d['q1']:+.2f}..{d['q3']:+.2f}]{suffix}" if d else "-"
         load = (
             f"{row['load_avg_1m_min']:.0f}-{row['load_avg_1m']:.0f}"
             if "load_avg_1m" in row

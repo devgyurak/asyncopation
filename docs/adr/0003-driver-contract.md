@@ -6,6 +6,7 @@
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 1 (cursor selection mirrors Django's `server_side_binding`), Decision 2 (hstore/citext registration deferred to #43), Decision 4 (configuration-error exception), the Decision code block (`capabilities` property, `is_disconnect`), new Validation item (`server_side_binding=True`), Option D (PostgreSQL capabilities come from the driver's `open()` connection); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-24 (#3, PR #45) - Context (Django's `get_adapters_template` reaches the driver through the `_django/postgresql_adapters.py` boundary), Consequences (A104 confinement of psycopg re-exports, the adapter boundary module importable only by `drivers/postgresql`, Django's `mogrify` unused, drivers export no psycopg objects), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-25 (#5, PR #61) - Decision 5 (cancel-in-transaction contract); approved by: maintainer (@devgyurak), to be confirmed in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.3 lists the driver operations and the per-driver pitfalls (psycopg needs
@@ -111,6 +112,12 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
    (`min_size > max_size`) surfaces as `psycopg_pool`'s builtin `ValueError` from `open()`, see
    ADR-0001 Decision 8.*
 5. **Streams** are async context managers (async-correctness rule 7, ADR-0001 rule 7).
+   *Amended 2026-11-25 (#5, PR #61) - cancel contract:* a statement cancelled while a transaction
+   is open leaves its connection closed (discarded) before `CancelledError` propagates, and
+   `rollback()` on such a connection is a no-op. The pinned executor relies on this (ADR-0001 6c)
+   and needs no explicit `discard()` on the connection protocol: the pool drops a closed connection
+   when it is returned. Drivers must keep this (asyncmy: #7); `RecordingDriver` models it
+   (`RecordingConnection.discarded`).
 6. A **recording driver** (queued results + statement log) implements the protocol for unit tests
    of upper layers. It lives in `asyncopation.testing`. Query counting is built on observers
    (ADR-0005), not on the recording driver.

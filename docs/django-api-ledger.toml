@@ -196,6 +196,13 @@ pytest-django later renames `NAME` in the same dict. `configured_databases()` co
 defaulting logic; tests/unit/django_drift pins that the defaults are present."""
 verified_against = "6.1.3"
 
+[[internal]]
+module = "django.db.transaction"
+names = ["TransactionManagementError"]
+used_by = ["src/asyncopation/_django/transaction.py"]
+reason = "Raised for later statements on a pinned connection whose transaction is broken (a statement was cancelled inside it, ADR-0001 Decision 6c), as Django's sync `atomic` does; defined only in django.db.transaction, so users catching Django's error keep working. Nothing else of that module is used (guard A101 allows exactly this name inside _django)."
+verified_against = "6.1.3"
+
 [[attribute]]
 owner = "django.db.backends.postgresql.base.DatabaseWrapper"
 names = ["pg_version"]

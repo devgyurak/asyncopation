@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=22721bfc3192 -->
+<!-- i18n: source=README.md source-sha256=84345343d889 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -57,6 +57,15 @@ async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
 ```
 
 **테스트에서는** 테스트 러너가 `ready()` 이후에 테스트 데이터베이스를 만들고 `NAME`을 바꾼다. 테스트 데이터베이스가 만들어진 뒤(예를 들어 세션 픽스처에서 `setup_databases` 직후) `asyncopation.configure()`를 한 번 호출한다. 그 전에 드라이버를 열면 원래 데이터베이스에 연결하는 대신 `ImproperlyConfigured`로 실패한다.
+
+## 동시성과 트랜잭션
+
+트랜잭션 밖에서는 구문마다 풀에서 연결을 따로 빌리므로 `asyncio.gather` 아래의 구문이 병렬로
+실행된다. 트랜잭션 안에서는 연결 하나가 그 트랜잭션을 연 태스크에 고정된다. 다른 태스크(`gather`나
+`TaskGroup`의 자식, 블록 안에서 만든 태스크)에서 쓰거나, 구문이나 스트림이 진행 중일 때 다시 쓰거나,
+블록이 끝난 뒤에 쓰면 `asyncopation.ConcurrentQueryError`가 발생한다(`DatabaseError`가 아니라
+`RuntimeError`이므로 재시도 루프가 삼키지 않는다). 동시에 실행할 작업은 트랜잭션 밖에서 하라. 쿼리
+API와 `async_atomic`은 아직 없으며, 이 소유권 모델(ADR-0001)이 그 기반이 된다.
 
 ## 데이터베이스 없이 상위 레이어 테스트하기
 

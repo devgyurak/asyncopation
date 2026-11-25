@@ -66,6 +66,16 @@ async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
 `setup_databases`); until then opening a driver fails with `ImproperlyConfigured` instead of
 connecting to the original database.
 
+## Concurrency and transactions
+
+Outside a transaction every statement borrows its own pooled connection, so statements run under
+`asyncio.gather` execute in parallel. Inside a transaction one connection is pinned to the task
+that opened it: using it from another task (a `gather` or `TaskGroup` child, a task created
+inside the block), re-entrantly while a statement or stream is in flight, or after the block ended
+raises `asyncopation.ConcurrentQueryError` (a `RuntimeError`, not a `DatabaseError`, so retry loops
+do not swallow it). Run concurrent work outside the transaction. The query API and `async_atomic`
+are not available yet; this is the ownership model they will build on (ADR-0001).
+
 ## Testing upper layers without a database
 
 `asyncopation.testing.RecordingDriver` implements the `AsyncDriver` protocol in memory: queue the

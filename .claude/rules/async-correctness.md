@@ -19,7 +19,12 @@ paths:
    materialization). Inside `async_atomic` the connection is pinned to the task that opened it;
    use from any other task, or re-entrant use while a statement/stream is in flight, raises
    `ConcurrentQueryError` - never serialize with a lock. The pinned executor is invalidated on
-   exit. Follow ADR-0001 (`docs/adr/0001-connection-ownership.md`); do not invent a new strategy.
+   exit (use afterwards raises), a pin counts as one in-flight unit, an executor starts its unit
+   right after `ensure_driver` returns (no `await` between) and finishes it exactly once, and
+   closing a stream is exempt from the owner check. A cancelled statement inside a transaction
+   marks it broken (`TransactionManagementError`). No counter lives in a contextvar; the pinned
+   executor sits in a contextvar mapping that is replaced, never mutated. Follow ADR-0001
+   (`docs/adr/0001-connection-ownership.md`); do not invent a new strategy.
 4. **Cancellation safety.** Every acquire has a matching release on `CancelledError`, including
    an acquire that completes after the caller was cancelled. A connection whose statement was
    cancelled mid-flight is discarded or reset, never returned as-is; inside a transaction it marks

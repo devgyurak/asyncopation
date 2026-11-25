@@ -6,7 +6,9 @@ from tests.support.lifecycle_scripts import (
     MYSQL_FAKE_OPEN,
     PSYCOPG_MISSING,
     PSYCOPG_MISSING_OPEN,
+    asyncopation_modules_script,
     import_script,
+    light_import_script,
     run_isolated,
 )
 
@@ -51,3 +53,28 @@ def test_opening_a_postgresql_alias_without_psycopg_raises_improperly_configured
     ran = run_isolated(PSYCOPG_MISSING_OPEN)
     # then
     assert (ran.returncode, ran.stdout) == (0, "raised ImproperlyConfigured")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        pytest.param("import asyncopation", id="package"),
+        pytest.param("import asyncopation.errors", id="errors"),
+        pytest.param("import asyncopation; asyncopation.ConcurrentQueryError", id="root-reexport"),
+        pytest.param(
+            "from asyncopation import ConcurrentQueryError, setup, close, configure", id="from-root"
+        ),
+    ],
+)
+def test_import_does_not_load_django_or_a_driver_package(statement):
+    # when
+    ran = run_isolated(light_import_script(statement))
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "[]")
+
+
+def test_importing_the_package_loads_only_the_errors_module_of_asyncopation():
+    # when
+    ran = run_isolated(asyncopation_modules_script("import asyncopation"))
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "['asyncopation', 'asyncopation.errors']")

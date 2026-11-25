@@ -7,6 +7,11 @@ from collections.abc import AsyncIterator
 import pytest
 
 from asyncopation.connection import registry
+from tests.support.executors.fakes import (
+    ExecEnv,
+    finish_executor_test,
+    install_executor_environment,
+)
 from tests.support.lifecycle.checks import dispose_environment, drain_in_flight
 from tests.support.lifecycle.fakes import FakeEnv, install_fake_environment
 from tests.support.lifecycle.loops import (
@@ -121,5 +126,34 @@ async def overlapping(opened: FakeEnv) -> AsyncIterator[OverlappingClose]:
 @pytest.fixture
 async def short_closing(opened: FakeEnv) -> AsyncIterator[ClosingScenario]:
     scenario = ClosingScenario("default", timeout=0.05)
+    yield scenario
+    await scenario.cleanup()
+
+
+@pytest.fixture
+async def execenv(
+    fake: FakeEnv, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> AsyncIterator[ExecEnv]:
+    """Aliases `default` and `other` served by gated `RecordingDriver`s; configured, not opened.
+    At teardown nothing may be in flight, unless the test asks for `leaves_in_flight`."""
+    env = install_executor_environment(fake, monkeypatch)
+    yield env
+    finish_executor_test(env, leaves_in_flight="leaves_in_flight" in request.fixturenames)
+
+
+@pytest.fixture
+def leaves_in_flight() -> None:
+    """Opt-out of the teardown check of `execenv`: the test leaves a unit in flight on purpose
+    (a `close()` waiting for it, a held statement); it is finished at teardown."""
+
+
+@pytest.fixture
+async def held_close(execenv: ExecEnv) -> AsyncIterator[ClosingScenario]:
+    """`default` open, with one unit in flight and a `close()` waiting for it (not yet finished)."""
+    from asyncopation.connection import setup
+
+    await setup(["default"])
+    scenario = ClosingScenario("default", timeout=5.0)
+    await scenario.begin()
     yield scenario
     await scenario.cleanup()

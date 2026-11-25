@@ -8,7 +8,9 @@ Cases are named ``driver.<group>.<impl>.t<tasks>``:
   ``noio-yield`` (the same, but the fake ``execute`` yields to the event loop once). The two ``noio``
   groups run with 1 task only and give a LOWER BOUND of the driver's own cost
 * impls: ``raw`` (``pool.connection()`` + cursor), ``getconn`` (``getconn``/``putconn``: the
-  cheapest possible baseline, present in every group) and ``driver``
+  cheapest possible baseline, present in every group), ``driver`` and, in ``select1`` and the
+  ``noio`` groups, ``executor`` (``BorrowedExecutor.fetch_all``: ``ensure_driver``, the in-flight
+  counter and the driver call; its paired ratio against ``driver`` is the executor layer's cost)
 * tasks: 1, 8 and 64 concurrent workers (``noio`` groups: 1)
 
 Each round runs every impl of a group for ``seconds`` (interleaved; the order is rotated every
@@ -48,15 +50,17 @@ WIDE = (
 STREAM = "SELECT g FROM generate_series(1, 200) g"
 STREAM_CHUNK = 50
 GROUPS = {
-    "select1": ("raw", "getconn", "driver"),
+    "select1": ("raw", "getconn", "driver", "executor"),
     "wide": ("raw", "getconn", "driver"),
     "execute": ("raw", "getconn", "driver"),
     "tx": ("raw", "getconn", "driver"),
     "stream": ("raw", "getconn", "driver"),
-    "noio": ("getconn", "driver"),
-    "noio-yield": ("getconn", "driver"),
+    "noio": ("getconn", "driver", "executor"),
+    "noio-yield": ("getconn", "driver", "executor"),
 }
 SINGLE_TASK_GROUPS = frozenset({"noio", "noio-yield"})
+NOIO_ALIAS = "bench-noio"
+NOIO_YIELD_ALIAS = "bench-noio-yield"
 
 
 def group_tasks(group: str) -> tuple[int, ...]:
@@ -79,7 +83,12 @@ def selected(only: set[str]) -> list[str]:
     wanted = set(chosen)
     for name in chosen:
         _, group, _, tasks = name.split(".")
-        wanted |= {f"driver.{group}.{impl}.{tasks}" for impl in GROUPS[group] if impl != "driver"}
+        wanted |= {
+            f"driver.{group}.{impl}.{tasks}"
+            for impl in GROUPS[group]
+            if impl not in ("driver", "executor")
+            or (impl == "driver" and name.split(".")[2] == "executor")
+        }
     return [n for n in case_names() if n in wanted]
 
 
@@ -263,7 +272,35 @@ def make_ops(driver: Any, pool: Any, config: Any) -> dict[str, dict[str, Op]]:
     ops["stream"]["driver"] = driver_stream
     ops["noio"] = noio(_FakePool())
     ops["noio-yield"] = noio(_FakePool(yielding=True))
+    ops["select1"]["executor"] = executor_query(config.alias, SELECT1)
+    ops["noio"]["executor"] = executor_query(NOIO_ALIAS, SELECT1)
+    ops["noio-yield"]["executor"] = executor_query(NOIO_YIELD_ALIAS, SELECT1)
     return ops
+
+
+def executor_query(alias: str, sql: str) -> Op:
+    from asyncopation.connection.executor import BorrowedExecutor
+
+    executor = BorrowedExecutor(alias)
+
+    async def op() -> Any:
+        return await executor.fetch_all(sql, None)
+
+    return op
+
+
+class _FakeDriver:
+    """What ``ensure_driver`` returns for the noio executor cases: the driver's own ``_Borrow``
+    over a fake pool."""
+
+    def __init__(self, pool: _FakePool, config: Any) -> None:
+        self._pool = pool
+        self._config = config
+
+    def connection(self) -> Any:
+        from asyncopation.drivers.postgresql.driver import _Borrow
+
+        return _Borrow(self._pool, self._config)  # ty: ignore[invalid-argument-type]
 
 
 # --------------------------------------------------------------------------- measurement
@@ -382,7 +419,11 @@ async def _measure_group(
         for key in ("ops_per_s", "p50_us", "p95_us", "p99_us", "cpu_us"):
             row[key] = statistics.median(r[key] for r in data.values())
         for baseline in ("raw", "getconn"):
-            if impl == "driver" and baseline in rounds_data and baseline not in failed:
+            if (
+                impl in ("driver", "executor")
+                and baseline in rounds_data
+                and baseline not in failed
+            ):
                 pairs = _paired(data, rounds_data[baseline])
                 if pairs:
                     q1, q2, q3 = _quartiles([ratio for ratio, _ in pairs])
@@ -390,6 +431,13 @@ async def _measure_group(
                     if baseline == "getconn" and group in SINGLE_TASK_GROUPS:
                         d1, d2, d3 = _quartiles([diff for _, diff in pairs])
                         row["diff_getconn_us"] = {"median": d2, "q1": d1, "q3": d3}
+        if impl == "executor" and "driver" in rounds_data and "driver" not in failed:
+            pairs = _paired(data, rounds_data["driver"])
+            if pairs:
+                q1, q2, q3 = _quartiles([ratio for ratio, _ in pairs])
+                row["ratio_driver"] = {"median": q2, "q1": q1, "q3": q3}
+                d1, d2, d3 = _quartiles([diff for _, diff in pairs])
+                row["diff_driver_us"] = {"median": d2, "q1": d1, "q3": d3}
         loads = [r["load_1m"] for r in data.values()]
         row["load_avg_1m"] = max(loads)
         row["load_avg_1m_min"] = min(loads)
@@ -403,14 +451,18 @@ async def run(
     """Run the selected ``driver.*`` cases; ``config`` is the driver's ``PostgresConfig``."""
     from psycopg_pool import AsyncConnectionPool
 
+    from asyncopation.connection import registry
+
     pool = AsyncConnectionPool(
         "", kwargs=config.conn_kwargs, open=False, name="bench-raw", **config.pool_kwargs
     )
     results: dict[str, Any] = {}
+    registered: list[Any] = []
     try:
         await driver.open()
         await pool.open(wait=True)
         ops = make_ops(driver, pool, config)
+        _register_drivers(driver, config, registered)
         for tasks in TASKS:
             for group, impls in GROUPS.items():
                 wanted = [i for i in impls if f"driver.{group}.{i}.t{tasks}" in names]
@@ -419,6 +471,29 @@ async def run(
                         group, tasks, wanted, ops[group], seconds, rounds
                     )
     finally:
-        await pool.close()
-        await driver.close()
+        for entry, previous, created in registered:
+            entry.driver = previous
+            if created:
+                registry.forget(entry)
+        try:
+            await pool.close()
+        finally:
+            await driver.close()
     return results
+
+
+def _register_drivers(driver: Any, config: Any, entries: list[Any]) -> None:
+    """Make ``ensure_driver`` return the bench drivers (no configure/open path involved)."""
+    from asyncopation.connection import registry
+
+    loop = asyncio.get_running_loop()
+    drivers: dict[str, Any] = {
+        config.alias: driver,
+        NOIO_ALIAS: _FakeDriver(_FakePool(), config),
+        NOIO_YIELD_ALIAS: _FakeDriver(_FakePool(yielding=True), config),
+    }
+    for alias, instance in drivers.items():
+        created = registry.entry(alias, loop) is None
+        entry = registry.entry_or_create(alias, loop)
+        entries.append((entry, entry.driver, created))  # restored afterwards
+        entry.driver = instance

@@ -139,3 +139,14 @@ forbidden_modules = ["asyncopation.drivers", "asyncopation.connection", "asyncop
 name = "postgresql and mysql drivers are independent"
 type = "independence"
 modules = ["asyncopation.drivers.postgresql", "asyncopation.drivers.mysql"]
+
+[[tool.importlinter.contracts]]
+name = "public errors import nothing (import asyncopation stays light)"
+type = "forbidden"
+source_modules = ["asyncopation.errors"]
+forbidden_modules = [
+    "asyncopation.connection",
+    "asyncopation.drivers",
+    "asyncopation.compile",
+    "asyncopation._django",
+]

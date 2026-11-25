@@ -6,6 +6,7 @@ be tested without a database. It does not count queries (that is built on observ
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, NamedTuple
@@ -39,28 +40,45 @@ class RecordingConnection:
         self._driver = driver
         self.in_transaction = False
         self.released = False  # set when the borrow ends; later calls raise InterfaceError
+        self.discarded = False  # a statement was cancelled in a transaction (driver contract)
 
-    def _check(self) -> None:
+    def _check(self, *, allow_discarded: bool = False) -> None:
         if self.released:
             raise InterfaceError(
                 "the connection was returned to the driver and can no longer be used"
             )
+        if self.discarded and not allow_discarded:
+            raise InterfaceError("the connection was discarded and can no longer be used")
+
+    def _take(
+        self, kind: str, sql: str, params: Params | Sequence[Params]
+    ) -> list[Row] | ExecResult:
+        """Like a real driver (ADR-0003): a statement cancelled while a transaction is open leaves
+        the connection discarded, and ``rollback()`` on it is a no-op."""
+        try:
+            return self._driver._take(kind, sql, params)
+        except asyncio.CancelledError:
+            if self.in_transaction:
+                self.in_transaction = False
+                self.discarded = True
+                self._driver.discarded += 1
+            raise
 
     async def fetch_all(self, sql: str, params: Params) -> list[Row]:
         self._check()
-        item = self._driver._take("fetch_all", sql, params)
+        item = self._take("fetch_all", sql, params)
         return (item.rows or []) if isinstance(item, ExecResult) else item
 
     async def execute(self, sql: str, params: Params) -> ExecResult:
         self._check()
-        item = self._driver._take("execute", sql, params)
+        item = self._take("execute", sql, params)
         if isinstance(item, ExecResult):
             return item
         return ExecResult(rowcount=len(item), rows=item)
 
     async def execute_many(self, sql: str, batch: Sequence[Params]) -> ExecResult:
         self._check()
-        item = self._driver._take("execute_many", sql, batch)
+        item = self._take("execute_many", sql, batch)
         return item if isinstance(item, ExecResult) else ExecResult(rowcount=len(item))
 
     @asynccontextmanager
@@ -68,7 +86,7 @@ class RecordingConnection:
         self, sql: str, params: Params, chunk: int
     ) -> AsyncGenerator[AsyncIterator[list[Row]]]:
         self._check()
-        item = self._driver._take("stream", sql, params)
+        item = self._take("stream", sql, params)
         rows = (item.rows or []) if isinstance(item, ExecResult) else item
         chunks = _GuardedChunks(self, rows, chunk)
         try:
@@ -88,7 +106,9 @@ class RecordingConnection:
         self._driver._raise_queued_error()
 
     async def rollback(self) -> None:
-        self._check()
+        self._check(allow_discarded=True)
+        if self.discarded:
+            return  # the transaction went with the connection
         self._driver._log(Statement("rollback"))
         self.in_transaction = False
         self._driver._raise_queued_error()
@@ -116,6 +136,7 @@ class RecordingDriver:
         self.opened = False
         self.closed = False
         self.disconnect_errors: tuple[type[BaseException], ...] = ()
+        self.discarded = 0  # connections discarded by a statement cancelled in a transaction
 
     @property
     def capabilities(self) -> Capabilities:
@@ -187,7 +208,10 @@ def _frozen(params: Any) -> Any:
 
 
 class _GuardedChunks:
-    """Chunk iterator of a recorded stream; unusable once its connection's borrow has ended."""
+    """Chunk iterator of a recorded stream; unusable once its connection's borrow has ended.
+
+    A cancellation while reading chunks is not modelled (only a queued cancellation of a statement
+    discards the connection, see ``RecordingConnection._take``)."""
 
     def __init__(self, connection: RecordingConnection, rows: list[Row], size: int) -> None:
         self._connection = connection

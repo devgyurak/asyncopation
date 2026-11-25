@@ -2,9 +2,10 @@
 
 Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
-the recording driver; the MySQL/asyncmy driver, the executors (5b) and transactions are still
-contracts only. ADR-0001..0007 are Accepted (ADR-0001 and ADR-0003/0004 carry
-implementation amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
+the recording driver, and so are the executors (borrowed/pinned connection ownership, #5);
+the MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
+ADR-0001..0007 are Accepted (ADR-0001, 0003, 0004, 0006 and 0007 carry implementation
+amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
 ## The split
@@ -29,6 +30,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 
 | Layer | Package | Responsibility | May not |
 |---|---|---|---|
+| - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`); imports nothing (import-linter contract), so `import asyncopation` stays light; re-exported at the package root | import anything |
 | 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
 | 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
@@ -39,7 +41,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
 | 1 | `asyncopation.drivers` (internal, experimental) | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
 | 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` (`CompileOnlyMixin` + per-backend composition such as `compile.postgresql`, imported lazily; frozen `ServerInfo`) and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
-| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
+| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.transaction` re-exports only Django's `TransactionManagementError` (the one name of `django.db.transaction` guard A101 lets through); `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
 ## Evaluation pipeline
 
@@ -144,6 +146,27 @@ Per-query borrowing outside transactions, pinning inside `async_atomic`; use of 
 connection from another task raises `ConcurrentQueryError`:
 [ADR-0001](adr/0001-connection-ownership.md).
 
+Implementation (`asyncopation.connection.executor`, internal until `async_atomic` #19 and the engine
+#6 use it): both executors implement the `Executor` protocol (`alias`, `pinned`, `fetch_all`,
+`execute`, `execute_many`, `stream`) on driver-level types only. `BorrowedExecutor` runs
+`ensure_driver` -> `statement_started` (no `await` between) -> `driver.connection()` -> statement ->
+release -> `statement_finished` (in `finally`, also on cancellation); a stream holds the connection
+and the in-flight count until it ends. `pin(alias)` (an async context manager) borrows one connection,
+counts as one in-flight unit for its whole lifetime, records the owner task and registers a
+`PinnedExecutor` in a contextvar *mapping* (alias -> executor, replaced never mutated; no counter lives
+in a contextvar because gathered children copy the context). A `PinnedExecutor` rejects, with
+`ConcurrentQueryError`, use from another task, re-entrant use while a statement or stream is in
+flight and any use after the block exited (a stale child task still sees the closed executor through
+its copied context); it marks itself `broken` when a statement is cancelled inside a transaction
+(later statements raise Django's `TransactionManagementError`, `rollback()` is a no-op, the driver
+has already discarded the connection - ADR-0003); closing a stream is exempt from the owner check
+and pin exit closes the streams still open. It passes `begin` / `commit` / `rollback` / savepoint
+calls through with no policy (#19). `current_executor(alias)` returns the contextvar's pinned executor
+(even a closed one, so use raises) or the alias's borrowed executor. Every statement passes one
+internal function, `_run` (the ADR-0005 hook point, #4). `ConcurrentQueryError` lives in
+`asyncopation.errors`, a module that imports nothing (import-linter contract), and is re-exported at
+the package root.
+
 ## Lifecycle
 
 Configure in `AppConfig.ready()` (`asyncopation.apps.AsyncopationConfig`, an entry module above
@@ -160,9 +183,9 @@ place) and may be called again until a driver is open or opening (the test runne
 `ready()`); `engines` maps an ENGINE to its driver factory / probe / injection and imports psycopg
 lazily, so `import asyncopation` imports no driver; `registry` holds drivers by `(alias, loop)`,
 server info by alias, read-only `PoolStats` and the in-flight statement counter (used by the
-executors, #5b); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
+executors, `connection.executor`); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
 probe -> inject, under a per-`(alias, loop)` lock) shared by `setup()` and the lazy fallback;
-`close(timeout)` refuses new opens, waits for in-flight statements, closes the current loop's
+`close(timeout)` refuses new opens, waits for in-flight statements, open pin blocks and streams, closes the current loop's
 drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`
 (the test runner's rename: call `asyncopation.configure()` again); `setup()` opens only aliases with
 a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL/MariaDB raise `ImproperlyConfigured` at the first open

@@ -204,7 +204,7 @@ def is_closing(loop: asyncio.AbstractEventLoop) -> bool:
     return loop in _closing_loops
 
 
-# -- in-flight statements (used by the executors, 5b) ----------------------------------------
+# -- in-flight statements (used by connection.executor) ----------------------------------------
 def _flight(alias: str) -> _Flight:
     key = (alias, asyncio.get_running_loop())
     flight = _flights.get(key)

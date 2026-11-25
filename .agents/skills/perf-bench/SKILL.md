@@ -27,6 +27,7 @@ named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
   `driver.*` round, default 1.0), `--driver-rounds` (interleaved rounds, default 7), `--only`
   (comma-separated case names with the first dot-separated part removed, e.g.
   `--only select1.driver.t8`; the same filter as for the other cases);
+- impl `executor` (groups `select1`, `noio`, `noio-yield`): `BorrowedExecutor.fetch_all` over the registered driver (`ensure_driver`, the in-flight counter, `_run`); its paired ratio and `diff` are reported against `driver` (the executor layer's own cost);
 - no-I/O cases `driver.noio.<impl>.t1` and `driver.noio-yield.<impl>.t1` (impls `getconn` and
   `driver`, run with 1 task only): fake pool and cursor objects take the database out, so the
   difference measures the driver's own cost; `noio-yield` uses a fake that yields

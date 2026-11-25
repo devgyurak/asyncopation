@@ -26,18 +26,21 @@ class FakeApp:
 class LifespanRun:
     sent: list[dict[str, Any]]
     snapshots: dict[str, list[str]]  # message type -> registry aliases at that moment
+    consumed: int = 0  # messages the app received
 
     @property
     def types(self) -> list[str]:
         return [m["type"] for m in self.sent]
 
 
-async def run_lifespan(app: Any) -> LifespanRun:
-    """Drive `app` through startup then shutdown; snapshot the registry at every message."""
-    events = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+async def run_lifespan(app: Any, *messages: dict[str, Any]) -> LifespanRun:
+    """Drive `app` with `messages` (default: startup then shutdown); snapshot the registry at every
+    message it sends."""
+    events = iter(messages or [{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
     run = LifespanRun([], {})
 
     async def receive() -> dict[str, Any]:
+        run.consumed += 1
         return next(events)
 
     async def send(message: dict[str, Any]) -> None:

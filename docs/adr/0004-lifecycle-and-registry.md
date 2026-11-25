@@ -137,8 +137,8 @@ loop is discarded without `close()`; tests assert the registry is empty after te
 in-flight counters), `connection.engines` (per-ENGINE `prepare` / `probe` / `inject`, imports psycopg
 lazily so `import asyncopation` and MySQL-only installs load no driver), `connection.lifecycle`
 (`configure`, the single open path `ensure_driver`, `setup`, `close`), `connection.asgi.LifespanApp`
-(startup -> `setup()`, failure -> `lifespan.startup.failed`; shutdown -> `close()`; everything else
-is delegated), `asyncopation.apps`. `setup()` is all or nothing for the running loop (a failing alias closes the ones already opened);
+(consumes the `lifespan` scope, never forwarding it to the wrapped app: startup -> `setup()`,
+failure -> `lifespan.startup.failed`; shutdown -> `close()`; everything else is delegated), `asyncopation.apps`. `setup()` is all or nothing for the running loop (a failing alias closes the ones already opened);
 `configure()` is rejected while a driver is open *or opening*; `close()` closes every driver even when
 one close fails (the first error is raised afterwards). Registry bookkeeping assumes one thread per loop; starting
 several loops in several threads before `setup()` is best effort (equal probe results make the

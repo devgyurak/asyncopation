@@ -14,10 +14,7 @@ async def test_startup_opens_the_drivers_and_reports_complete(configured):
     # when
     run = await run_lifespan(app)
     # then
-    assert (run.types[0], run.snapshots["lifespan.startup.complete"]) == (
-        "lifespan.startup.complete",
-        ["default", "other"],
-    )
+    assert run.snapshots["lifespan.startup.complete"] == ["default", "other"]
 
 
 async def test_shutdown_closes_the_drivers_and_reports_complete(configured):
@@ -26,10 +23,7 @@ async def test_shutdown_closes_the_drivers_and_reports_complete(configured):
     # when
     run = await run_lifespan(app)
     # then
-    assert (run.types[1], run.snapshots["lifespan.shutdown.complete"]) == (
-        "lifespan.shutdown.complete",
-        [],
-    )
+    assert run.snapshots["lifespan.shutdown.complete"] == []
 
 
 async def test_lifespan_sends_exactly_startup_then_shutdown_messages(configured):
@@ -48,10 +42,7 @@ async def test_failed_startup_reports_startup_failed_with_the_message(configured
     # when
     run = await run_lifespan(app)
     # then
-    assert (run.types, "boom: open" in run.sent[0]["message"]) == (
-        ["lifespan.startup.failed"],
-        True,
-    )
+    assert "boom: open" in run.sent[0]["message"]
 
 
 async def test_failed_startup_leaves_no_entries(configured):
@@ -114,7 +105,6 @@ async def test_startup_without_configure_reports_startup_failed_naming_the_app(f
     # when
     run = await run_lifespan(app)
     # then
-    assert run.types == ["lifespan.startup.failed"]
     assert "INSTALLED_APPS" in run.sent[0]["message"]
 
 
@@ -136,3 +126,35 @@ async def test_the_wrapped_app_never_receives_the_lifespan_scope(configured):
     await run_lifespan(LifespanApp(inner))
     # then
     assert inner.scope_types == []
+
+
+async def test_an_unknown_lifespan_message_is_ignored_and_the_loop_continues(configured):
+    # given
+    app = LifespanApp(FakeApp())
+    unknown = {"type": "lifespan.unknown"}
+    # when
+    run = await run_lifespan(
+        app, unknown, {"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}
+    )
+    # then
+    assert run.types == ["lifespan.startup.complete", "lifespan.shutdown.complete"]
+
+
+async def test_nothing_is_sent_after_a_failed_startup(configured):
+    # given
+    configured.script.fail_opens = 1
+    app = LifespanApp(FakeApp())
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.failed"]
+
+
+async def test_a_failed_startup_does_not_consume_the_shutdown_message(configured):
+    # given
+    configured.script.fail_opens = 1
+    app = LifespanApp(FakeApp())
+    # when
+    run = await run_lifespan(app, {"type": "lifespan.startup"}, {"type": "lifespan.shutdown"})
+    # then
+    assert run.consumed == 1

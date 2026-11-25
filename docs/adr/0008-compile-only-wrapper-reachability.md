@@ -254,7 +254,7 @@ reused unchanged.
 *Amended 2026-11-24 (#3, PR #45): the table below is updated: the `asgiref.local` row (recorded in the `_connections` reason), the `sql.compiler` row (planned consumer `_django/*`), the `base.base` row (more methods pinned, `ensure_connection` not pinned) and the new `postgresql.operations` (`compose_sql`) row.*
 
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
-(unless marked `ported = true`) and `[[attribute]]` entries never accessed in `src/`, so these enter
+(unless marked `ported = true`; those are checked for a `# Ported from` header in their `used_by` files instead, ADR-0007 Decision 6) and `[[attribute]]` entries never accessed in `src/`, so these enter
 `docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
 in the PR that first uses them (#3 / #6 / Phase 5):
 

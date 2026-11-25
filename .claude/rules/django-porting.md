@@ -24,7 +24,8 @@ paths:
 5. **Import internals only in `asyncopation._django`** and ledger every one in `docs/django-api-ledger.toml` (`module`, `names`,
    `used_by` (the real consumers), `reason`, `verified_against`). The guard rejects unknown internals (A201),
    private Django imports outside `_django` (A203) and stale entries (A202: an `[[internal]]` item not
-   imported under `_django`, an `[[attribute]]` never accessed). Add `signatures = { "Name.method" = "<str(inspect.signature)>" }`
+   imported under `_django`, an `[[attribute]]` never accessed, a `ported` entry whose `used_by` file is missing or has no
+   `# Ported from django/<module path>.py` comment). Add `signatures = { "Name.method" = "<str(inspect.signature)>" }`
    (dotted keys must be quoted) for callables whose signature you depend on, mark code you only port and
    never import (the MySQL backend) `ported = true`, and register every Django private attribute you access
    directly, inside `_django` or not (`qs._fetch_mode`), as an `[[attribute]]` (`owner`, `names`, `used_by`,

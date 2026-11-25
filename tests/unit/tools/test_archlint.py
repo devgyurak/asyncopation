@@ -5,9 +5,11 @@ from tests.support.guards import (
     FETCH_MODE_LEDGER,
     IMPORT_ONLY_LEDGER,
     PORTED_LEDGER,
+    PORTED_PATH,
     PUBLIC_EXTRA_LEDGER,
     SQL_QUERY_LEDGER,
     lint_src_module,
+    stale_codes,
     stale_messages,
 )
 from tools.guards.archlint import Ledger
@@ -223,11 +225,165 @@ def test_third_party_import_under_the_django_package_keeps_its_entry_alive():
     assert stale == []
 
 
-def test_ported_entry_is_never_stale():
+def test_ported_entry_with_a_ported_from_comment_is_not_stale():
+    # given
+    sources = {PORTED_PATH: "# Ported from django/db/backends/mysql/base.py::X @ 6.1.3\nx = 1\n"}
     # when
-    stale = stale_messages({"src/asyncopation/_django/x.py": "x = 1\n"}, PORTED_LEDGER)
+    stale = stale_messages(sources, PORTED_LEDGER)
     # then
     assert stale == []
+
+
+def test_ported_entry_with_a_package_header_is_not_stale():
+    # given
+    ledger = Ledger(
+        public=EMPTY_LEDGER.public,
+        internal=frozenset({("django.db.backends.mysql", "X")}),
+        ported=frozenset({("django.db.backends.mysql", "X")}),
+        ported_used_by=frozenset({("django.db.backends.mysql", PORTED_PATH)}),
+    )
+    sources = {PORTED_PATH: "# Ported from django/db/backends/mysql/__init__.py::X @ 6.1.3\n"}
+    # when
+    stale = stale_messages(sources, ledger)
+    # then
+    assert stale == []
+
+
+def test_ported_entry_whose_used_by_file_is_missing_is_stale():
+    # when
+    stale = stale_messages({"src/asyncopation/query/y.py": "x = 1\n"}, PORTED_LEDGER)
+    # then
+    assert len(stale) == 1
+    assert stale[0].startswith("A202")
+    assert PORTED_PATH in stale[0]
+    assert "does not exist" in stale[0]
+
+
+def test_ported_entry_used_by_a_path_outside_src_is_stale():
+    # given
+    ledger = Ledger(
+        public=EMPTY_LEDGER.public,
+        internal=PORTED_LEDGER.internal,
+        ported=PORTED_LEDGER.ported,
+        ported_used_by=frozenset({("django.db.backends.mysql.base", "tests/support/x.py")}),
+    )
+    sources = {"tests/support/x.py": "# Ported from django/db/backends/mysql/base.py::X\n"}
+    # when
+    stale = stale_messages(sources, ledger)
+    # then
+    assert len(stale) == 1
+    assert "is not a .py file under src/asyncopation/" in stale[0]
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/asyncopation/notes.txt", "src/other/x.py", "src/asyncopation_x/x.py"],
+    ids=["not-python", "other-package", "sibling-prefix"],
+)
+def test_ported_entry_used_by_a_non_package_or_non_python_path_is_stale(path):
+    # given
+    ledger = Ledger(
+        public=EMPTY_LEDGER.public,
+        internal=PORTED_LEDGER.internal,
+        ported=PORTED_LEDGER.ported,
+        ported_used_by=frozenset({("django.db.backends.mysql.base", path)}),
+    )
+    # when
+    stale = stale_messages({path: "# Ported from django/db/backends/mysql/base.py\n"}, ledger)
+    # then
+    assert len(stale) == 1
+    assert "is not a .py file under src/asyncopation/" in stale[0]
+
+
+def test_ported_entry_with_several_used_by_files_reports_each_failing_one():
+    # given
+    base = "django.db.backends.mysql.base"
+    ledger = Ledger(
+        public=EMPTY_LEDGER.public,
+        internal=PORTED_LEDGER.internal,
+        ported=PORTED_LEDGER.ported,
+        ported_used_by=frozenset(
+            {
+                (base, PORTED_PATH),
+                (base, "src/asyncopation/_django/y.py"),
+                (base, "src/asyncopation/_django/z.py"),
+            }
+        ),
+    )
+    sources = {
+        PORTED_PATH: "# Ported from django/db/backends/mysql/base.py\n",
+        "src/asyncopation/_django/y.py": "y = 1\n",
+    }
+    # when
+    stale = stale_messages(sources, ledger)
+    # then
+    assert len(stale) == 2
+    assert "_django/y.py" in stale[0]
+    assert "_django/z.py" in stale[1]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x = 1  # Ported from django/db/backends/mysql/base.py::X @ 6.1.3\n",
+        "# Ported from django/db/backends/mysql/base.py.\n",
+        "#Ported from django/db/backends/mysql/base.py\n",
+        "# Ported from django/db/backends/mysql/base.py:42\n",
+    ],
+    ids=["trailing-comment", "sentence-end", "no-space-after-hash", "line-number"],
+)
+def test_ported_header_variants_that_name_the_django_file_are_accepted(source):
+    # when
+    stale = stale_messages({PORTED_PATH: source}, PORTED_LEDGER)
+    # then
+    assert stale == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "x = 1\n",
+        "# Ported from django/db/utils.py::X @ 6.1.3\n",
+        "# Ported from django/db/backends/\n# mysql/base.py::X\n",
+        "# Ported from django/db/backends/postgresql/base.py::X,\n# django/db/backends/mysql/base.py\n",
+        '"""Ported from django/db/backends/mysql/base.py."""\n',
+        'x = "# Ported from django/db/backends/mysql/base.py"\n',
+        "# ported from django/db/backends/mysql/base.py\n",
+        "# Ported from django/db/backends/mysql/base.pyc\n",
+        "# Ported from django/db/backends/mysql/base.py-x\n",
+    ],
+    ids=[
+        "no-header",
+        "other-module",
+        "path-split-over-lines",
+        "file-name-only-on-a-continuation-line",
+        "docstring",
+        "string-literal",
+        "lowercase",
+        "longer-file-name",
+        "hyphenated-file-name",
+    ],
+)
+def test_ported_entry_without_a_matching_ported_from_comment_is_stale(source):
+    # when
+    stale = stale_messages({PORTED_PATH: source}, PORTED_LEDGER)
+    # then
+    assert len(stale) == 1
+    assert stale[0].startswith("A202")
+    assert "django/db/backends/mysql/base.py" in stale[0]
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["def (\n# Ported from django/db/backends/mysql/base.py\n", "x = (\n"],
+    ids=["unparsable-with-comment", "unterminated-bracket"],
+)
+def test_ported_check_survives_source_that_does_not_tokenize(source):
+    # when
+    stale = stale_messages({PORTED_PATH: source}, PORTED_LEDGER)
+    # then
+    assert len(stale) == 1
+    assert stale_codes(stale) == {"A202"}
 
 
 def test_unparsable_source_is_ignored_by_the_stale_check():

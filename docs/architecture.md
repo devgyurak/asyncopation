@@ -58,8 +58,11 @@ behind these decisions: [design/software-architecture.md](design/software-archit
 ## Invariants
 
 1. No thread hops: no `sync_to_async`, threads or executors in `src/`.
-2. No Django sync connection/transaction machinery in `src/`. The one exception is the synchronous
-   `compile_scope` swap of `connections[alias]` in `_django.connections` (ADR-0008; no `await` inside).
+2. No Django sync connection/transaction machinery in `src/`. There are three exceptions: the
+   synchronous `compile_scope` swap of `connections[alias]` in `_django.connections` (ADR-0008; no
+   `await` inside), the read-only `configured_databases()` in the same module (ADR-0008 D6, #5a),
+   and the re-export of Django's `TransactionManagementError` in `_django/transaction.py`
+   (ADR-0007 D5, #5b).
 3. Only `drivers/` imports psycopg / asyncmy.
 4. `compile/` never performs I/O; server info is injected by `connection/`. The compile-only wrapper is
    visible through `connections[alias]` only inside a synchronous `compile_scope` (ADR-0008).

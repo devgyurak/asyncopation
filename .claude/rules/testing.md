@@ -43,6 +43,17 @@ comprehensions are forbidden anywhere in a test module - no exceptions, no suppr
 | `tests/e2e/` | `make db-up` | boots uvicorn on the harness site; auto-marked `e2e` |
 | `tests/support/` | - | the only place for helper logic; has its own unit tests when non-trivial |
 
+## Markers
+`integration` and `e2e` are applied automatically by directory. `django_pin` is applied by hand to
+the two tests that assert the *pinned* Django version
+(`test_installed_django_satisfies_the_pyproject_pin`, `test_django_classifiers_match_the_pyproject_pin`
+in `tests/unit/django_drift/test_ledger_drift.py`); the `django-main` canary deselects them
+(`-m "not django_pin"`) because they must fail on Django main. Do not put it on ledger or
+dependency drift checks: those are the canary's signal. Markers must be registered in
+`pyproject.toml` (`--strict-markers`). Marker selection is verified by
+`tests/unit/django_drift/test_pin_marker.py`, which collects in a subprocess (bounded by a timeout);
+update `PIN_TESTS` in `tests/support/pin_marker.py` when a test gains or loses the marker.
+
 ## Database isolation
 Async connections cannot see the sync test transaction, so pytest-django's default
 `django_db` rollback isolation does **not** apply to code under test.

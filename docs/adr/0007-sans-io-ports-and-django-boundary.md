@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`_django.transaction` re-exports `TransactionManagementError`, the one name of the banned `django.db.transaction` that guard A101 lets through, only in `_django/transaction.py`); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#47) - Validation (the `_django` drift test also runs in the `django-main` canary job, minus the `django_pin` tests); approved by: **pending maintainer (@devgyurak) approval in the PR review**; architect verdict: AMEND OK (architect review 2026-11-25)
 
 ## Context
 Plan §4.4 requires rewriting Django code that interleaves I/O and logic as async:
@@ -96,3 +97,4 @@ differential tests of the core itself. - generator protocol is less familiar.
   `prefetch_related_objects` / `Collector` results; CASCADE deletes children; a custom `on_delete`
   callable raises.
 - unit: drift test over every `_django` symbol on the pinned Django version.
+  *Amended 2026-11-25 (#47; pending maintainer approval): the same suite (`tests/unit/django_drift`) also runs in the CI `django-main` canary job against Django main with `-m "not django_pin"`. The two tests marked `django_pin` assert the pinned minor itself and run only on the pinned version. The canary is `continue-on-error`: an early warning of upstream drift, not a gate.*

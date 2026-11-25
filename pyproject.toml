@@ -105,6 +105,7 @@ timeout_method = "signal"
 markers = [
     "integration: needs a real database (auto-applied under tests/integration)",
     "e2e: boots a real server process (auto-applied under tests/e2e)",
+    "django_pin: asserts the pinned Django version; deselected in the django-main canary",
 ]
 filterwarnings = ["error", "ignore::DeprecationWarning:asyncmy.*"]
 

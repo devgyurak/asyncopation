@@ -4,7 +4,8 @@
 # every import outside [public] may only live in src/asyncopation/_django/ (code A203).
 #   [public]      modules we treat as stable public API - no entry needed per symbol.
 #   [[internal]]  anything else: private helpers, internal modules, ported code we depend on.
-#                 These are what break when Django changes; the CI "django-main canary" job and
+#                 These are what break when Django changes; the CI "django-main canary" job (it runs
+#                 `tests/unit/django_drift` without the `django_pin` tests, then the integration suite) and
 #                 the `verified_against` field tell us when to re-check them. Optional
 #                 `signatures = { "Query.get_compiler" = "<str(inspect.signature(obj))>" }` pins
 #                 callables; keys are dotted paths below the module and MUST be quoted when dotted;

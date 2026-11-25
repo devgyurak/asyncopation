@@ -44,6 +44,7 @@ def test_the_ledger_records_asgiref_as_a_dependency():
     assert "asgiref" in packages
 
 
+@pytest.mark.django_pin
 def test_installed_django_satisfies_the_pyproject_pin():
     # given
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -53,6 +54,7 @@ def test_installed_django_satisfies_the_pyproject_pin():
     assert problem is None
 
 
+@pytest.mark.django_pin
 def test_django_classifiers_match_the_pyproject_pin():
     # given
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

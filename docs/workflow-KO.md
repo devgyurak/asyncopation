@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=853d520ae4fb -->
+<!-- i18n: source=docs/workflow.md source-sha256=f85ecf8dff4e -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -97,6 +97,7 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
 | 정합성 | 3개 백엔드에서 pytest 차등 테스트, `compose_sql`은 순수 Python psycopg로도 | `make test-int`, `make test-compose-python`, CI 매트릭스 |
+| 업스트림 drift | `tests/unit/django_drift` (ledger, asgiref 핀) | `make test-unit`, CI; `django-main` canary job이 `django_pin` 테스트를 제외하고 이를 실행하고, `tests/integration`도 Django main에서 실행 |
 | E2E | uvicorn + httpx | `make test-e2e`, CI |
 | 성능 | micro + k6 하네스 | `make bench-micro` / `make bench`, CI (수동 / 야간) |
 | 브랜치 흐름 | GitHub ruleset + `branch-policy.yml` + `CODEOWNERS` | `develop`, `main`으로의 모든 푸시 / PR |

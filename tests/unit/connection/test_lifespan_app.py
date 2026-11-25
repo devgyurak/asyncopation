@@ -2,6 +2,7 @@
 
 import pytest
 
+from asyncopation.connection import configure
 from asyncopation.connection.asgi import LifespanApp
 from tests.support.lifecycle.asgi import FakeApp, call_with_scope, run_lifespan
 from tests.support.lifecycle.logs import capture_logs, exception_logs
@@ -65,8 +66,6 @@ async def test_failed_startup_leaves_no_entries(configured):
 
 async def test_unsupported_engine_is_skipped_by_the_default_startup(fake):
     # given
-    from asyncopation.connection import configure
-
     fake.use_unsupported_engine("default")
     configure()
     app = LifespanApp(FakeApp())

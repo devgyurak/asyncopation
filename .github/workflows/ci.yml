@@ -79,6 +79,7 @@ jobs:
       - run: uv pip install "django @ git+https://github.com/django/django@main"
       # --no-sync on every uv run: a plain `uv run` (or a make target) would re-sync the locked Django.
       - run: uv run --no-sync pytest tests/unit/django_drift -m "not django_pin"
+      # The steps below run even when the drift step fails, so integration results are not hidden.
       - if: ${{ !cancelled() }}
         run: make db-up SERVICES=postgres
       - if: ${{ !cancelled() }}

@@ -45,7 +45,11 @@ def collected_test_names(marker_expression: str) -> frozenset[str]:
 def canary_drift_command() -> str:
     """The ci.yml step of the django-main canary that runs the drift tests."""
     lines = CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
-    return next(line.strip() for line in lines if f"pytest {DRIFT_DIR}" in line)
+    matches = [line.strip() for line in lines if f"pytest {DRIFT_DIR}" in line]
+    if len(matches) != 1:
+        message = f"expected exactly one drift step in {CI_WORKFLOW.name}, found {len(matches)}"
+        raise RuntimeError(message)
+    return matches[0]
 
 
 def _collect(marker_expression: str) -> subprocess.CompletedProcess[str]:

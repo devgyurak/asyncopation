@@ -14,7 +14,8 @@
 #                 not allowed, A202 checks each `used_by` file instead of imports (it must be a .py under
 #                 src/asyncopation/, exist, and carry a `# Ported from django/<module path>.py`
 #                 comment - `__init__.py` for a package; not a string or docstring), the drift test
-#                 reads the module source instead and importing it is still an A201. `"*"` is not allowed: name what was ported.
+#                 reads the module source instead and importing it is still an A201.
+#                 `"*"` is not allowed: name what was ported.
 #   [[attribute]] every private attribute we access directly, inside _django or not (`owner` is
 #                 the dotted class path, e.g. qs._fetch_mode; `signatures` is allowed for methods).
 #                 The guard cannot find such accesses; arch review does. Register them so the

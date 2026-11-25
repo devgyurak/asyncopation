@@ -3,7 +3,7 @@
 Ledger checks: docs/django-api-ledger.toml against the installed Django. Pin checks: the
 ``django`` requirement and ``Framework :: Django :: X.Y`` classifiers in pyproject.toml against
 each other and against the installed Django. Dependency checks: a ``[[dependency]]`` ledger row
-(a third-party package such as asgiref) against the installed version and the pyproject floor.
+(a third-party package such as asgiref) against the installed version and the pyproject requirement.
 
 The pin checks and ledger-entry checks return a human-readable problem (None = no drift) instead
 of raising, so tests stay free of control flow (``raw_entry_count`` is a plain count and may raise
@@ -122,6 +122,11 @@ def ledger_pin_problem(
         package,
         subject=f"the ledger's {package} {verified}",
     )
+
+
+def packages_of(versions: frozenset[tuple[str, str]]) -> list[str]:
+    """The sorted package names of ledger ``(package, version)`` pairs."""
+    return sorted(package for package, _ in versions)
 
 
 def used_by_problem(root: Path, path: str) -> str | None:

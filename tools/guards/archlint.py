@@ -32,9 +32,10 @@ Codes
           ``asyncopation/_django/`` (ADR-0007 Decision 5); independent of A201
 
 A ledger [[dependency]] row (a third-party package such as asgiref whose run-time behaviour we
-rely on without importing it) is parsed and shape-checked here (exact ``X.Y.Z`` ``verified_against``,
-one row per package) but is not an A201/A202 subject: nothing is imported, so nothing can be
-stale; the drift test checks names, the installed version (must equal) and the pyproject requirement.
+rely on without importing it) is parsed and shape-checked here (exact ``X.Y.Z``
+``verified_against``, one row per package) but is not an A201/A202 subject: nothing is imported,
+so nothing can be stale; the drift test checks names, the installed version (must equal) and the
+pyproject requirement.
 
 Private Django attributes accessed directly (``qs._fetch_mode``) are not detected by a guard -
 register them as ledger [[attribute]] entries; the drift test protects them and arch review
@@ -250,10 +251,10 @@ def _dependencies(
     would flag every row stale. ``tests/unit/django_drift`` owns the checks instead (names still
     resolve, the ``used_by`` files exist, installed version equals ``verified_against``, the
     pyproject requirement admits it; a row whose package ``src/`` starts importing belongs in
-    ``[[internal]]``, which review catches). Hence ``verified_against`` is an exact ``X.Y.Z`` release (compared for equality), ``package`` is the
-    lower-case distribution name that is also the import name (so rows cannot disagree with the
-    metadata lookup or the name check), the package has one row, and ``signatures`` / ``ported``
-    do not exist for this table.
+    ``[[internal]]``, which review catches). Hence ``verified_against`` is an exact ``X.Y.Z``
+    release (compared for equality), ``package`` is the lower-case distribution name that is
+    also the import name (so rows cannot disagree with the metadata lookup or the name check),
+    the package has one row, and ``signatures`` / ``ported`` do not exist for this table.
     """
     names_found: set[tuple[str, str]] = set()
     versions: dict[str, str] = {}

@@ -61,6 +61,13 @@ def test_dependency_rows_are_parsed_into_names_and_versions():
     assert ledger.dependency_versions == {("asgiref", "3.13.0")}
 
 
+def test_dependency_used_by_paths_are_parsed_per_package():
+    # when
+    ledger = Ledger.from_toml(BASE + DEP)
+    # then
+    assert ledger.dependency_used_by == {("asgiref", "src/asyncopation/_django/connections.py")}
+
+
 def test_dependency_rows_are_never_import_coverage_for_the_guards():
     # when
     ledger = Ledger.from_toml(BASE + DEP)

@@ -243,6 +243,6 @@ behaviour, pinned by tests/unit/django_drift/test_asgiref_local_drift.py and \
 test_connection_handler_drift.py. The installed version must EQUAL `verified_against`. \
 Threads: a thread-critical `Local` keeps one contextvar per thread, so a context a thread \
 inherited (`copy_context().run`, or Python 3.14's `thread_inherit_context`) is not read; \
-the pins cover that case on 3.13 too (the thread-id tagging of `_Storage` belongs to the \
-non-critical `Local`)"""
+the pins cover a copied context on 3.13 too (asgiref's thread-id tag on `_Storage` is moot \
+for a thread-critical `Local`; real 3.14 inheritance itself is not exercised on 3.13)"""
 verified_against = "3.13.0"

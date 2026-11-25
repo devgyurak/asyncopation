@@ -90,15 +90,23 @@ def build_driver(
     options: dict[str, Any] | None = None,
     pool: dict[str, Any] | None = None,
     overrides: dict[str, Any] | None = None,
+    register_contrib_types: bool | None = None,
 ) -> Any:
-    """A `PostgresDriver` that is not opened yet."""
+    """A `PostgresDriver` that is not opened yet.
+
+    `register_contrib_types=None` keeps the driver's default (off); `True` / `False` pass the
+    keyword explicitly (what `engines` derives from `django.contrib.postgres` being installed).
+    """
     from asyncopation.drivers.postgresql import PostgresDriver
 
     settings_dict = pg_settings(
         options=options, pool=pool, db_time_zone=case.db_time_zone, overrides=overrides
     )
+    extra = (
+        {} if register_contrib_types is None else {"register_contrib_types": register_contrib_types}
+    )
     return PostgresDriver.from_settings(
-        "default", settings_dict, use_tz=case.use_tz, time_zone=case.settings_time_zone
+        "default", settings_dict, use_tz=case.use_tz, time_zone=case.settings_time_zone, **extra
     )
 
 
@@ -109,8 +117,15 @@ async def open_driver(
     options: dict[str, Any] | None = None,
     pool: dict[str, Any] | None = None,
     overrides: dict[str, Any] | None = None,
+    register_contrib_types: bool | None = None,
 ) -> AsyncGenerator[Any]:
-    driver = build_driver(case=case, options=options, pool=pool, overrides=overrides)
+    driver = build_driver(
+        case=case,
+        options=options,
+        pool=pool,
+        overrides=overrides,
+        register_contrib_types=register_contrib_types,
+    )
     await driver.open()
     try:
         yield driver

@@ -15,6 +15,14 @@ from tests.support.drivers import (
     drop_scratch_table,
     open_driver,
 )
+from tests.support.drivers.contrib import (
+    create_bare_database,
+    create_hstore_table,
+    create_multi_schema_database,
+    drop_bare_database,
+    drop_hstore_table,
+    drop_multi_schema_database,
+)
 
 
 @pytest.fixture(
@@ -97,3 +105,27 @@ async def deferred(django_db_setup: None) -> AsyncIterator[str]:
     table = await create_deferred_table()
     yield table
     await drop_deferred_table()
+
+
+@pytest.fixture
+async def hstore_table(django_db_setup: None) -> AsyncIterator[str]:
+    """A scratch table with hstore and hstore[] columns (the extension is in the test database)."""
+    table = await create_hstore_table()
+    yield table
+    await drop_hstore_table()
+
+
+@pytest.fixture
+async def bare_database(django_db_setup: None) -> AsyncIterator[str]:
+    """A database cloned from template0: no hstore, no citext."""
+    name = await create_bare_database()
+    yield name
+    await drop_bare_database()
+
+
+@pytest.fixture
+async def multi_schema_database(django_db_setup: None) -> AsyncIterator[str]:
+    """hstore in a schema off the search_path plus a same-named domain in another schema."""
+    name = await create_multi_schema_database()
+    yield name
+    await drop_multi_schema_database()

@@ -108,7 +108,7 @@ used_by = [
     "src/asyncopation/drivers/postgresql/connection.py",
     "src/asyncopation/drivers/postgresql/driver.py",
 ]
-reason = "Ported: get_connection_params (settings.build_config), _configure_timezone/_configure_role/get_new_connection (driver._configure), create_cursor and ServerSideCursor (connection.py)"
+reason = "Ported: get_connection_params (settings.build_config), _configure_timezone/_configure_role/get_new_connection (driver._configure_session), create_cursor and ServerSideCursor (connection.py)"
 verified_against = "6.1.3"
 ported = true
 
@@ -124,7 +124,15 @@ used_by = [
     "src/asyncopation/drivers/postgresql/settings.py",
     "src/asyncopation/drivers/postgresql/driver.py",
 ]
-reason = "Ported: quote_name for savepoint ids (connection._quote; compared with Django in test_postgresql_ports.py::test_quote_matches_django_quote_name); max_name_length (the 63-character NAME limit in settings.build_config; covered by test_build_config.py, not compared with Django); compose_sql (SET ROLE literal via AsyncClientCursor.mogrify in driver._configure; no direct comparison test - only the integration test test_assume_role_option_matches_sync_backend exercises its effect)"
+reason = "Ported: quote_name for savepoint ids (connection._quote; compared with Django in test_postgresql_ports.py::test_quote_matches_django_quote_name); max_name_length (the 63-character NAME limit in settings.build_config; covered by test_build_config.py, not compared with Django); compose_sql (SET ROLE literal via AsyncClientCursor.mogrify in driver._configure_session; no direct comparison test - only the integration test test_assume_role_option_matches_sync_backend exercises its effect)"
+verified_against = "6.1.3"
+ported = true
+
+[[internal]]
+module = "django.contrib.postgres.signals"
+names = ["register_type_handlers", "get_type_oids", "get_hstore_oids", "get_citext_oids"]
+used_by = ["src/asyncopation/drivers/postgresql/contrib_types.py"]
+reason = "Ported: the hstore/citext handler registration of `contrib.postgres` (contrib_types.register_contrib_types) and its pg_type OID query (contrib_types.fetch_contrib_oids, awaited and run once per open() instead of Django's per-process lru_cache), so `django.contrib.postgres`'s sync `connection_created` handler is never needed (ADR-0003 Decision 2); get_hstore_oids/get_citext_oids are the lru_cached entry points replaced by the per-open() fetch; compared with Django by tests/integration/drivers/test_postgresql_contrib_types.py"
 verified_against = "6.1.3"
 ported = true
 

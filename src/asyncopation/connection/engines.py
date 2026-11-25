@@ -33,6 +33,7 @@ class Engine:
 
 
 def _postgresql() -> Engine:
+    from asyncopation._django.apps import is_installed
     from asyncopation.compile.postgresql import wrapper_for
     from asyncopation.compile.server_info import PostgreSQLServerInfo
     from asyncopation.drivers.postgresql import PostgresDriver
@@ -41,7 +42,15 @@ def _postgresql() -> Engine:
     def prepare(
         alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
     ) -> Callable[[], AsyncDriver]:
-        config = build_config(alias, settings_dict, use_tz=use_tz, time_zone=time_zone)
+        # Like Django, hstore/citext handlers exist only with django.contrib.postgres installed;
+        # resolved now (ADR-0003 Decision 2), so a later INSTALLED_APPS change needs configure().
+        config = build_config(
+            alias,
+            settings_dict,
+            use_tz=use_tz,
+            time_zone=time_zone,
+            register_contrib_types=is_installed("django.contrib.postgres"),
+        )
         return lambda: PostgresDriver(config)
 
     def probe(driver: AsyncDriver) -> ServerInfo:

@@ -222,7 +222,7 @@ async def test_hstore_reads_as_dict_from_every_pool_connection_at_once(readonly_
 
 async def test_hstore_reads_as_dict_inside_a_transaction_and_after_rollback(readonly_db, binding):
     # when
-    values = await hstore_in_transaction_and_after_rollback()
+    values = await hstore_in_transaction_and_after_rollback(binding.options)
     # then
     assert values == [{"a": "1"}, {"a": "1"}]
 

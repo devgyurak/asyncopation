@@ -459,9 +459,9 @@ async def concurrent_hstore_reads(count: int) -> list[Any]:
         return list(await asyncio.gather(*(read(driver) for _ in range(count))))
 
 
-async def hstore_in_transaction_and_after_rollback() -> list[Any]:
+async def hstore_in_transaction_and_after_rollback(options: dict[str, Any]) -> list[Any]:
     async with (
-        open_driver(register_contrib_types=True) as driver,
+        open_driver(options=options, register_contrib_types=True) as driver,
         driver.connection() as conn,
     ):
         await conn.begin()

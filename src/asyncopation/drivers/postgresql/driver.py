@@ -117,7 +117,8 @@ class PostgresDriver:
     async def _configure(self, raw: psycopg.AsyncConnection) -> None:
         """Per physical connection; port of Django's ``get_new_connection`` + ``_configure_*``."""
         # Ported from django/db/backends/postgresql/base.py::_configure_timezone,
-        # _configure_role and get_new_connection, and operations.py::compose_sql @ 6.1.3
+        # _configure_role and get_new_connection @ 6.1.3
+        # Ported from django/db/backends/postgresql/operations.py::compose_sql @ 6.1.3
         # Changes: awaited calls; the connection is in autocommit mode so nothing is committed.
         config = self._config
         if config.isolation_level is not None:

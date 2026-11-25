@@ -5,6 +5,7 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 ## [Unreleased]
 
 ### Added
+- `pytest-timeout` (dev dependency): every test has a 120 s timeout so a hang fails the test instead of slowing the run.
 - Phase 0: agentic workflow (Claude Code / Codex / Pi), guards, differential/e2e/benchmark harness.
 - `asyncopation.drivers` (internal, experimental; not a stable API): `AsyncDriver` / `AsyncDbConnection` protocols and the frozen `Capabilities`, `ExecResult` and `PoolStats` value types (#2).
 - PostgreSQL driver on psycopg3 (`PostgresDriver`) (#2):

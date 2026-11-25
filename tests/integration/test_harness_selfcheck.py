@@ -7,12 +7,30 @@ before any Asyncopation code exists; if they fail, the harness - not the library
 from functools import partial
 
 import pytest
+from django.core.exceptions import FieldError
+from django.db.models import FETCH_ONE, FETCH_PEERS  # ty: ignore[missing-module-member] - missing from django-types
 from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
+from tests.support.deferred_queries import (
+    count_deferred_markers,
+    deferred_field_names,
+    evaluate_and_snapshot_query_counts,
+)
+from tests.support.differential import error_name
 from tests.support.snapshot import annotation_names, related_snapshot, snapshot
-from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
+from tests.support.strategies import (
+    QuerySetSpec,
+    annotated_spec,
+    build_queryset,
+    deferred_spec,
+    expected_error,
+    filtered_spec,
+    is_valid_deferral,
+    queryset_specs,
+    valid_deferred_specs,
+)
 
 
 @pytest.mark.parametrize(("model_name", "expected"), list(EXPECTED_COUNTS.items()))
@@ -130,7 +148,7 @@ async def test_reference_random_querysets_match_sync(
     # when
     result = await reference_differential(build)
     # then
-    assert result.sync_outcome.error is None
+    assert result.sync_outcome.error == expected_error(spec)
     assert result.async_outcome == result.sync_outcome
 
 
@@ -153,6 +171,20 @@ async def test_reference_random_querysets_match_sync(
             annotated_spec(("n_tags", "author_pages", "length"), ("-author_pages",)),
             id="mixed-aggregates",
         ),
+        pytest.param(annotated_spec(("n_editions",), ("n_editions",)), id="editions-count-asc"),
+        pytest.param(
+            annotated_spec(("n_editions",), ("-n_editions", "pk")), id="editions-count-desc"
+        ),
+        pytest.param(
+            annotated_spec(("n_tags", "n_editions"), ("-n_editions", "-n_tags")),
+            id="tags-and-editions-multiply-rows",
+        ),
+        pytest.param(
+            filtered_spec(
+                (("editions__released__isnull", False),), ("n_editions",), ("n_editions",)
+            ),
+            id="editions-filter-shares-count-join",
+        ),
     ],
 )
 async def test_reference_annotated_querysets_match_sync(
@@ -166,6 +198,20 @@ async def test_reference_annotated_querysets_match_sync(
     assert result.sync_outcome.error is None
     assert result.async_outcome == result.sync_outcome
     assert annotation_names(result.sync_outcome.rows[0]) == spec.annotations
+
+
+@pytest.mark.parametrize("released_is_null", [True, False], ids=["null", "set"])
+async def test_reference_editions_filter_matches_sync(
+    readonly_db, reference_differential, released_is_null
+):
+    # given
+    spec = filtered_spec((("editions__released__isnull", released_is_null),))
+    # when
+    result = await reference_differential(partial(build_queryset, spec))
+    # then
+    assert result.sync_outcome.error is None
+    assert len(result.sync_outcome.rows) > 0
+    assert result.async_outcome == result.sync_outcome
 
 
 @pytest.mark.xfail(strict=True, reason="Phase 1: asyncopation.aq() / alist() not implemented yet")
@@ -190,3 +236,216 @@ async def test_select_related_snapshot_contains_nested_related_objects(readonly_
     # then
     assert publisher is not None
     assert publisher[0] == "catalog.Publisher"
+
+
+DEFERRED_BUILDS = [
+    pytest.param(lambda: Book.objects.only("title").order_by("pk"), id="only"),
+    pytest.param(lambda: Book.objects.defer("metadata").order_by("pk"), id="defer"),
+    pytest.param(
+        lambda: Book.objects.select_related("author").only("title", "author__name").order_by("pk"),
+        id="only-select-related",
+    ),
+    pytest.param(lambda: BookEdition.objects.only("number").order_by("pk"), id="only-composite-pk"),
+    pytest.param(
+        partial(build_queryset, deferred_spec("only", ("title",), annotations=("n_tags",))),
+        id="only-with-annotation",
+    ),
+    pytest.param(
+        partial(build_queryset, deferred_spec("defer", ("pages",), order_by=("-pages",))),
+        id="defer-the-ordering-field",
+    ),
+    pytest.param(
+        lambda: Book.objects.only("title", "price").defer("price").order_by("pk"),
+        id="only-then-defer",
+    ),
+    pytest.param(
+        partial(build_queryset, deferred_spec("only", ("title",), annotations=("n_editions",))),
+        id="only-with-editions-count",
+    ),
+    pytest.param(
+        partial(
+            build_queryset,
+            deferred_spec("only", ("title", "author__name"), select_related=("author",)),
+        ),
+        id="spec-only-select-related",
+    ),
+    pytest.param(
+        partial(
+            build_queryset,
+            deferred_spec(
+                "defer", ("author__email", "price"), select_related=("author", "author__profile")
+            ),
+        ),
+        id="spec-defer-related-field",
+    ),
+    pytest.param(
+        partial(
+            build_queryset,
+            deferred_spec(
+                "only",
+                ("title", "author__name", "author__publisher__country"),
+                select_related=("author", "author__publisher"),
+            ),
+        ),
+        id="spec-only-nested-select-related",
+    ),
+]
+
+
+@pytest.mark.parametrize("build", DEFERRED_BUILDS)
+async def test_reference_deferred_querysets_match_sync(readonly_db, reference_differential, build):
+    # when
+    result = await reference_differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize("fetch_mode", [FETCH_ONE, FETCH_PEERS], ids=["fetch-one", "fetch-peers"])
+@pytest.mark.parametrize("build", DEFERRED_BUILDS)
+def test_snapshot_of_deferred_querysets_runs_no_extra_query(readonly_db, build, fetch_mode):
+    # when
+    rows, evaluated, snapshotted = evaluate_and_snapshot_query_counts(build, fetch_mode)
+    # then
+    assert (rows > 0, evaluated, snapshotted) == (True, 1, 0)
+
+
+@pytest.mark.parametrize("build", DEFERRED_BUILDS)
+def test_snapshot_of_deferred_querysets_marks_deferred_fields(readonly_db, build):
+    # when
+    markers = count_deferred_markers(build)
+    # then
+    assert markers > 0
+
+
+VALUES_OF_DEFERRED = [
+    pytest.param(
+        lambda: Book.objects.only("title").values("pk", "title").order_by("pk"), id="only-values"
+    ),
+    pytest.param(
+        lambda: Book.objects.defer("metadata").values_list("pk", "metadata").order_by("pk"),
+        id="defer-values-list",
+    ),
+]
+
+
+@pytest.mark.parametrize("build", VALUES_OF_DEFERRED)
+async def test_reference_values_ignore_deferred_fields(readonly_db, reference_differential, build):
+    # when
+    result = await reference_differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize("build", VALUES_OF_DEFERRED)
+def test_values_of_deferred_querysets_carry_no_deferred_marker(readonly_db, build):
+    # when
+    markers = count_deferred_markers(build)
+    # then
+    assert markers == 0
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param(
+            deferred_spec("defer", ("author",), select_related=("author",)), id="defer-traversed-fk"
+        ),
+        pytest.param(
+            deferred_spec("only", ("title",), select_related=("author",)),
+            id="only-misses-traversed-fk",
+        ),
+    ],
+)
+async def test_reference_deferred_traversed_relation_raises_field_error_on_both_sides(
+    readonly_db, reference_differential, spec
+):
+    # when
+    result = await reference_differential(partial(build_queryset, spec))
+    # then
+    assert not is_valid_deferral(spec)
+    assert result.sync_outcome.error == error_name(FieldError())
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize("fetch_mode", [FETCH_ONE, FETCH_PEERS], ids=["fetch-one", "fetch-peers"])
+@given(spec=valid_deferred_specs())
+def test_snapshot_of_generated_deferred_querysets_runs_no_extra_query(
+    readonly_db, spec: QuerySetSpec, fetch_mode
+):
+    # when
+    _rows, evaluated, snapshotted = evaluate_and_snapshot_query_counts(
+        partial(build_queryset, spec), fetch_mode
+    )
+    # then
+    # an empty window or a contradictory filter compiles to no query at all
+    assert (evaluated <= 1, snapshotted) == (True, 0)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        pytest.param(
+            deferred_spec(
+                "only", ("author__name",), select_related=("author", "author__publisher")
+            ),
+            id="only-misses-nested-publisher",
+        ),
+        pytest.param(
+            deferred_spec("defer", ("author__profile",), select_related=("author__profile",)),
+            id="defer-traversed-nested-one-to-one",
+        ),
+        pytest.param(
+            deferred_spec("defer", ("author", "author__name"), select_related=("author",)),
+            id="defer-fk-with-its-field-is-valid",
+        ),
+        pytest.param(
+            deferred_spec("defer", ("author",), select_related=("author__profile",)),
+            id="defer-implicitly-traversed-parent",
+        ),
+        pytest.param(
+            deferred_spec(
+                "only",
+                ("author__name", "author__publisher__country"),
+                select_related=("author", "author__publisher"),
+            ),
+            id="only-reaches-every-traversed-path",
+        ),
+    ],
+)
+async def test_reference_deferral_outcome_follows_the_validity_rule(
+    readonly_db, reference_differential, spec
+):
+    # when
+    result = await reference_differential(partial(build_queryset, spec))
+    # then
+    assert result.sync_outcome.error == expected_error(spec)
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize(
+    ("build", "expected"),
+    [
+        pytest.param(
+            lambda: Book.objects.defer("metadata").order_by("pk"),
+            {"metadata"},
+            id="defer-one",
+        ),
+        pytest.param(
+            partial(build_queryset, deferred_spec("defer", ("pages",), order_by=("-pages",))),
+            {"pages"},
+            id="defer-the-ordering-field",
+        ),
+        pytest.param(
+            lambda: Book.objects.only("title", "price").defer("price").order_by("pk"),
+            {"author_id", "pages", "published", "published_at", "metadata", "price"},
+            id="only-then-defer",
+        ),
+    ],
+)
+def test_deferred_querysets_defer_exactly_the_requested_fields(readonly_db, build, expected):
+    # when
+    names = deferred_field_names(build)
+    # then
+    assert names == expected

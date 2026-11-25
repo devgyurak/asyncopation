@@ -23,7 +23,11 @@ Codes
     A201  Django import not covered by docs/django-api-ledger.toml
     A202  stale ledger entry (full scans only): an [[internal]] item (not marked ``ported``)
           not imported under ``asyncopation/_django/``, or an [[attribute]] name never accessed
-          as ``.name`` in src
+          as ``.name`` in src; a ``ported`` item is checked per ``used_by`` file instead - it must
+          be a ``.py`` under ``src/asyncopation/``, exist in src and hold a *comment* (not a
+          string or docstring) ``Ported from django/<module path>.py`` (``.../__init__.py`` for
+          a package; the path directly after ``Ported from``; version and names are not compared,
+          the drift test owns them)
     A203  private Django import (module not in the ledger's [public] list) outside
           ``asyncopation/_django/`` (ADR-0007 Decision 5); independent of A201
 
@@ -61,6 +65,9 @@ from __future__ import annotations
 import ast
 import functools
 import importlib.util
+import io
+import re
+import tokenize
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -139,6 +146,9 @@ class Ledger:
     ported: frozenset[tuple[str, str]] = field(  # (module, dotted name): never imported
         default_factory=frozenset
     )
+    ported_used_by: frozenset[tuple[str, str]] = field(  # (module, used_by path) of ported entries
+        default_factory=frozenset
+    )
 
     @classmethod
     def load(cls) -> Ledger:
@@ -158,6 +168,7 @@ class Ledger:
         internal: set[tuple[str, str]] = set()
         signatures: set[tuple[str, str, str]] = set()
         ported: set[tuple[str, str]] = set()
+        ported_used_by: set[tuple[str, str]] = set()
         for entry in _tables(data, "internal"):
             _check_keys(entry, _INTERNAL_KEYS, "[[internal]]")
             module = _require(entry, "[[internal]]", "module", str)
@@ -176,6 +187,8 @@ class Ledger:
                     ported.add((module, name))
             signatures |= _signatures(entry, module, names, "[[internal]]")
             _check_record(entry, "[[internal]]", module)
+            if is_ported:  # `used_by` was validated by _check_record just above
+                ported_used_by |= {(module, path) for path in entry["used_by"]}
         attributes: set[tuple[str, str]] = set()
         attribute_signatures: set[tuple[str, str, str]] = set()
         for entry in _tables(data, "attribute"):
@@ -195,6 +208,7 @@ class Ledger:
             frozenset(signatures),
             frozenset(attribute_signatures),
             frozenset(ported),
+            frozenset(ported_used_by),
         )
 
     def covers(self, module: str, name: str) -> bool:
@@ -446,12 +460,56 @@ def stale_ledger_entries(sources: dict[str, str], ledger: Ledger | None = None) 
         and module not in plain
         and not (name == "*" and module in from_imported)
     ]
+    stale += _stale_ported_entries(ledger, sources)
     stale += [
         f"ledger attribute `{owner}.{name}` is never accessed in src - remove it"
         for owner, name in sorted(ledger.attributes)
         if name not in accessed
     ]
     return [Violation(LEDGER_PATH, 1, "A202", message) for message in stale]
+
+
+_PORTED_FROM = re.compile(r"\bPorted from (django/[\w/]+\.py)(?!\w|[/-]|\.\w)")
+_SRC_PREFIX = "src/asyncopation/"
+
+
+def _stale_ported_entries(ledger: Ledger, sources: dict[str, str]) -> list[str]:
+    """Each (ported module, used_by file) needs the file to exist and carry a source header."""
+    out: list[str] = []
+    for module, path in sorted(ledger.ported_used_by):
+        header = f"`# Ported from {module.replace('.', '/')}.py::<name> @ <version>`"
+        if not (path.startswith(_SRC_PREFIX) and path.endswith(".py")):
+            out.append(
+                f"ported ledger entry `{module}`: used_by `{path}` is not a .py file under "
+                f"{_SRC_PREFIX} - point it at the file that holds the port"
+            )
+        elif path not in sources:
+            out.append(
+                f"ported ledger entry `{module}`: used_by `{path}` does not exist in src - fix "
+                "the path or remove it from used_by"
+            )
+        elif not _has_ported_header(sources[path], module):
+            out.append(
+                f"ported ledger entry `{module}`: `{path}` has no comment {header} - add it "
+                "directly above the ported code (the django/ path must follow `Ported from` on "
+                "the same line, as a comment, not in a string or docstring)"
+            )
+    return out
+
+
+def _has_ported_header(source: str, module: str) -> bool:
+    """Is there a ``# Ported from django/<module path>.py`` comment (package: ``__init__.py``)?"""
+    base = module.replace(".", "/")
+    accepted = {f"{base}.py", f"{base}/__init__.py"}
+    try:
+        comments = [
+            tok.string
+            for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+            if tok.type == tokenize.COMMENT
+        ]
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return False
+    return any(m.group(1) in accepted for text in comments for m in _PORTED_FROM.finditer(text))
 
 
 def _in_django_package(path: str) -> bool:

@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=030b160c731f -->
+<!-- i18n: source=README.md source-sha256=39a81285963d -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -84,7 +84,7 @@ make bench                  # k6 부하 테스트: WSGI vs ASGI 코어 vs Asynco
 make help                   # 나머지 전부
 ```
 
-도구: uv, pytest (+ pytest-asyncio, pytest-django, Hypothesis), ruff (포맷 + 린트),
+도구: uv, pytest (+ pytest-asyncio, pytest-django, pytest-timeout, Hypothesis), ruff (포맷 + 린트),
 ty (타입), import-linter (레이어), `tools/guards`의 프로젝트 가드, k6 (부하).
 
 ## 코딩 에이전트와 함께 작업하기

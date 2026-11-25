@@ -14,6 +14,10 @@ from django.db.models import Model
 
 type Snapshot = tuple[Any, ...]
 
+# Type-name slot of a field that ``only()``/``defer()`` left unloaded. ``<`` cannot occur in a
+# class name, so it never collides with a real type name.
+DEFERRED_TYPE = "<deferred>"
+
 
 def snapshot_value(value: Any, _path: frozenset[int] = frozenset()) -> tuple[str, Any]:
     type_name = type(value).__name__
@@ -35,6 +39,12 @@ def snapshot(obj: Model) -> Snapshot:
 
     Shape: ``(label, fields, annotations, related)`` where ``fields`` and ``annotations`` are
     ``((name, type name, value)...)`` and ``related`` is ``((cache_name, snapshot | None)...)``.
+
+    A field deferred by ``only()``/``defer()`` is never read (reading would run a hidden query on
+    the sync side - FETCH_PEERS also fills peer instances - and raise
+    ``SynchronousOnlyOperation`` (core async) or ``FieldFetchBlocked`` (FETCH_RAISE, ADR-0006) on
+    the async side): it is recorded as ``(attname, "<deferred>", None)``, so "deferred" differs
+    from any loaded value. The rule applies to related objects too.
 
     Annotations (``qs.annotate(...)``) are stored as plain instance attributes: they are the public
     attributes that are not concrete fields (``extra(select=...)`` values and
@@ -66,9 +76,15 @@ def _snapshot(obj: Model, path: frozenset[int]) -> Snapshot:
         for name, value in vars(obj).items()
         if not name.startswith("_") and name not in attnames
     )
+    deferred = obj.get_deferred_fields()  # reads __dict__ only: no I/O
     return (
         obj._meta.label,
-        tuple((f.attname, *snapshot_value(getattr(obj, f.attname))) for f in fields),
+        tuple(
+            (f.attname, DEFERRED_TYPE, None)
+            if f.attname in deferred
+            else (f.attname, *snapshot_value(getattr(obj, f.attname)))
+            for f in fields
+        ),
         tuple((name, *snapshot_value(value, path)) for name, value in annotations),
         tuple(
             (name, None if related is None else _snapshot(related, path))
@@ -82,6 +98,27 @@ def _snapshot(obj: Model, path: frozenset[int]) -> Snapshot:
 def annotation_names(instance_snapshot: Snapshot) -> tuple[str, ...]:
     """Names of the annotations captured in a ``snapshot()`` of one instance, sorted."""
     return tuple(name for name, _type, _value in instance_snapshot[2])
+
+
+def field_snapshot(
+    instance_snapshot: Snapshot, attname: str, *related_path: str
+) -> tuple[str, Any]:
+    """``(type name, value)`` recorded for concrete field ``attname`` in a ``snapshot()``.
+
+    ``related_path`` first walks cached relations as ``related_snapshot`` does; the relation
+    must be a loaded object: ``LookupError`` if it was loaded as None or the path ends on a
+    ``("<ref>", ...)`` back-reference; ``KeyError`` for a relation that was not loaded (from
+    ``related_snapshot``) or an unknown field.
+    """
+    target = related_snapshot(instance_snapshot, *related_path)
+    if target is None:
+        raise LookupError(f"relation {related_path} was loaded as None")
+    if target[0] == "<ref>":
+        raise LookupError(f"relation {related_path} is a back-reference marker")
+    for name, type_name, value in target[1]:
+        if name == attname:
+            return type_name, value
+    raise KeyError(attname)
 
 
 def snapshot_row(row: Any) -> Snapshot:
@@ -103,11 +140,14 @@ def related_snapshot(instance_snapshot: Snapshot, *path: str) -> Snapshot | None
     """The snapshot cached under relation ``path`` (``("author", "publisher")`` walks two levels).
 
     ``None`` when a relation on the path was loaded as None; ``KeyError`` when one was not loaded.
-    A ``("<ref>", ...)`` back-reference marker cannot be walked into.
+    A ``("<ref>", ...)`` back-reference marker can be returned but not walked into
+    (``LookupError``).
     """
     current: Snapshot | None = instance_snapshot
     for name in path:
         if current is None:
             return None
+        if current[0] == "<ref>":
+            raise LookupError(f"cannot walk into the back-reference at {name!r}")
         current = dict(current[3])[name]
     return current

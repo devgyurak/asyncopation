@@ -130,7 +130,7 @@ A-scoped, concretely:
    (ADR-0007), and within it only these operations: `connections.__setitem__` /
    `connections.__delitem__`, and the peek at the previous value through the private
    `connections._connections` (which avoids creating a real wrapper per task context just to
-   remember it). *Amended 2026-11-25 (#5, PR #52): a fourth operation, a read of `connections.settings` (Django's configured `DATABASES`, defaults applied), reachable only through `configured_databases()`, which returns `_snapshot(connections.settings)` - a copy of the dict/list structure that shares the leaf values (`copy.deepcopy` fails in `ready()` on an `ssl.SSLContext` or a lock-holding object in `OPTIONS`); `connection/lifecycle.py` may import that one name.* *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
+   remember it). *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* *Amended 2026-11-25 (#5, PR #52): a fourth operation, a read of `connections.settings` (Django's configured `DATABASES`, defaults applied), reachable only through `configured_databases()`, which returns `_snapshot(connections.settings)` - a copy of the dict/list structure that shares the leaf values (`copy.deepcopy` fails in `ready()` on an `ssl.SSLContext` or a lock-holding object in `OPTIONS`); `connection/lifecycle.py` may import that one name.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
    `ensure_connection`, `connect`, `django.db.transaction`, and any other use of a sync
    connection. `compile.scope` calls the module, through the single context manager
    `swapped(alias, wrapper)` that the module exposes (it yields nothing, so the previous wrapper
@@ -255,7 +255,7 @@ reused unchanged.
 *Amended 2026-11-24 (#3, PR #45): the table below is updated: the `asgiref.local` row (recorded in the `_connections` reason), the `sql.compiler` row (planned consumer `_django/*`), the `base.base` row (more methods pinned, `ensure_connection` not pinned) and the new `postgresql.operations` (`compose_sql`) row.*
 
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
-(unless marked `ported = true`) and `[[attribute]]` entries never accessed in `src/`, so these enter
+(unless marked `ported = true`; those are checked for a `# Ported from` header in their `used_by` files instead, ADR-0007 Decision 6) and `[[attribute]]` entries never accessed in `src/`, so these enter
 `docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
 in the PR that first uses them (#3 / #6 / Phase 5):
 

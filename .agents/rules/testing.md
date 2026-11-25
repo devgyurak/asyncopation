@@ -28,6 +28,9 @@ comprehensions are forbidden anywhere in a test module - no exceptions, no suppr
 - Setup logic -> fixtures in `conftest.py` or helpers in `tests/support/`.
 - Iterating an async iterator -> `await collect(aiter)` from `tests/support`.
 - No `sleep` in tests; await a condition via a support helper.
+- Every test has a 120 s `pytest-timeout` (signal method, `pyproject.toml`): a hang fails the test
+  instead of making the run slow. Give a test its own tighter bound with `@pytest.mark.timeout(n)`;
+  never raise the global one to hide a hang.
 
 ## Layout
 | Dir | Needs | Notes |
@@ -57,9 +60,12 @@ For every read API compare against the sync ORM with the `differential` fixture
 (see the `differential-testing` skill). Snapshots compare model, pk, every concrete field,
 every annotation (any public non-field instance attribute), related objects cached in
 `_state.fields_cache` (`select_related`, single-valued prefetch; recursively; "not loaded"
-differs from "loaded as None"), value **and type**, and order. `_prefetched_objects_cache`
-(multi-valued prefetch: reverse FK, M2M, GenericRelation) is out of scope until #17.
-Add Hypothesis strategies when adding QuerySet features.
+differs from "loaded as None"), value **and type**, and order. Deferred fields
+(`only()`/`defer()`) are never loaded by the snapshot (in any fetch mode); they are compared as a
+`"<deferred>"` marker. `_prefetched_objects_cache` (multi-valued prefetch: reverse FK, M2M,
+GenericRelation) is out of scope until #17.
+Add Hypothesis strategies when adding QuerySet features. Generated `only()`/`defer()` specs may
+be invalid (`FieldError`, same type on both sides); use `valid_deferred_specs()` when rows are needed.
 
 Driver-level tests (no QuerySet) use the same idea one layer lower: run the same SQL through the
 async driver and through a synchronous Django `DatabaseWrapper` built from the same settings and

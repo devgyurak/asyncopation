@@ -91,7 +91,7 @@ make bench                  # k6 load test: WSGI vs ASGI core vs Asyncopation
 make help                   # everything else
 ```
 
-Tooling: uv, pytest (+ pytest-asyncio, pytest-django, Hypothesis), ruff (format + lint),
+Tooling: uv, pytest (+ pytest-asyncio, pytest-django, pytest-timeout, Hypothesis), ruff (format + lint),
 ty (types), import-linter (layers), project guards in `tools/guards`, k6 (load).
 
 ## Working with coding agents

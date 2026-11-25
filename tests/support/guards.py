@@ -29,7 +29,9 @@ PORTED_LEDGER = Ledger(
     public=EMPTY_LEDGER.public,
     internal=frozenset({("django.db.backends.mysql.base", "DatabaseWrapper")}),
     ported=frozenset({("django.db.backends.mysql.base", "DatabaseWrapper")}),
+    ported_used_by=frozenset({("django.db.backends.mysql.base", "src/asyncopation/_django/x.py")}),
 )
+PORTED_PATH = "src/asyncopation/_django/x.py"
 
 
 def lint_test_module(source: str, path: str = "tests/unit/test_sample.py") -> list[str]:
@@ -51,6 +53,11 @@ def stale_messages(sources: dict[str, str], ledger: Ledger) -> list[str]:
         {path: textwrap.dedent(src) for path, src in sources.items()}, ledger
     )
     return [f"{v.code} {v.message}" for v in violations]
+
+
+def stale_codes(messages: list[str]) -> set[str]:
+    """The guard codes that start `stale_messages` output."""
+    return {message.split(" ", 1)[0] for message in messages}
 
 
 PUBLIC_DJANGO_LEDGER = Ledger(

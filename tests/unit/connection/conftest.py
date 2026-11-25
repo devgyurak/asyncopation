@@ -13,6 +13,7 @@ from tests.support.lifecycle import (
     FakeEnv,
     OpeningScenario,
     OverlappingClose,
+    RollbackScenario,
     ThreadLoop,
     count_locks,
     dispose_environment,
@@ -82,6 +83,15 @@ async def parked_opening(
 @pytest.fixture
 def concurrent_open(configured: FakeEnv, monkeypatch: pytest.MonkeyPatch) -> ConcurrentOpenScenario:
     return ConcurrentOpenScenario(configured, count_locks(monkeypatch))
+
+
+@pytest.fixture
+async def rollback(
+    configured: FakeEnv, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[RollbackScenario]:
+    scenario = RollbackScenario(configured, count_locks(monkeypatch))
+    yield scenario
+    await scenario.cleanup()
 
 
 @pytest.fixture

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import sys
+import weakref
 from collections.abc import Iterable
 from typing import Any
 
@@ -113,7 +113,8 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
                 await asyncio.shield(driver.close())
             raise
         entry.driver = driver
-        entry.opener = asyncio.current_task()
+        task = asyncio.current_task()
+        entry.opener = None if task is None else weakref.ref(task)
         return driver
 
 
@@ -183,9 +184,17 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
             await ensure_driver(alias, lazy=False)
             entry = registry.entry_or_create(alias, loop)
             # only a driver this very call opened: a concurrent task may have opened it meanwhile
-            if not was_open and entry.opener is asyncio.current_task():
+            if (
+                not was_open
+                and entry.opener is not None
+                and entry.opener() is asyncio.current_task()
+            ):
                 opened.append(entry)
     except BaseException:
+        for entry in opened:
+            entry.closing = (
+                True  # a concurrent opener now fails instead of opening on a doomed entry
+            )
         try:
             with contextlib.suppress(Exception):
                 await asyncio.shield(_close_entries(opened))
@@ -225,15 +234,19 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
     mine = registry.begin_closing(loop)
     timed_out = False
     failures: list[Exception] = []
+    interrupted = False
     try:
         try:
             async with asyncio.timeout(timeout):
                 await registry.wait_idle(loop)
         except TimeoutError:
             timed_out = True
+    except BaseException:
+        interrupted = True  # close() itself is being cancelled: nobody would see the failures
+        raise
     finally:
         failures = await asyncio.shield(_close_and_end(loop, mine))
-        if sys.exc_info()[0] is not None:  # close() itself is being cancelled: nobody sees them
+        if interrupted:
             for failure in failures:
                 logger.error("asyncopation: a driver failed to close: %r", failure)
     for extra in failures[1:]:

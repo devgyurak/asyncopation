@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -45,7 +46,7 @@ class Entry:
 
     def __init__(self) -> None:
         self.driver: AsyncDriver | None = None
-        self.opener: asyncio.Task[Any] | None = None  # the task that ran this driver's open()
+        self.opener: weakref.ReferenceType[asyncio.Task[Any]] | None = None  # who ran open()
         self.lock = asyncio.Lock()
         self.warned = False
         self.closing = False

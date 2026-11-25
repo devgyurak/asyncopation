@@ -19,6 +19,7 @@ from tests.support.lifecycle import (
     lazy_warnings,
     leave_closing_and_flight_in_a_closed_loop,
     mention_count,
+    opener_is_the_opening_task,
     pg_engine,
     purge_and_report_leaks,
     uncopiable_options,
@@ -404,7 +405,6 @@ async def test_options_that_cannot_be_deep_copied_still_open_a_driver(fake):
         pytest.param("engine", "default", id="engine"),
         pytest.param("use_tz", "default", id="use-tz"),
         pytest.param("time_zone", "default", id="time-zone"),
-        pytest.param("alias_added", "late", id="alias-added"),
     ],
 )
 async def test_opening_fails_closed_when_the_settings_changed_after_configure(
@@ -413,8 +413,16 @@ async def test_opening_fails_closed_when_the_settings_changed_after_configure(
     # given
     apply_change(configured, settings, change)
     # when / then
-    with pytest.raises(ImproperlyConfigured):
+    with pytest.raises(ImproperlyConfigured, match="changed since configure"):
         await ensure_driver(alias)
+
+
+async def test_an_alias_added_after_configure_is_unknown(configured, settings):
+    # given
+    apply_change(configured, settings, "alias_added")
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="unknown database alias"):
+        await ensure_driver("late")
 
 
 async def test_a_bad_time_zone_on_a_secondary_alias_does_not_break_configure(fake):
@@ -473,21 +481,19 @@ def test_a_real_postgresql_alias_with_uncopiable_options_configures_without_erro
 async def test_purge_clears_the_closing_mark_of_a_closed_loop(configured):
     # given
     state = await leave_closing_and_flight_in_a_closed_loop("default")
-    purge_and_report_leaks()
     # when
-    remains = state.closing_mark_remains()
+    purge_and_report_leaks()
     # then
-    assert remains is False
+    assert state.closing_mark_remains() is False
 
 
 async def test_purge_clears_the_in_flight_counters_of_a_closed_loop(configured):
     # given
     state = await leave_closing_and_flight_in_a_closed_loop("default")
-    purge_and_report_leaks()
     # when
-    remains = state.flights_remain()
+    purge_and_report_leaks()
     # then
-    assert remains is False
+    assert state.flights_remain() is False
 
 
 async def test_purge_reports_the_driver_of_a_closed_loop_as_leaked(configured):
@@ -497,3 +503,38 @@ async def test_purge_reports_the_driver_of_a_closed_loop_as_leaked(configured):
     leaked = purge_and_report_leaks()
     # then
     assert leaked == ["default"]
+
+
+async def test_an_unexpected_error_from_one_engine_does_not_break_configure(fake):
+    # given
+    fake.add_broken_alias("odd", RuntimeError("boom"))
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_an_unexpected_error_from_one_engine_leaves_the_other_aliases_usable(fake):
+    # given
+    fake.add_broken_alias("odd", RuntimeError("boom"))
+    configure()
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+async def test_an_unexpected_error_from_one_engine_raises_improperly_configured_at_its_open(fake):
+    # given
+    fake.add_broken_alias("odd", RuntimeError("boom"))
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="boom"):
+        await ensure_driver("odd")
+
+
+async def test_ensure_driver_records_the_task_that_opened_the_driver(configured):
+    # when
+    recorded = await opener_is_the_opening_task("default")
+    # then
+    assert recorded is True

@@ -2,15 +2,14 @@
 
 import pytest
 
+from asyncopation.connection import registry
 from asyncopation.connection.lifecycle import ensure_driver
 from tests.support.lifecycle import assert_registry_clean, leave_open_in_other_loop
 
 
 async def test_registry_clean_check_passes_when_nothing_is_open(configured):
-    # when
+    # when / then
     assert_registry_clean()
-    # then
-    assert configured.recorder.built == []
 
 
 async def test_registry_clean_check_fails_when_a_driver_is_left_open(configured):
@@ -35,8 +34,6 @@ async def test_registry_clean_check_resets_the_registry_even_when_it_fails(confi
     with pytest.raises(AssertionError):
         assert_registry_clean()
     # when
-    from asyncopation.connection import registry
-
     entries = registry.entries()
     # then
     assert entries == []

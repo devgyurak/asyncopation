@@ -66,6 +66,7 @@ class Script:
     fail_injects: int = 0
     gate: asyncio.Event | None = None  # `open()` waits for it (created in the running loop)
     gate_after: int | None = None  # the gate only holds opens once this many succeeded
+    close_gate: asyncio.Event | None = None  # `close()` waits for it (after being counted)
     gate_driver_index: int | None = None  # the gate only holds the N-th driver built
     version: tuple[int, ...] = FAKE_VERSION
     stats: PoolStats = DEFAULT_STATS
@@ -128,6 +129,8 @@ class FakeDriver:
 
     async def close(self) -> None:
         self._recorder.closes += 1
+        if self._script.close_gate is not None:
+            await self._script.close_gate.wait()
         self.is_open = False
         if self._script.fail_closes > 0:
             self._script.fail_closes -= 1
@@ -1092,13 +1095,106 @@ class ConcurrentOpenScenario:
         script.gate = asyncio.Event()
         script.gate_driver_index = 0  # B's driver is the first one built
         script.fail_open_after = 2  # the third open (after default and other) fails
-        self.b = asyncio.create_task(ensure_driver("other"))
-        await wait_until(lambda: _opener_started(self.env.recorder))
-        self.setup_task = asyncio.create_task(setup(["default", "other", "third"]))
-        await wait_until(lambda: _three_acquires(self.counter))  # setup is parked behind B
-        script.gate.set()
-        script.gate = None
-        return list(await asyncio.gather(self.b, self.setup_task, return_exceptions=True))
+        try:
+            self.b = asyncio.create_task(ensure_driver("other"))
+            await wait_until(lambda: _opener_started(self.env.recorder))
+            self.setup_task = asyncio.create_task(setup(["default", "other", "third"]))
+            await wait_until(lambda: _three_acquires(self.counter))  # setup is parked behind B
+            # ordering: `default` is open (setup opened it), B's `other` is still gated
+            assert self.env.recorder.opens == 1
+            script.gate.set()
+            script.gate = None
+            return list(await asyncio.gather(self.b, self.setup_task, return_exceptions=True))
+        finally:
+            await self._cleanup()
+
+    async def _cleanup(self) -> None:
+        """Release the gate and stop both tasks (also when a wait above timed out)."""
+        gate, self.env.script.gate = self.env.script.gate, None
+        if gate is not None:
+            gate.set()
+        tasks = [t for t in (self.b, self.setup_task) if t is not None and not t.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _four_acquires(counter: LockCounter) -> bool:
+    return counter.acquired >= 4
+
+
+async def _rollback_is_closing(recorder: Recorder) -> bool:
+    return recorder.closes >= 1
+
+
+class RollbackScenario:
+    """`setup([default, third])` opens `default`, fails on `third` and rolls back; the rollback's
+    `driver.close()` is held by the script's close gate so that others can interleave."""
+
+    def __init__(self, env: FakeEnv, counter: LockCounter) -> None:
+        self.env = env
+        self.counter = counter
+        self.setup_task: asyncio.Task[None] | None = None
+        self.other: asyncio.Task[Any] | None = None
+
+    async def begin(self) -> None:
+        from asyncopation.connection import configure
+        from asyncopation.connection.lifecycle import setup
+        from tests.support.aio import wait_until
+
+        script = self.env.script
+        self.env.add_alias("third", "fake_third_db", FAKE_ENGINE)
+        configure()
+        script.fail_open_after = 1  # `third` fails once `default` is open
+        script.close_gate = asyncio.Event()
+        self.setup_task = asyncio.create_task(setup(["default", "third"]))
+        await wait_until(lambda: _rollback_is_closing(self.env.recorder))
+
+    async def concurrent_ensure(self) -> list[Any]:
+        """A caller queues on the entry being rolled back, then the rollback's close finishes."""
+        from asyncopation.connection.lifecycle import ensure_driver
+        from tests.support.aio import wait_until
+
+        assert self.setup_task is not None
+        self.other = asyncio.create_task(ensure_driver("default"))
+        # ordering: setup default(1), setup third(2), rollback close(3), this caller(4)
+        await wait_until(lambda: _four_acquires(self.counter))
+        self.release()
+        return list(await asyncio.gather(self.setup_task, self.other, return_exceptions=True))
+
+    async def cancel_setup(self) -> None:
+        assert self.setup_task is not None
+        self.setup_task.cancel()
+        await asyncio.gather(self.setup_task, return_exceptions=True)
+
+    def release(self) -> None:
+        if self.env.script.close_gate is not None:
+            self.env.script.close_gate.set()
+
+    def entry_forgotten(self, alias: str = "default") -> bool:
+        from asyncopation.connection import registry
+
+        return registry.entry(alias, asyncio.get_running_loop()) is None
+
+    async def cleanup(self) -> None:
+        self.release()
+        tasks = [t for t in (self.setup_task, self.other) if t is not None and not t.done()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.sleep(0)  # let a shielded close finish
+
+
+async def opener_is_the_opening_task(alias: str = "default") -> bool:
+    """`entry.opener()` is the task that ran `open()` (here: a task created just for it)."""
+    from asyncopation.connection import registry
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    task = asyncio.create_task(ensure_driver(alias))
+    await task
+    entry = registry.entry(alias, asyncio.get_running_loop())
+    assert entry is not None
+    return entry.opener is not None and entry.opener() is task
 
 
 class ClosedLoopState:

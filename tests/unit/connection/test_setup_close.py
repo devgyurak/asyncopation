@@ -11,10 +11,13 @@ from tests.support.lifecycle import (
     FakeInfo,
     FakeOpenError,
     SetupScenario,
+    capture_logs,
     ensure_is_refused,
     entry_aliases,
     error_names,
+    errors_logged,
     failing,
+    mention_count,
 )
 
 
@@ -254,3 +257,56 @@ async def test_setup_rollback_closes_only_the_drivers_it_opened_itself(concurren
     await concurrent_open.run()
     # then
     assert concurrent_open.env.recorder.closes == 1
+
+
+async def test_a_concurrent_ensure_driver_on_an_alias_being_rolled_back_raises_runtime_error(
+    rollback,
+):
+    # given
+    await rollback.begin()
+    # when
+    results = await rollback.concurrent_ensure()
+    # then
+    assert error_names(results) == ["FakeOpenError", "RuntimeError"]
+
+
+async def test_a_concurrent_ensure_driver_during_a_rollback_leaves_no_open_driver(rollback):
+    # given
+    await rollback.begin()
+    # when
+    await rollback.concurrent_ensure()
+    # then
+    assert entry_aliases() == []
+    assert rollback.env.recorder.opens == 1
+    assert rollback.env.recorder.closes == 1
+
+
+async def test_setup_rollback_forgets_the_entry_even_when_its_close_is_cancelled(rollback):
+    # given
+    await rollback.begin()
+    # when
+    await rollback.cancel_setup()
+    # then
+    assert rollback.entry_forgotten("default") is True
+
+
+async def test_a_cancelled_close_logs_the_driver_close_failures_at_error(opened, closing, caplog):
+    # given
+    capture_logs(caplog)
+    opened.script.fail_close = True
+    await closing.begin()
+    # when
+    await closing.cancel_close()
+    # then
+    assert mention_count(errors_logged(caplog), "failed to close") == 1
+
+
+async def test_an_uninterrupted_close_does_not_log_the_failure_it_raises(opened, caplog):
+    # given
+    capture_logs(caplog)
+    opened.script.fail_close = True
+    await failing(close(), FakeCloseError)
+    # when
+    logged = errors_logged(caplog)
+    # then
+    assert logged == []

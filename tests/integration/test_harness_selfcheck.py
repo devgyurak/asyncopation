@@ -14,7 +14,13 @@ from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
 from tests.support.deferred_queries import evaluate_and_snapshot_query_counts
 from tests.support.snapshot import annotation_names, related_snapshot, snapshot
-from tests.support.strategies import QuerySetSpec, annotated_spec, build_queryset, queryset_specs
+from tests.support.strategies import (
+    QuerySetSpec,
+    annotated_spec,
+    build_queryset,
+    filtered_spec,
+    queryset_specs,
+)
 
 
 @pytest.mark.parametrize(("model_name", "expected"), list(EXPECTED_COUNTS.items()))
@@ -155,6 +161,20 @@ async def test_reference_random_querysets_match_sync(
             annotated_spec(("n_tags", "author_pages", "length"), ("-author_pages",)),
             id="mixed-aggregates",
         ),
+        pytest.param(annotated_spec(("n_editions",), ("n_editions",)), id="editions-count-asc"),
+        pytest.param(
+            annotated_spec(("n_editions",), ("-n_editions", "pk")), id="editions-count-desc"
+        ),
+        pytest.param(
+            annotated_spec(("n_tags", "n_editions"), ("-n_editions", "-n_tags")),
+            id="tags-and-editions-multiply-rows",
+        ),
+        pytest.param(
+            filtered_spec(
+                (("editions__released__isnull", False),), ("n_editions",), ("n_editions",)
+            ),
+            id="editions-filter-shares-count-join",
+        ),
     ],
 )
 async def test_reference_annotated_querysets_match_sync(
@@ -168,6 +188,20 @@ async def test_reference_annotated_querysets_match_sync(
     assert result.sync_outcome.error is None
     assert result.async_outcome == result.sync_outcome
     assert annotation_names(result.sync_outcome.rows[0]) == spec.annotations
+
+
+@pytest.mark.parametrize("released_is_null", [True, False], ids=["null", "set"])
+async def test_reference_editions_filter_matches_sync(
+    readonly_db, reference_differential, released_is_null
+):
+    # given
+    spec = filtered_spec((("editions__released__isnull", released_is_null),))
+    # when
+    result = await reference_differential(partial(build_queryset, spec))
+    # then
+    assert result.sync_outcome.error is None
+    assert len(result.sync_outcome.rows) > 0
+    assert result.async_outcome == result.sync_outcome
 
 
 @pytest.mark.xfail(strict=True, reason="Phase 1: asyncopation.aq() / alist() not implemented yet")

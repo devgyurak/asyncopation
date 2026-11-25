@@ -29,6 +29,9 @@ _FILTERS: dict[str, st.SearchStrategy[Any]] = {
     "published_at__isnull": st.booleans(),
     "tags__name": st.sampled_from(["tag-0", "tag-5", "tag-9"]),
     "author__profile__isnull": st.booleans(),
+    # Reverse FK join: duplicate rows are identical, so a window stays deterministic. The seed
+    # leaves `released` NULL for every fifth book, so both values select rows.
+    "editions__released__isnull": st.booleans(),
 }
 _ORDERINGS = ["pk", "-pk", "title", "-pages", "price", "author__name", "-published_at"]
 _SELECT_RELATED = ["author", "author__publisher", "author__profile"]
@@ -37,8 +40,13 @@ _SELECT_RELATED = ["author", "author__publisher", "author__profile"]
 # 0-3 tags (NULL and non-NULL mixed, so NULL ordering is exercised). Combining aggregates over
 # two multi-valued relations (tags and author__books) multiplies rows and inflates the values;
 # that is intended - both sides of a differential run the same SQL.
+# `BookEdition` has a composite primary key, so `Count("editions", distinct=True)` raises
+# ValueError in Django; only the plain count is used (it counts the first key column). Every book
+# has 1-3 editions (seed), and an `editions__*` filter applied before the annotation shares its
+# join, so the count then covers only the editions that passed the filter.
 ANNOTATIONS: dict[str, Callable[[], Expression | F]] = {
     "n_tags": lambda: Count("tags", distinct=True),
+    "n_editions": lambda: Count("editions"),
     "tag_id_sum": lambda: Sum("tags__id"),
     "tag_id_sum_or_zero": lambda: Coalesce(Sum("tags__id"), Value(0)),
     "author_pages": lambda: Sum("author__books__pages"),
@@ -99,6 +107,22 @@ def annotated_spec(annotations: tuple[str, ...], order_by: tuple[str, ...]) -> Q
     """A spec over all books with only annotations and ordering (example-based tests)."""
     return QuerySetSpec(
         filters=(),
+        excludes=(),
+        order_by=order_by,
+        select_related=(),
+        window=None,
+        annotations=tuple(sorted(annotations)),
+    )
+
+
+def filtered_spec(
+    filters: tuple[tuple[str, Any], ...],
+    annotations: tuple[str, ...] = (),
+    order_by: tuple[str, ...] = (),
+) -> QuerySetSpec:
+    """A spec with filters, annotations and ordering only (example-based tests)."""
+    return QuerySetSpec(
+        filters=filters,
         excludes=(),
         order_by=order_by,
         select_related=(),

@@ -42,14 +42,21 @@ def collected_test_names(marker_expression: str) -> frozenset[str]:
     return frozenset(node_id.split("[")[0] for node_id in node_ids)
 
 
-def canary_drift_command() -> str:
-    """The ci.yml step of the django-main canary that runs the drift tests."""
-    lines = CI_WORKFLOW.read_text(encoding="utf-8").splitlines()
-    matches = [line.strip() for line in lines if f"pytest {DRIFT_DIR}" in line]
+def canary_drift_command(workflow: Path = CI_WORKFLOW) -> str:
+    """The ``run:`` command of the canary step that runs the drift tests (exactly one)."""
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    matches = [line.strip() for line in lines if "run:" in line and f"pytest {DRIFT_DIR}" in line]
     if len(matches) != 1:
-        message = f"expected exactly one drift step in {CI_WORKFLOW.name}, found {len(matches)}"
+        message = f"expected exactly one drift step in {workflow.name}, found {len(matches)}"
         raise RuntimeError(message)
     return matches[0]
+
+
+def write_workflow(path: Path, drift_steps: int) -> Path:
+    """A minimal workflow file with ``drift_steps`` drift ``run:`` lines."""
+    step = f'      - run: uv run --no-sync pytest {DRIFT_DIR} -m "not django_pin"\n'
+    path.write_text("steps:\n" + step * drift_steps, encoding="utf-8")
+    return path
 
 
 def _collect(marker_expression: str) -> subprocess.CompletedProcess[str]:

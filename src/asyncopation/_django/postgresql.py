@@ -42,19 +42,20 @@ class CompileOperations(DatabaseOperations):
     implementation): ``str`` (quotes doubled; a string with a backslash becomes `` E'...'`` with
     doubled backslashes, which is correct whatever ``standard_conforming_strings`` is), ``int``,
     ``float`` (``'NaN'::float8``, ``'Infinity'::float8`` and ``'-Infinity'::float8`` for the special
-    values), finite ``Decimal``, ``bool`` and ``None`` (``NULL``). Negative numbers (``int``,
-    ``float`` and ``Decimal``), signed zeros included, get a leading space.
+    values), finite ``Decimal``, ``bool`` and ``None`` (``NULL``). Finite negative numbers
+    (``int``, ``float`` and ``Decimal``), signed zeros included, get a leading space.
 
     Only the *exact* built-in types are rendered. A subclass (``IntEnum``, ``TextChoices``, a Django
-    ``Choices`` enum, ...) raises ``TypeError``: the compiled and the pure-Python psycopg
+    ``Choices`` enum, ...) raises ``TypeError``: the compiled ``binary`` and the pure-Python psycopg
     implementations disagree about subclasses (they call ``__int__``, ``encode``, ``__contains__``
     or ``__str__`` of the subclass, or not), so no single rendering is the live one, and an
     overridden ``__str__`` would put arbitrary text into the SQL. Dates, ``bytes``, arrays and
     ranges depend on the driver's adapters and raise ``TypeError`` too, at build time, and so does a
     non-finite ``Decimal``: the two implementations render the NaN variants differently (the
-    compiled one ``-NaN`` as `` -NaN`` and ``NaN123`` as ``NaN123``, the pure-Python one every such
-    value as ``'NaN'::numeric``); ``±Infinity``, plain NaN and positive sNaN come out alike in both
-    (``-sNaN`` is a differing variant), and are rejected with them to keep a single rule.
+    ``binary`` one ``-NaN`` as `` -NaN`` and ``NaN123`` as ``NaN123``, the pure-Python one every
+    such value as ``'NaN'::numeric``); ``±Infinity``, plain NaN and positive sNaN come out alike in
+    both (``-sNaN`` is a differing variant), and are rejected with them to keep a single rule.
+    A source-built ``c`` implementation was not checked.
 
     ``sql`` is encoded first (a lone surrogate raises ``UnicodeEncodeError``, with or without
     ``params``). ``params`` must be exactly a list or a tuple (``None`` returns ``sql`` untouched).
@@ -66,8 +67,8 @@ class CompileOperations(DatabaseOperations):
     differ, and these two placeholders are not supported. A NUL character in a string raises
     ``ValueError`` (a live connection raises psycopg's ``DataError``; matching it would need
     psycopg), a lone surrogate ``UnicodeEncodeError`` like a live connection. A string with both
-    raises ``UnicodeEncodeError`` (the compiled implementation's order; the pure-Python one reports
-    the NUL first).
+    raises ``UnicodeEncodeError`` (the ``binary`` implementation's order; the pure-Python one
+    reports the NUL first).
     """
 
     def compose_sql(self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None) -> str:

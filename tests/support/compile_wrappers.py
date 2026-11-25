@@ -87,6 +87,9 @@ def import_every_wrapper_module(packages: list[str] | None = None) -> list[str]:
     `ImproperlyConfigured` without `from`, so its `__cause__` is None and it is not skipped (the
     `no_from` fixture pins that); a typo in a module of an installed driver (`psycopg.typos`) is
     read as a missing driver and skipped (a non-empty `skipped_in_this_environment()` shows it).
+    A sub-package skipped for a missing driver is not entered, so its children are not scanned;
+    and when `walk_packages` imports a sub-package again, any other error of that second import is
+    swallowed by `onerror` (a sub-package whose import fails only the second time is not reported).
     """
     import importlib
     import pkgutil
@@ -188,6 +191,7 @@ FAILING_MODULES = [
     ("narrow_pool.py", "raise ModuleNotFoundError('x', name='psycopg_pool')\n"),
     ("narrow_extra.py", "raise ModuleNotFoundError('x', name='MySQLdb_extra')\n"),
     ("narrow_ours.py", "raise ModuleNotFoundError('x', name='asyncopation.psycopg')\n"),
+    ("narrow_case.py", "raise ModuleNotFoundError('x', name='mysqldb')\n"),
     ("wrong_symbol.py", "raise ImportError('cannot import name', name='psycopg')\n"),
     (
         "no_from.py",

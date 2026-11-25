@@ -329,6 +329,8 @@ def test_constant_getattr_steps_reach_the_boundary_modules_like_attributes(
           id="no-chain"),
         P('import asyncopation\n\ndef f():\n    return hasattr(asyncopation._django, "connections")\n',
           id="hasattr-on-the-boundary-module"),
+        P('import asyncopation\n\ndef f():\n    return getattr(hasattr(asyncopation, "_django"), "connections")\n',
+          id="getattr-on-a-hasattr-result"),
     ],
 )  # fmt: skip
 def test_the_package_object_alone_is_not_a_boundary_module_in_the_django_package(source):

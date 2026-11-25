@@ -115,6 +115,7 @@ def test_an_import_error_for_anything_but_a_driver_library_is_not_hidden(tmp_pat
         ("narrow_pool", "ModuleNotFoundError"),
         ("narrow_extra", "ModuleNotFoundError"),
         ("narrow_ours", "ModuleNotFoundError"),
+        ("narrow_case", "ModuleNotFoundError"),
         ("wrong_symbol", "ImportError"),
         ("no_from", "ImproperlyConfigured"),
         ("broken", "ImportError"),

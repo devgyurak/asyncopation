@@ -92,26 +92,25 @@ A-scoped, concretely:
    compile-only operations override it with a plain-Python renderer: no driver (psycopg stays
    confined to `drivers/`) and no dependence on server settings. It supports exactly the types that
    caller passes: the *exact* built-in types `str`, `int`, `float`, `bool`, `None` and finite
-   `Decimal` (a leading space for negative numbers, signed zeros included), byte for byte like
-   Django on a live connection (checked in the integration tests against psycopg's compiled
+   `Decimal` (a leading space for finite negative numbers, signed zeros included), byte for byte
+   like Django on a live connection (checked in the integration tests against psycopg's compiled
    `binary` build and its pure-Python implementation: `make test-compose-python`, run in CI; a
    source-built `c` implementation was not checked). Every other type raises `TypeError` at build
-   time: dates, `bytes`, arrays, ranges and
-   the like, non-finite `Decimal` (the two implementations render the NaN variants differently:
-   the compiled one `-NaN` as ` -NaN` and `NaN123` as `NaN123`, the pure-Python one every such
-   value as `'NaN'::numeric`; `±Infinity`, plain NaN and positive sNaN are rendered alike by
-   both (`-sNaN` differs like `-NaN`), and
-   are rejected together to keep a single rule),
-   and every *subclass* (`IntEnum`, `TextChoices`, Django `Choices`, ...), because the two psycopg
-   implementations disagree about subclasses (they call `__int__`, `encode`, `__contains__`,
-   `__str__`, ... of the subclass or not) and an overridden `__str__` would put arbitrary text into
-   the SQL. `params` must be exactly a `list` or `tuple`. For the exact types the rendering is
-   the live one; the errors are not always: a NUL character in a string is a `ValueError` (live:
-   psycopg's `DataError`), a lone surrogate in `sql` or a value a `UnicodeEncodeError` like live
-   (a string with both reports the surrogate first, as the compiled implementation does; the
-   pure-Python one reports the NUL, so its exception class differs from ours), wrong counts and
-   unsupported placeholders are `ValueError` (live: `ProgrammingError`, and `%b` / `%t` render live).
-   Placeholder shapes and the parameter count are checked before any value is rendered.
+   time: dates, `bytes`, arrays, ranges and the like, non-finite `Decimal` (the two
+   implementations render the NaN variants differently: the `binary` one `-NaN` as ` -NaN` and
+   `NaN123` as `NaN123`, the pure-Python one every such value as `'NaN'::numeric`; `±Infinity`,
+   plain NaN and positive sNaN are rendered alike by both, `-sNaN` differs like `-NaN`; all are
+   rejected together to keep a single rule), and every *subclass* (`IntEnum`, `TextChoices`,
+   Django `Choices`, ...), because the two psycopg implementations disagree about subclasses (they
+   call `__int__`, `encode`, `__contains__`, `__str__`, ... of the subclass or not) and an
+   overridden `__str__` would put arbitrary text into the SQL. `params` must be exactly a `list`
+   or `tuple`. For the exact types the rendering is the live one; the errors are not always: a NUL
+   character in a string is a `ValueError` (live: psycopg's `DataError`), a lone surrogate in
+   `sql` or a value a `UnicodeEncodeError` like live (a string with both reports the surrogate
+   first, as the `binary` implementation does; the pure-Python one reports the NUL, so its
+   exception class differs from ours), wrong counts and unsupported placeholders are `ValueError`
+   (live: `ProgrammingError`, and `%b` / `%t` render live). Placeholder shapes and the parameter
+   count are checked before any value is rendered.
 4. I/O-bearing Django steps are ported as ADR-0007 cores, not reached through the wrapper:
    `Query.get_aggregation` (compile outer query, `Execute`, convert), `QuerySet.exists` /
    `has_results`, and `SQLUpdateCompiler.pre_sql_setup` + `execute_sql` related updates (Phase 5).
@@ -153,11 +152,13 @@ A-scoped, concretely:
    docstring, which has the full list; star imports are ruff F403) that architecture review
    covers, as are `BaseWrapper` handed on through `getattr(<asyncopation module>, "BaseWrapper")`,
    a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, an
-   `asyncopation` module object assigned to a variable inside `_django/` (`x = getattr(asyncopation,
-   "_django")`; outside it the guard rejects the `_django` access itself), and a
-   class built with `type(...)`. The guard itself requires a class based on `BaseWrapper` to list
-   `CompileOnlyMixin` before it and rejects calling `BaseWrapper(...)`, and a unit test checks the
-   MRO of every Asyncopation subclass (of any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an
+   `asyncopation` module object held in a variable (access through it, `m = asyncopation;
+   m._django.connections`, is not caught anywhere; inside `_django/` neither is
+   `x = getattr(asyncopation, "_django")`, outside it that is A102; a name bound by an import that
+   reaches `_django` directly is rejected, A102), and a class built with `type(...)`. The guard
+   itself requires a class based on `BaseWrapper` to list `CompileOnlyMixin` before it and rejects
+   calling `BaseWrapper(...)`, and a unit test checks the MRO of every Asyncopation subclass (of
+   any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an
    `asyncopation.drivers` module re-exports under a public name
    (`from asyncopation.drivers.postgresql import sql`): ADR-0003 forbids that as a convention
    that review enforces, not the guards.
@@ -303,4 +304,4 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
   `union()`; `aexists()`; materialization after the scope has exited.
 - Phase 5: `pre_sql_setup` core against MySQL related / multi-table updates; `bulk_create`,
   `bulk_update` prepare phases inside a scope.
-- *Amended 2026-11-24 (#3, PR #45): new Validation items (they tighten the list above):* a scope exited from another Context inside a running loop raises `ScopeContextError` and leaves that Context's swap and autocommit untouched (`GeneratorExit` is not counted as a failure); concurrent threads and tasks read their own `autocommit` (the four-thread race test); `compose_sql` equals Django's live output for the exact types on both psycopg implementations (`make test-compose-python`) and every other type raises `TypeError`; the guard rejects `BaseWrapper(...)` and a `BaseWrapper` subclass without `CompileOnlyMixin` first, and a unit test checks the MRO of every Asyncopation wrapper class.
+- *Amended 2026-11-24 (#3, PR #45): new Validation items (they tighten the list above):* a scope exited from another Context inside a running loop raises `ScopeContextError` and leaves that Context's swap and autocommit untouched (`GeneratorExit` is not counted as a failure); concurrent threads and tasks read their own `autocommit` (the four-thread race test); `compose_sql` equals Django's live output for the exact types on the `binary` and `python` implementations (`make test-compose-python`) and every other type raises `TypeError`; the guard rejects `BaseWrapper(...)` and a `BaseWrapper` subclass without `CompileOnlyMixin` first, and a unit test checks the MRO of every Asyncopation wrapper class.

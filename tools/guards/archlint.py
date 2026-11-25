@@ -46,12 +46,13 @@ guarded function through a variable (``e = eval``), ``super(CompileOnlyMixin, w)
 ``_private`` names taken from a public module (A203), ``BaseWrapper`` handed on through
 ``getattr(<asyncopation module>, "BaseWrapper")``, a star import, a call argument, ``return`` /
 ``yield`` or a lambda body inside ``compile/`` / ``_django/``, an ``asyncopation`` module
-object assigned to a variable inside ``_django/`` (``x = getattr(asyncopation, "_django")``;
-outside it the ``_django`` access is rejected), psycopg objects that an
-``asyncopation.drivers`` module re-exports under a public name (``from
-asyncopation.drivers.postgresql import sql``; ADR-0003: drivers do not do that). Django-name
-tracking in ``connlint`` is per module, not per scope, so a parameter that shadows a Django name
-(``def f(models)``) is treated as the Django name.
+object held in a variable (access through it, ``m = asyncopation; m._django.connections``, is
+not caught anywhere; inside ``_django/`` neither is ``x = getattr(asyncopation, "_django")``,
+outside it that is A102; a name bound by an import that reaches ``_django`` directly is
+rejected, A102), psycopg objects that an ``asyncopation.drivers`` module re-exports under a
+public name (``from asyncopation.drivers.postgresql import sql``; ADR-0003: drivers do not do
+that). Django-name tracking in ``connlint`` is per module, not per scope, so a parameter that
+shadows a Django name (``def f(models)``) is treated as the Django name.
 """
 
 from __future__ import annotations

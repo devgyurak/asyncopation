@@ -317,13 +317,13 @@ async def test_close_with_a_hung_open_returns_within_its_timeout(opening):
     assert hung.elapsed < 5.0
 
 
-async def test_close_with_a_hung_open_cancels_the_opener(opening):
+async def test_close_with_a_hung_open_gives_the_caller_a_closing_error(opening):
     # given
     await opening.begin()
     # when
     hung = await close_while_open_hangs(opening, 0.1)
     # then
-    assert error_names([hung.opener_outcome]) == ["CancelledError"]
+    assert error_names([hung.opener_outcome]) == ["RuntimeError"]
 
 
 async def test_close_with_a_hung_open_leaves_no_open_driver(opening):
@@ -345,3 +345,33 @@ async def test_close_with_a_hung_open_leaves_the_registry_usable_afterwards(open
     driver = await ensure_driver("default")
     # then
     assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+async def test_close_cancels_only_the_open_not_the_calling_task(opening):
+    # given
+    await opening.begin()
+    # when
+    await close_while_open_hangs(opening, 0.1)
+    # then
+    assert opening.task is not None
+    assert opening.task.cancelled() is False
+
+
+async def test_a_caller_cancelled_during_open_still_sees_cancelled_error(opening):
+    # given
+    await opening.begin()
+    # when
+    await opening.cancel()
+    # then
+    assert opening.task is not None
+    assert opening.task.cancelled() is True
+
+
+async def test_a_caller_cancelled_during_open_leaves_no_driver(opening):
+    # given
+    await opening.begin()
+    # when
+    await opening.cancel()
+    # then
+    assert registry.entries() == []
+    assert opening.env.recorder.opens == 0

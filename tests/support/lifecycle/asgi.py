@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -109,3 +110,90 @@ async def run_lifespan_counting_tasks(app: Any) -> tuple[LifespanRun, int, int]:
     before = len(asyncio.all_tasks())
     run = await run_lifespan(app)
     return run, before, len(asyncio.all_tasks())
+
+
+class CrashingApp:
+    """A lifespan app that raises: `crash_on` is `startup`, `shutdown` or `after-startup`."""
+
+    def __init__(self, crash_on: str, error: Exception | None = None) -> None:
+        self.crash_on = crash_on
+        self.error = error or TypeError(f"bad {crash_on}")
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "lifespan":
+            return
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                if self.crash_on == "startup":
+                    raise self.error
+                await send({"type": "lifespan.startup.complete"})
+                if self.crash_on == "after-startup":
+                    raise self.error
+            elif message["type"] == "lifespan.shutdown":
+                if self.crash_on == "shutdown":
+                    raise self.error
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+
+
+class DuplicateReplyApp:
+    """Answers startup twice: the second `startup.complete` is stale by the time of shutdown."""
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "lifespan":
+            return
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                await send({"type": "lifespan.startup.complete"})
+                await send({"type": "lifespan.startup.complete"})
+            elif message["type"] == "lifespan.shutdown":
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+
+
+class HangingApp:
+    """A lifespan app that never replies in `hang_on` (`startup` or `shutdown`)."""
+
+    def __init__(self, hang_on: str) -> None:
+        self.hang_on = hang_on
+        self.hung = asyncio.Event()
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope["type"] != "lifespan":
+            return
+        while True:
+            message = await receive()
+            phase = message["type"].removeprefix("lifespan.")
+            if phase == self.hang_on:
+                self.hung.set()
+                await asyncio.Event().wait()
+            await send({"type": f"{message['type']}.complete"})
+            if phase == "shutdown":
+                return
+
+
+async def _hung(app: HangingApp) -> bool:
+    return app.hung.is_set()
+
+
+async def run_lifespan_cancelled_while_app_hangs(app: Any, hanging: HangingApp) -> LifespanRun:
+    """Drive `app` (which wraps `hanging`) until `hanging` hangs, then cancel the lifespan task."""
+    from tests.support.aio import wait_until
+
+    events = iter([{"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}])
+    run = LifespanRun([], {})
+
+    async def receive() -> dict[str, Any]:
+        return next(events)
+
+    async def send(message: dict[str, Any]) -> None:
+        run.sent.append(message)
+        run.snapshots[message["type"]] = entry_aliases()
+
+    task = asyncio.create_task(app({"type": "lifespan"}, receive, send))
+    await wait_until(lambda: _hung(hanging))
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    return run

@@ -4,13 +4,19 @@ import pytest
 
 from asyncopation.connection.asgi import LifespanApp
 from tests.support.lifecycle.asgi import (
+    CrashingApp,
+    DuplicateReplyApp,
     FakeApp,
+    HangingApp,
     LifespanAwareApp,
     NonLifespanApp,
     call_with_scope,
     run_lifespan,
+    run_lifespan_cancelled_while_app_hangs,
     run_lifespan_counting_tasks,
 )
+from tests.support.lifecycle.helpers import entry_aliases
+from tests.support.lifecycle.logs import capture_logs, errors_logged, mention_count
 
 
 async def test_startup_opens_the_drivers_and_reports_complete(configured):
@@ -248,3 +254,102 @@ async def test_delegated_scopes_do_not_open_drivers(configured):
     await call_with_scope(LifespanApp(inner), {"type": "http"})
     # then
     assert configured.recorder.built == []
+
+
+async def test_close_runs_even_when_the_apps_shutdown_hangs_and_is_cancelled(configured):
+    # given
+    hanging = HangingApp("shutdown")
+    app = LifespanApp(hanging)
+    # when
+    run = await run_lifespan_cancelled_while_app_hangs(app, hanging)
+    # then
+    assert entry_aliases() == []
+    assert configured.recorder.closes == 2
+    assert run.types == ["lifespan.startup.complete"]
+
+
+async def test_a_cancelled_app_startup_closes_our_drivers(configured):
+    # given
+    hanging = HangingApp("startup")
+    app = LifespanApp(hanging)
+    # when
+    await run_lifespan_cancelled_while_app_hangs(app, hanging)
+    # then
+    assert entry_aliases() == []
+    assert configured.recorder.closes == 2
+
+
+async def test_an_app_that_crashes_on_startup_reports_the_error_as_a_startup_failure(configured):
+    # given
+    app = LifespanApp(CrashingApp("startup"))
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.failed"]
+    assert run.sent[0]["message"] == "TypeError: bad startup"
+
+
+async def test_an_app_that_crashes_on_startup_gets_our_drivers_closed(configured):
+    # given
+    app = LifespanApp(CrashingApp("startup"))
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.snapshots["lifespan.startup.failed"] == []
+    assert configured.recorder.closes == 2
+
+
+@pytest.mark.parametrize("crash_on", ["shutdown", "after-startup"])
+async def test_an_app_that_crashes_after_startup_reports_a_shutdown_failure(configured, crash_on):
+    # given
+    app = LifespanApp(CrashingApp(crash_on))
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.complete", "lifespan.shutdown.failed"]
+    assert run.sent[1]["message"] == f"TypeError: bad {crash_on}"
+
+
+@pytest.mark.parametrize("crash_on", ["shutdown", "after-startup"])
+async def test_an_app_that_crashes_after_startup_still_gets_our_drivers_closed(
+    configured, crash_on
+):
+    # given
+    app = LifespanApp(CrashingApp(crash_on))
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.snapshots["lifespan.shutdown.failed"] == []
+
+
+async def test_a_stale_reply_of_an_earlier_phase_is_dropped_at_shutdown(configured):
+    # given
+    app = LifespanApp(DuplicateReplyApp())
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.complete", "lifespan.shutdown.complete"]
+
+
+async def test_a_failing_close_after_a_failed_app_startup_is_logged(configured, caplog):
+    # given
+    capture_logs(caplog)
+    configured.script.fail_close = True
+    app = LifespanApp(LifespanAwareApp(startup_failure="app boom"))
+    # when
+    await run_lifespan(app)
+    # then
+    assert mention_count(errors_logged(caplog), "after a failed startup") == 1
+
+
+async def test_a_failing_close_after_a_failed_app_startup_still_sends_the_apps_failure(
+    configured,
+):
+    # given
+    configured.script.fail_close = True
+    app = LifespanApp(LifespanAwareApp(startup_failure="app boom"))
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.types == ["lifespan.startup.failed"]
+    assert run.sent[0]["message"] == "app boom"

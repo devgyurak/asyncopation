@@ -97,9 +97,18 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         if config.engine is None or config.factory is None:  # narrowed by _config
             raise ImproperlyConfigured(f"asyncopation: {alias!r} has no engine")
         driver: AsyncDriver = config.factory()
-        entry.opening = asyncio.current_task()
+        # The open runs in its own task so that close() can cancel just the open, never the caller
+        # (a request handler that opened the pool lazily). The driver's open() cleans up after
+        # itself when it fails or is cancelled (ADR-0003).
+        opening = asyncio.ensure_future(driver.open())
+        entry.opening = opening
         try:
-            await driver.open()  # cleans up after itself when it fails or is cancelled (ADR-0003)
+            await opening  # a caller cancelled here cancels `opening` too
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if entry.closing and caller is not None and caller.cancelling() == 0:
+                raise _closing_error(alias) from None  # close() cancelled the open, not us
+            raise
         finally:
             entry.opening = None
         try:

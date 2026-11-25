@@ -52,8 +52,10 @@ deviating needs a superseding ADR.
 - `asgiref.sync` (`sync_to_async`, `async_to_sync`), `threading`, `concurrent.futures`,
   `multiprocessing` - a thread hop is exactly what this project removes.
 - `django.db.connection(s)`, `django.db.transaction`, `django.db.router` sync machinery (the only
-  exception: `from django.db.transaction import TransactionManagementError` in
-  `asyncopation/_django/transaction.py`, for the broken-transaction error of ADR-0001 6c).
+  exceptions: the `compile_scope` swap and the read-only `configured_databases()` in
+  `_django/connections.py`, ADR-0008, and `from django.db.transaction import
+  TransactionManagementError` in `asyncopation/_django/transaction.py`, for the broken-transaction
+  error of ADR-0001 6c). The list above is closed: no further exceptions, and guards A101/A102 are never narrowed for one (maintainer decision, 2026-11-25).
 - `time.sleep`, `asyncio.run`, `asyncio.get_event_loop`, `run_until_complete`.
 - Sync drivers (`psycopg2`, `MySQLdb`, `pymysql`).
 - Dynamic imports and code evaluation that bypass the import guards: `importlib` (except

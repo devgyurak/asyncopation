@@ -224,21 +224,24 @@ def _union_values() -> QuerySet[Book]:
 class GatheredUnionOutcome:
     sync: Outcome
     asynchronous: tuple[Outcome, Outcome]
-    annotations_before: list[str]
-    annotations_after: list[str]
+    selected_before: dict[str, Any]
+    selected_after: dict[str, Any]
 
 
 async def gathered_union_values_on_one_wrapper() -> GatheredUnionOutcome:
     """Two overlapping `alist()` calls on ONE union+values wrapper (compiling it adds
-    `__orderbycol<N>` annotations to a Query they share), and whether the Query was touched."""
+    `__orderbycol<N>` entries to the `selected` dict of a Query they share), and whether it changed."""
     from asyncopation import aq
 
     sync = await run_sync(_union_values, ASYNCOPATION["list"])
     wrapper = aq(_union_values())
-    before = list(wrapper.queryset.query.annotations)
+    before = dict(wrapper.queryset.query.selected or {})
     first, second = await asyncio.gather(wrapper.alist(), wrapper.alist(), return_exceptions=True)
     return GatheredUnionOutcome(
-        sync, (_outcome(first), _outcome(second)), before, list(wrapper.queryset.query.annotations)
+        sync,
+        (_outcome(first), _outcome(second)),
+        before,
+        dict(wrapper.queryset.query.selected or {}),
     )
 
 
@@ -291,3 +294,26 @@ async def alist_of_a_prefetched_manager() -> PrefetchOutcome:
         rows = await aq(author.books).alist()
     expected = author.books.all()
     return PrefetchOutcome(list(log), [r.pk for r in rows], [r.pk for r in expected])
+
+
+@dataclass(frozen=True)
+class PrefetchedAllOutcome:
+    statements: list[str]
+    same_objects: list[bool]
+    expected_count: int
+
+
+async def alist_of_all_of_a_prefetched_manager() -> PrefetchedAllOutcome:
+    """`aq(author.books).all().alist()` after `prefetch_related("books")`: as `author.books.all()`
+    (the cached queryset, unchained), the very same instances and no statement."""
+    from asyncopation import aq
+
+    author = await in_sync(_author_with_prefetched_books)
+    expected = list(author.books.all())
+    with recorded_statements() as log:
+        rows = await aq(author.books).all().alist()
+    return PrefetchedAllOutcome(
+        list(log),
+        [row is cached for row, cached in zip(rows, expected, strict=True)],
+        len(expected),
+    )

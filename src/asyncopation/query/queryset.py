@@ -90,7 +90,8 @@ class AsyncQuerySet:
 
         Fills the result cache of the wrapped QuerySet (``aq()`` cloned it, so the one you passed in
         is untouched; a manager's own fresh QuerySet is the exception, nobody else holds it); a
-        second call returns the cache's rows without I/O, as Django's does. The list is a copy: changing it never changes the cache.
+        second call returns the cache's rows without I/O, as Django's does. The list is a copy:
+        changing it never changes the cache.
         """
         return await evaluate_list(self._queryset)
 
@@ -119,18 +120,23 @@ class AsyncQuerySet:
         raise _evaluation_error("pickling an aq() QuerySet")
 
     def all(self) -> AsyncQuerySet:
-        """A new wrapper over a clone. Straight from a manager it keeps the pending sticky filter,
-        as ``Manager.all()`` (which returns ``get_queryset()`` unchained) does."""
+        """A new wrapper over a clone. Straight from a manager it behaves as ``Manager.all()``,
+        which returns ``get_queryset()`` unchained: the pending sticky filter is kept, and a
+        prefetched cache is returned as it is (``aq(t.books).all().alist()`` makes no statement)."""
+        if self._fresh and dq.cached_result(self._queryset) is not None:
+            return AsyncQuerySet(self._queryset, fresh=True)
         wrapped = _wrap(self._queryset.all())
         if self._fresh:
             dq.copy_filter_sticky(wrapped.queryset, self._queryset)
         return wrapped
 
     def __copy__(self) -> AsyncQuerySet:
-        return self.all()  # a clone (copy.copy would evaluate it), FETCH_RAISE kept
+        # A clone (copy.copy would evaluate the QuerySet) that keeps FETCH_RAISE and the pending
+        # sticky filter, like the wrapper it copies.
+        return AsyncQuerySet(_raise_clone(self._queryset), fresh=self._fresh)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> AsyncQuerySet:
-        return _wrap(copy.deepcopy(self._queryset, memo))
+        return AsyncQuerySet(_wrap(copy.deepcopy(self._queryset, memo)).queryset, fresh=self._fresh)
 
     # -- combining ----------------------------------------------------------------------------
     def __or__(self, other: Any) -> AsyncQuerySet:
@@ -211,25 +217,30 @@ def aq(obj: Any) -> AsyncQuerySet:
     synchronous I/O. A real ``Manager``'s own fresh ``get_queryset()`` result is switched in place,
     because ``QuerySet.fetch_mode()`` would clone it and a clone consumes the pending sticky filter
     of a many-to-many related manager (``aq(tag.books).filter(tags__name=x)`` would then differ
-    from Django's). Everything else (a QuerySet you pass, or what a duck-typed ``get_queryset()``
-    returns) may be shared, so it is cloned and never touched; the clone keeps the sticky state. The
-    one exception is a QuerySet whose result cache is filled (a related manager after
-    ``prefetch_related``): it is wrapped as it is, because ``alist()`` only reads that cache.
+    from Django's). This assumes ``Manager.get_queryset()`` returns a fresh QuerySet, as Django's
+    and related managers do; one that is already ``FETCH_RAISE`` may be shared and is cloned.
+    Everything else (a QuerySet you pass, or what a duck-typed ``get_queryset()`` returns) may be
+    shared, so it is cloned and never touched; the clone keeps the sticky state. The one exception
+    is a QuerySet whose result cache is filled (a related manager after ``prefetch_related``): it is
+    wrapped as it is, because ``alist()`` only reads that cache.
     """
     if isinstance(obj, AsyncQuerySet):
         return obj
     if isinstance(obj, Manager):
         queryset = obj.get_queryset()
         _require_queryset(queryset)
-        if dq.cached_result(queryset) is None:
-            dq.set_fetch_mode(queryset, FETCH_RAISE)
+        if dq.cached_result(queryset) is not None:
+            return AsyncQuerySet(queryset, fresh=True)
+        if dq.queryset_fetch_mode(queryset) is FETCH_RAISE:
+            return AsyncQuerySet(_raise_clone(queryset), fresh=True)
+        dq.set_fetch_mode(queryset, FETCH_RAISE)
         return AsyncQuerySet(queryset, fresh=True)
     from_source = not isinstance(obj, QuerySet) and hasattr(obj, "get_queryset")
     queryset = obj.get_queryset() if from_source else obj
     _require_queryset(queryset)
     if dq.cached_result(queryset) is not None:
-        return AsyncQuerySet(queryset, fresh=from_source)
-    return AsyncQuerySet(_raise_clone(queryset), fresh=from_source)
+        return AsyncQuerySet(queryset)
+    return AsyncQuerySet(_raise_clone(queryset))
 
 
 def _require_queryset(value: Any) -> None:

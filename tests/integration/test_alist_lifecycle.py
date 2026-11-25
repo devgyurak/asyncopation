@@ -1,7 +1,5 @@
 """`aq(qs).alist()` failure, concurrency and cancellation behaviour against the live database."""
 
-import pytest
-
 from tests.support.alist_cases import (
     alist_cache_placement,
     alist_cache_placement_of_fetch_raise,
@@ -12,7 +10,12 @@ from tests.support.alist_cases import (
     gathered_union_values_on_one_wrapper,
     unknown_alias,
 )
-from tests.support.backends import POSTGRESQL_ONLY, XFAIL_UNTIL_ASYNCMY
+from tests.support.backends import (
+    POSTGRESQL_ONLY,
+    POSTGRESQL_SQL_ONLY,
+    TRIVIAL_BEFORE_ASYNCMY,
+    XFAIL_UNTIL_ASYNCMY,
+)
 
 
 @XFAIL_UNTIL_ASYNCMY
@@ -48,7 +51,7 @@ async def test_gathered_alists_on_one_alias_each_return_their_own_result(async_e
     assert outcome.asynchronous == outcome.sync
 
 
-@POSTGRESQL_ONLY  # nothing is opened before #7 on MySQL/MariaDB, so "no connection in use" would pass trivially
+@TRIVIAL_BEFORE_ASYNCMY
 async def test_gathered_alists_leave_no_connection_in_use(async_env):
     # when
     outcome = await gathered_alists()
@@ -56,7 +59,7 @@ async def test_gathered_alists_leave_no_connection_in_use(async_env):
     assert outcome.in_use_after == 0
 
 
-@POSTGRESQL_ONLY
+@POSTGRESQL_SQL_ONLY
 async def test_a_cancelled_alist_is_cancelled(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -64,7 +67,7 @@ async def test_a_cancelled_alist_is_cancelled(async_env):
     assert outcome.cancelled is True
 
 
-@POSTGRESQL_ONLY
+@POSTGRESQL_SQL_ONLY
 async def test_a_cancelled_alist_leaves_the_connection_usable_for_the_next_call(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -72,7 +75,7 @@ async def test_a_cancelled_alist_leaves_the_connection_usable_for_the_next_call(
     assert outcome.next_rows == 5
 
 
-@POSTGRESQL_ONLY
+@POSTGRESQL_SQL_ONLY
 async def test_a_cancelled_alist_releases_its_connection(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -81,12 +84,23 @@ async def test_a_cancelled_alist_releases_its_connection(async_env):
 
 
 @XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize("caller", [0, 1])
-async def test_concurrent_alists_on_one_wrapper_return_the_cached_instances(async_env, caller):
+async def test_concurrent_alists_on_one_wrapper_return_the_cached_instances_to_the_first_caller(
+    async_env,
+):
     # when
     outcome = await concurrent_alists_on_one_wrapper()
     # then
-    assert outcome.results[caller][0] is outcome.cached[0]
+    assert outcome.results[0][0] is outcome.cached[0]
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_concurrent_alists_on_one_wrapper_return_the_cached_instances_to_the_second_caller(
+    async_env,
+):
+    # when
+    outcome = await concurrent_alists_on_one_wrapper()
+    # then
+    assert outcome.results[1][0] is outcome.cached[0]
 
 
 @XFAIL_UNTIL_ASYNCMY
@@ -108,26 +122,48 @@ async def test_alist_of_a_fetch_raise_queryset_fills_the_wrapper_clone_and_not_t
 
 
 @XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize("caller", [0, 1])
-async def test_concurrent_alists_on_one_wrapper_return_a_copy_of_the_cache(async_env, caller):
+async def test_concurrent_alists_on_one_wrapper_return_a_copy_of_the_cache_to_the_first_caller(
+    async_env,
+):
     # when
     outcome = await concurrent_alists_on_one_wrapper()
     # then
-    assert outcome.result_is_the_cache_list[caller] is False
+    assert outcome.result_is_the_cache_list[0] is False
 
 
 @XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize("caller", [0, 1])
-async def test_gathered_alists_of_a_union_values_wrapper_match_sync(async_env, caller):
+async def test_concurrent_alists_on_one_wrapper_return_a_copy_of_the_cache_to_the_second_caller(
+    async_env,
+):
+    # when
+    outcome = await concurrent_alists_on_one_wrapper()
+    # then
+    assert outcome.result_is_the_cache_list[1] is False
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_gathered_alists_of_a_union_values_wrapper_match_sync_for_the_first_caller(async_env):
     # when
     outcome = await gathered_union_values_on_one_wrapper()
     # then
-    assert outcome.asynchronous[caller] == outcome.sync
+    assert outcome.asynchronous[0] == outcome.sync
 
 
-@POSTGRESQL_ONLY  # before #7 nothing compiles on MySQL/MariaDB, so "untouched" would pass trivially
-async def test_gathered_alists_of_a_union_values_wrapper_leave_its_query_untouched(async_env):
+@XFAIL_UNTIL_ASYNCMY
+async def test_gathered_alists_of_a_union_values_wrapper_match_sync_for_the_second_caller(
+    async_env,
+):
     # when
     outcome = await gathered_union_values_on_one_wrapper()
     # then
-    assert outcome.annotations_after == outcome.annotations_before
+    assert outcome.asynchronous[1] == outcome.sync
+
+
+@TRIVIAL_BEFORE_ASYNCMY
+async def test_gathered_alists_of_a_union_values_wrapper_leave_its_selected_columns_untouched(
+    async_env,
+):
+    # when
+    outcome = await gathered_union_values_on_one_wrapper()
+    # then
+    assert outcome.selected_after == outcome.selected_before

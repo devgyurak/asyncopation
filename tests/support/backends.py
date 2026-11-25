@@ -11,6 +11,17 @@ POSTGRESQL_ONLY = pytest.mark.skipif(
     VENDOR != "postgresql", reason="the asyncmy driver arrives with issue #7"
 )
 
+# PostgreSQL-only for a reason other than the missing driver.
+POSTGRESQL_SQL_ONLY = pytest.mark.skipif(
+    VENDOR != "postgresql", reason="the statement uses pg_sleep, which is PostgreSQL-specific SQL"
+)
+# Before #7 nothing opens a connection or compiles on MySQL/MariaDB, so these would pass trivially
+# there (and strict xfail cannot be used: they do not fail).
+TRIVIAL_BEFORE_ASYNCMY = pytest.mark.skipif(
+    VENDOR != "postgresql",
+    reason="before asyncmy (#7) nothing opens or compiles on MySQL/MariaDB: the assertion is vacuous",
+)
+
 # MySQL/MariaDB execution lands with #7; strict so the marker is removed when it does.
 # Until then the registry has no engine for those backends, so the first open raises
 # `ImproperlyConfigured` ("not supported yet"); tests that capture errors into a differential

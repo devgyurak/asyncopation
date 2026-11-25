@@ -19,6 +19,7 @@ from tests.support.aq_wrapper import (
     read_attribute,
     related_books_manager,
     sql_of,
+    tag_books_manager,
     uninitialised_wrapper,
 )
 
@@ -71,6 +72,26 @@ def test_copying_a_wrapper_keeps_the_raise_fetch_mode(no_sql, duplicate):
     duplicated = duplicate(wrapper)
     # then
     assert duplicated.queryset._fetch_mode is FETCH_RAISE
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_copy_of_a_manager_wrapper_keeps_the_pending_sticky_filter(no_sql, duplicate):
+    # given
+    wrapper = aq(tag_books_manager())
+    # when
+    duplicated = duplicate(wrapper)
+    # then
+    assert duplicated.queryset.query.filter_is_sticky is True
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_all_of_a_copy_of_a_manager_wrapper_still_behaves_as_manager_all(no_sql, duplicate):
+    # given
+    duplicated = duplicate(aq(tag_books_manager()))
+    # when
+    again = duplicated.all()
+    # then
+    assert again.queryset.query.filter_is_sticky is True
 
 
 def test_pickling_a_wrapper_raises_sync_evaluation_error_and_runs_no_query(no_sql):

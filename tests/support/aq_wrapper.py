@@ -121,6 +121,30 @@ def prefilled_manager() -> SharedQuerysetManager:
     return manager
 
 
+def raise_mode_manager() -> SharedQuerysetManager:
+    """A real Manager whose `get_queryset()` returns ONE shared QuerySet that is already FETCH_RAISE
+    (what a custom manager returning a class-level QuerySet of an `aq()` user looks like)."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    manager = SharedQuerysetManager()
+    manager.shared = manager.shared.fetch_mode(FETCH_RAISE)
+    return manager
+
+
+class NotAQuerySetManager(Manager):
+    """A real Manager whose `get_queryset()` returns something that is no QuerySet."""
+
+    def get_queryset(self) -> Any:
+        return 42
+
+
+def prefilled_duck_source() -> Any:
+    """A duck-typed source (no Manager) whose `get_queryset()` returns a filled-cache QuerySet."""
+    source = SharedDuckSource()
+    source.shared._result_cache = []
+    return source
+
+
 SHARED_OTHER_MODE = Book.objects.all()
 
 

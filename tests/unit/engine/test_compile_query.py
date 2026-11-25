@@ -89,11 +89,20 @@ def test_compile_query_reads_the_values_names_before_compiling(alias, name, name
 @pytest.mark.parametrize(
     "name", ["book_union_values_unselected_order", "book_union_named_unselected_order"]
 )
-def test_compile_query_leaves_the_query_of_the_queryset_untouched(alias, name):
+def test_compile_query_leaves_the_selected_columns_of_the_queryset_untouched(alias, name):
     # when
     result = compile_case_twice(name, alias)
     # then
     assert result.selected_after == result.selected_before
+
+
+@pytest.mark.parametrize(
+    "name", ["book_union_values_unselected_order", "book_union_named_unselected_order"]
+)
+def test_compile_query_leaves_the_annotations_of_the_queryset_untouched(alias, name):
+    # when
+    result = compile_case_twice(name, alias)
+    # then
     assert result.annotations_after == result.annotations_before
 
 

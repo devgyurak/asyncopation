@@ -382,10 +382,10 @@ async def test_alist_of_a_many_to_many_manager_filter_on_its_own_tag_matches_syn
     assert result.async_outcome == result.sync_outcome
 
 
-@pytest.mark.parametrize(
+LOADS = pytest.mark.parametrize(
     "load", [tag_as_loaded_by_sync, tag_as_loaded_by_aq], ids=["sync-loaded", "aq-loaded"]
 )
-@pytest.mark.parametrize(
+STICKY_CHAINS = pytest.mark.parametrize(
     ("source_of", "chain"),
     [
         pytest.param(books_of_manager, all_then_filter_by_peer, id="manager-all-filter"),
@@ -393,6 +393,10 @@ async def test_alist_of_a_many_to_many_manager_filter_on_its_own_tag_matches_syn
         pytest.param(books_all_of, filter_by_peer, id="queryset-filter"),
     ],
 )
+
+
+@LOADS
+@STICKY_CHAINS
 async def test_alist_of_a_many_to_many_chain_keeps_the_sticky_filter_however_the_owner_was_loaded(
     async_env, tag_with_peer, load, source_of, chain
 ):
@@ -404,6 +408,21 @@ async def test_alist_of_a_many_to_many_chain_keeps_the_sticky_filter_however_the
     # then
     assert result.sync_outcome.error is None
     assert result.sync_outcome.rows == ()
+    assert result.async_outcome == result.sync_outcome
+
+
+@LOADS
+@STICKY_CHAINS
+async def test_alist_of_a_many_to_many_chain_on_the_own_tag_finds_rows_however_the_owner_was_loaded(
+    async_env, tag_with_peer, load, source_of, chain
+):
+    # given: the same chains with a name that matches, so the rows prove the join is shared
+    tag, _peer = tag_with_peer
+    owner = await load(tag)
+    # when
+    result = await manager_chain_differential(partial(source_of, owner), partial(chain, tag.name))
+    # then
+    assert len(result.sync_outcome.rows) > 0
     assert result.async_outcome == result.sync_outcome
 
 

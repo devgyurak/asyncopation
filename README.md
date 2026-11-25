@@ -81,7 +81,9 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 `aq()` wraps a clone of the QuerySet you pass (the one exception is a QuerySet whose result cache is
 already filled, which `alist()` only reads), so `alist()` fills the wrapper's own cache and never
 yours: a QuerySet kept in a class attribute does not return stale rows to later requests. A
-Manager's own fresh QuerySet is used directly. `aq()` applies `FETCH_RAISE`: touching an unloaded relation or a deferred field raises
+Manager's own fresh QuerySet is used directly (`Manager.get_queryset()` is assumed to return a
+fresh QuerySet, as Django's and related managers do). `aq()` applies `FETCH_RAISE`: touching an
+unloaded relation or a deferred field raises
 `FieldFetchBlocked` instead of querying synchronously. Synchronous evaluators (`list(aq(qs))`,
 `aq(qs).get()`, `len(...)`, `aq(qs).iterator()`, a slice with a step such as `aq(qs)[::2]`) raise
 `asyncopation.SyncEvaluationError`, and `a*` methods that are not implemented yet (`aget`, `afirst`,

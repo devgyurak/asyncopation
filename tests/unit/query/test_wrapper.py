@@ -1,5 +1,6 @@
 """`aq()` wraps a QuerySet by composition: construction, idempotence, cache and fetch mode."""
 
+import pytest
 from django.db.models import FETCH_ONE, FETCH_RAISE, QuerySet  # ty: ignore[missing-module-member] - missing from django-types
 
 from asyncopation import aq
@@ -7,15 +8,18 @@ from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
     SHARED_OTHER_MODE,
+    NotAQuerySetManager,
     SharedDuckSource,
     SharedQuerysetManager,
     book_manager,
     class_attribute_of,
     foreign_mode_queryset,
     fresh_books,
+    prefilled_duck_source,
     prefilled_manager,
     prefilled_queryset,
     raise_mode_books,
+    raise_mode_manager,
     sticky_tag_books,
     tag_books_manager,
 )
@@ -145,13 +149,80 @@ def test_aq_of_a_manager_with_a_filled_cache_leaves_the_fetch_mode_of_that_query
     assert wrapper.queryset._fetch_mode is FETCH_ONE
 
 
-def test_all_of_a_duck_typed_source_wrapper_keeps_the_pending_sticky_filter():
+def test_all_of_a_duck_typed_source_wrapper_consumes_the_sticky_filter_as_a_queryset_does():
     # given
     wrapper = aq(SharedDuckSource(sticky=True))
     # when
     again = wrapper.all()
     # then
-    assert again.queryset.query.filter_is_sticky is True
+    assert again.queryset.query.filter_is_sticky is False
+
+
+def test_aq_of_a_manager_whose_queryset_is_already_fetch_raise_clones_it():
+    # given
+    manager = raise_mode_manager()
+    # when
+    wrapper = aq(manager)
+    # then
+    assert wrapper.queryset is not manager.shared
+
+
+def test_aq_of_a_manager_whose_queryset_is_already_fetch_raise_leaves_its_cache_alone():
+    # given
+    manager = raise_mode_manager()
+    # when
+    aq(manager)
+    # then
+    assert manager.shared._result_cache is None
+
+
+def test_aq_of_a_manager_returning_a_non_queryset_raises_type_error():
+    # when / then
+    with pytest.raises(TypeError, match="QuerySet or a Manager"):
+        aq(NotAQuerySetManager())
+
+
+def test_aq_of_a_plain_queryset_does_not_invent_a_sticky_filter():
+    # when
+    wrapper = aq(fresh_books())
+    # then
+    assert wrapper.queryset.query.filter_is_sticky is False
+
+
+def test_all_of_a_manager_wrapper_with_a_prefetch_cache_returns_that_queryset():
+    # given
+    manager = prefilled_manager()
+    # when
+    again = aq(manager).all()
+    # then
+    assert again.queryset is manager.shared
+
+
+def test_all_of_a_manager_wrapper_with_a_prefetch_cache_stays_a_manager_wrapper():
+    # given
+    manager = prefilled_manager()
+    # when
+    again = aq(manager).all().all()
+    # then
+    assert again.queryset is manager.shared
+
+
+def test_all_of_a_filled_queryset_wrapper_gives_a_clone_without_the_cache():
+    # given
+    evaluated = prefilled_queryset([])
+    # when
+    again = aq(evaluated).all()
+    # then
+    assert again.queryset is not evaluated
+
+
+def test_all_of_a_filled_duck_typed_source_wrapper_gives_a_clone_without_the_cache():
+    # given
+    source = prefilled_duck_source()
+    # when
+    again = aq(source).all()
+    # then
+    assert again.queryset is not source.shared
 
 
 def test_aq_of_a_queryset_keeps_the_sticky_filter_of_the_original_on_the_clone():

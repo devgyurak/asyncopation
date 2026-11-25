@@ -76,7 +76,11 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
    clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
-   (which returns `get_queryset()` unchained) does.*
+   (which returns `get_queryset()` unchained) does: its sticky filter, and a prefetched result
+   cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement); copies keep
+   the sticky filter and that behaviour. The in-place switch assumes `Manager.get_queryset()`
+   returns a fresh QuerySet, as Django's and related managers do; a custom manager returning a
+   shared one that is already `FETCH_RAISE` gets a clone.*
    Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK
    / M2M managers are evaluated through `aq()`. `afetch()` is explicit and non-recursive; batched
    peer loading returns results aligned with the parents.
@@ -115,7 +119,9 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
 - *Amended 2026-11-25 (#6, PR #65):* differential: `aq(tag.books).filter(tags__name=x)` (many-to-many
   related manager, pending sticky filter) and chains on a reverse foreign-key manager return the
   same rows as the sync ORM; so do `aq(tag.books).all().filter(...)` and
-  `aq(tag.books.all()).filter(...)`, whether `tag` was loaded by the sync ORM or by `aq()`.
+  `aq(tag.books.all()).filter(...)`, whether `tag` was loaded by the sync ORM or by `aq()`;
+  `aq(author.books).all().alist()` after `prefetch_related` issues no statement and returns the
+  prefetched instances.
 - *Amended 2026-11-25 (#6, PR #65):* unit and integration: `aq()` of a `FETCH_RAISE` QuerySet or of
   a duck-typed source's shared QuerySet clones it, and `alist()` leaves the caller's cache and
   fetch mode alone; only a real `Manager`'s QuerySet is switched in place.

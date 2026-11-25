@@ -22,6 +22,7 @@ from tests.support.drivers.contrib import (
     python_types,
     read_from_each_schema,
     read_hstore_as_assumed_role,
+    schema_loader_presence,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -241,7 +242,14 @@ async def test_assume_role_still_costs_two_catalog_queries(readonly_db, binding)
     assert sorted(outcome.catalog_queries) == ["citext", "hstore"]
 
 
-async def test_hstore_types_in_several_schemas_are_all_registered(multi_schema_database):
+async def test_every_hstore_type_of_every_schema_has_its_loaders(multi_schema_database):
+    # when
+    oids_found, connections_missing_loaders = await schema_loader_presence(multi_schema_database)
+    # then
+    assert (oids_found, connections_missing_loaders) == (4, 0)
+
+
+async def test_hstore_outside_the_search_path_reads_as_dict(multi_schema_database):
     # when
     values = await read_from_each_schema(multi_schema_database)
     # then

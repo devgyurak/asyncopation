@@ -84,7 +84,13 @@ async def sync_rows(
     transactional: bool = False,
     overrides: dict[str, Any] | None = None,
 ) -> list[Row]:
-    """The rows Django's own sync PostgreSQL cursor returns (fresh wrapper, own connection)."""
+    """The rows Django's own sync PostgreSQL cursor returns (fresh wrapper, own connection).
+
+    The wrapper uses alias ``default`` because Django's contrib.postgres handler looks the alias up
+    in ``connections`` and caches the hstore/citext OIDs per process from ``connections["default"]``
+    (a worker-thread connection that stays open). The OIDs are therefore those of the test
+    database: ``overrides={"NAME": ...}`` must not point at a database with other OIDs.
+    """
 
     def run() -> list[Row]:
         from django.db.backends.postgresql.base import DatabaseWrapper

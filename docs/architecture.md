@@ -165,8 +165,10 @@ server info by alias, read-only `PoolStats` and the in-flight statement counter 
 executors, #5b); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
 probe -> inject, under a per-`(alias, loop)` lock) shared by `setup()` and the lazy fallback;
 `close(timeout)` refuses new opens, waits for in-flight statements, closes the current loop's
-drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`; whether `django.contrib.postgres` is installed is also fixed at `configure()` (a later `INSTALLED_APPS` change needs `asyncopation.configure()` again, ADR-0003 Decision 2)
-(the test runner's rename: call `asyncopation.configure()` again); `setup()` opens only aliases with
+drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`
+(the test runner's rename: call `asyncopation.configure()` again); whether
+`django.contrib.postgres` is installed is also fixed at `configure()` (a later `INSTALLED_APPS`
+change needs `asyncopation.configure()` again, ADR-0003 Decision 2); `setup()` opens only aliases with
 a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
 until #7.
 

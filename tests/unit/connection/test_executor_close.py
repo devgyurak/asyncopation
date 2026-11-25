@@ -6,6 +6,8 @@ from asyncopation import ConcurrentQueryError
 from asyncopation.connection.executor import BorrowedExecutor
 from tests.support.executors.close_pins import (
     close_gives_up_on_a_pin_whose_block_already_ended,
+    finalize_a_lost_pin_in_another_context,
+    get_a_connection_after_close_passed,
     pin_again_after_close_gave_up_on_the_pin,
     select_an_executor_after_close_gave_up_on_the_pin,
     use_a_pin_after_close_gave_up,
@@ -170,3 +172,38 @@ async def test_close_does_not_flag_a_pin_whose_block_already_ended(execenv):
     drivers_closed = await close_gives_up_on_a_pin_whose_block_already_ended()
     # then
     assert drivers_closed is False
+
+
+async def test_a_pin_whose_connection_arrives_after_close_passed_is_closed(execenv):
+    # when
+    outcome = await get_a_connection_after_close_passed(execenv)
+    # then
+    assert outcome.executor_closed is True
+
+
+async def test_its_first_statement_is_refused_and_never_reaches_the_driver(execenv):
+    # when
+    outcome = await get_a_connection_after_close_passed(execenv)
+    # then
+    assert (type(outcome.error), outcome.statement_kinds) == (ConcurrentQueryError, [])
+
+
+async def test_leaving_that_pin_leaves_nothing_in_flight(execenv):
+    # when
+    outcome = await get_a_connection_after_close_passed(execenv)
+    # then
+    assert outcome.in_flight == 0
+
+
+async def test_the_owner_of_a_lost_pin_finalized_elsewhere_borrows_again(execenv):
+    # when
+    outcome = await finalize_a_lost_pin_in_another_context()
+    # then
+    assert isinstance(outcome.current, BorrowedExecutor)
+
+
+async def test_the_owner_of_a_lost_pin_finalized_elsewhere_can_query_and_pin_again(execenv):
+    # when
+    outcome = await finalize_a_lost_pin_in_another_context()
+    # then
+    assert (outcome.rows, outcome.pinned_again) == ([(1,)], [(1,)])

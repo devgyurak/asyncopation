@@ -147,7 +147,7 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
        statement or transaction-control call raises `ConcurrentQueryError` ("the drivers were
        closed by close()"; `current_executor` keeps returning the pin to its owner for as long as the
        block is open, so nothing silently runs outside the transaction), and leaving the block
-       closes its connection. An executor calls
+       closes its connection (also a pin whose connection arrived after `close()` passed). An executor calls
        `ensure_driver` first and starts its unit right after it returns, with no `await` in between
        (`statement_started` has no closing check); the borrowed executor counts from before the pool
        acquire to after the release, and a stream for its whole lifetime.

@@ -486,6 +486,8 @@ async def pin(alias: str) -> AsyncGenerator[PinnedExecutor]:
         async with driver.connection() as connection:
             executor = PinnedExecutor(alias, driver, connection, task)
             registry.register_pin(alias, executor)
+            if registry.pins_closed(asyncio.get_running_loop()):  # close() passed while we waited
+                executor.mark_drivers_closed()
             _pinned.set(MappingProxyType({**mapping, alias: executor}))
             try:
                 try:

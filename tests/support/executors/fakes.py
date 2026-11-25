@@ -143,6 +143,9 @@ class GatedDriver(RecordingDriver):
         """Awaited inside every statement, in the task that runs it (re-entrancy scenarios)."""
         self.during_in_flight: list[int] = []
         self.close_hold: Hold | None = None
+        self.borrow_hold: Hold | None = None
+        """`connection()` stops here once it holds the connection, until `release()` (a pin that
+        waits in the pool)."""
         self.borrow_error: BaseException | None = None
         """Raised by `connection()` before a connection is handed out."""
         self._faults: dict[str, list[BaseException]] = {}
@@ -172,6 +175,10 @@ class GatedDriver(RecordingDriver):
 
         return registry.in_flight(self.alias)
 
+    def hold_borrows(self) -> Hold:
+        self.borrow_hold = Hold()
+        return self.borrow_hold
+
     def hold_statements(self) -> Hold:
         self.hold = Hold()
         return self.hold
@@ -183,6 +190,9 @@ class GatedDriver(RecordingDriver):
         if self.borrow_error is not None:
             raise self.borrow_error
         async with super().connection() as inner:
+            if self.borrow_hold is not None:
+                self.borrow_hold.enter()
+                await self.borrow_hold.event.wait()
             wrapped = GatedConnection(self, inner)
             self.connections.append(wrapped)
             yield wrapped

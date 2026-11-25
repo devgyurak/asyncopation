@@ -152,3 +152,59 @@ async def close_gives_up_on_a_pin_whose_block_already_ended() -> bool:
     drivers_closed = executor.drivers_closed
     await pin_cm.__aexit__(None, None, None)
     return drivers_closed
+
+
+@dataclass(frozen=True)
+class LatePin:
+    executor_closed: bool
+    error: BaseException | None
+    statement_kinds: list[str]
+    exit_error: None
+    in_flight: int
+
+
+async def get_a_connection_after_close_passed(env: ExecEnv) -> LatePin:
+    """A pin waits for its connection while `close()` gives up on the pins of the loop; the
+    connection then arrives and the first statement must be refused."""
+    driver = env.default
+    hold = driver.hold_borrows()
+    reg = _registry()
+    loop = asyncio.get_running_loop()
+
+    async def block() -> tuple[bool, BaseException | None]:
+        async with _executors().pin(ALIAS) as executor:
+            return executor.closed, await raised_by(executor.fetch_all("SELECT 1", None))
+
+    task = asyncio.create_task(block())
+    await hold.wait_entered()
+    reg.close_pins(loop)  # what close() does when its wait ran out
+    hold.release()
+    executor_closed, error = await task
+    reg.end_closing(loop, [])
+    return LatePin(executor_closed, error, driver.kinds(), None, reg.in_flight(ALIAS))
+
+
+@dataclass(frozen=True)
+class LostAndFinalized:
+    current: Any
+    rows: list[Any]
+    pinned_again: Any
+
+
+async def finalize_a_lost_pin_in_another_context() -> LostAndFinalized:
+    """`close(timeout)` gave up on a pin held by an async generator; another task then finalizes
+    the generator. The owner may borrow again and may pin the alias anew."""
+    from asyncopation.connection import close
+    from tests.support.executors.context import _pinning_generator
+    from tests.support.executors.ops import in_gather_child
+
+    mod = _executors()
+    generator = _pinning_generator()
+    await anext(generator)
+    await raised_by(close(timeout=0.05))
+    await in_gather_child(generator.aclose())
+    current = mod.current_executor(ALIAS)
+    rows = await current.fetch_all("SELECT 1", None)
+    async with mod.pin(ALIAS) as again:
+        again_rows = await again.fetch_all("SELECT 1", None)
+    return LostAndFinalized(current, rows, again_rows)

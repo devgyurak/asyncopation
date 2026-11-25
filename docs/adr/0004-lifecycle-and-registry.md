@@ -110,7 +110,8 @@ Prior art:
    *Amended 2026-11-25 (#5, PR #61): the in-flight counter also counts every open pin block and
    open stream (ADR-0001 Decision 10), so `close()` waits for them up to its timeout and then closes
    anyway; pins still open then are marked closed first (the registry tracks them), so they raise
-   `ConcurrentQueryError` instead of running on a closed pool.*
+   `ConcurrentQueryError` instead of running on a closed pool; a pin whose connection arrives after
+   that point (it was waiting in the pool) is marked closed on arrival.*
 6. **Registry:** process-global, owned by `asyncopation.connection`, keyed by `(alias, loop)` for
    drivers/pools and by `alias` for server info. Never in a contextvar (the transient `compile_scope` swap of ADR-0008 uses asgiref's contextvar-backed storage but carries no state across an `await`), never populated at import.
    It exposes read-only pool stats per entry (in use / idle / waiting) for tests and metrics.

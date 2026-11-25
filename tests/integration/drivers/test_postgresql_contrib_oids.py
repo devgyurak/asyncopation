@@ -8,6 +8,7 @@ from tests.support.drivers.contrib import (
     catalog_queries_after_growing_the_pool,
     catalog_queries_of_one_open,
     reconnect_after_backend_termination,
+    recorded_for_a_known_query,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -48,18 +49,34 @@ async def test_a_driver_with_the_flag_off_runs_no_catalog_query(django_db_setup)
     assert names == []
 
 
-async def test_a_replacement_connection_after_pg_terminate_backend_reads_hstore_as_dict(
-    readonly_db,
-):
+async def test_the_recorder_sees_a_known_pg_type_query(django_db_setup):
     # when
-    outcome = await reconnect_after_backend_termination()
+    names = await recorded_for_a_known_query()
     # then
-    assert outcome.new_pid != outcome.old_pid
-    assert outcome.value == {"a": "1"}
+    assert names == ["hstore"]
 
 
-async def test_a_replacement_connection_runs_no_further_catalog_query(readonly_db):
+@pytest.fixture
+async def reconnect(readonly_db):
+    return await reconnect_after_backend_termination()
+
+
+async def test_a_replacement_connection_is_a_new_backend(reconnect):
     # when
-    outcome = await reconnect_after_backend_termination()
+    new_pid = reconnect.new_pid
     # then
-    assert sorted(outcome.catalog_queries) == TYPE_NAMES
+    assert new_pid != reconnect.old_pid
+
+
+async def test_a_replacement_connection_reads_hstore_as_dict(reconnect):
+    # when
+    value = reconnect.value
+    # then
+    assert value == {"a": "1"}
+
+
+async def test_a_replacement_connection_runs_no_further_catalog_query(reconnect):
+    # when
+    names = sorted(reconnect.catalog_queries)
+    # then
+    assert names == TYPE_NAMES

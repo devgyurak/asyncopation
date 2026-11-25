@@ -113,7 +113,8 @@ class Capabilities:  # driver/runtime facts only - never SQL shape
    queried or registered (hstore reads as `str`, like the sync backend). The OIDs are not
    refreshed while the driver stays open: an extension created or re-created after `open()` takes
    effect on the next `close()` and `open()` (Django caches them per process until
-   `CreateExtension` runs), and the flag is fixed at `configure()` like `USE_TZ`. The catalog
+   `CreateExtension` runs; likewise a database dropped and re-created while the driver is open
+   gets new OIDs, so its hstore silently reads as `str` until the next `open()`), and the flag is fixed at `configure()` like `USE_TZ`. The catalog
    queries use the raw connection, so ADR-0005 observers do not see them. The compile-only
    wrapper needs no hstore handling: its `compose_sql` renders only exact built-in types and
    rejects the rest. `connection_created` is **not** sent for our connections (documented).

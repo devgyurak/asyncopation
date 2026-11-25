@@ -11,12 +11,17 @@ from tests.support.drivers.contrib import (
     async_column,
     compare_zoo_with_sync,
     compare_zoo_without_contrib,
+    concurrent_hstore_reads,
     configure_unopened_driver,
+    element_types,
+    hstore_in_transaction_and_after_rollback,
     insert_and_read_back,
     loader_presence,
     open_and_query_in_database_without_extensions,
     pg_field_zoo_sql,
     python_types,
+    read_from_each_schema,
+    read_hstore_as_assumed_role,
 )
 
 pytestmark = POSTGRES_ONLY
@@ -77,6 +82,7 @@ async def test_citext_array_values_are_lists_of_str(readonly_db, binding):
     values = await async_column("citext_list", binding.options)
     # then
     assert python_types(values) == {list}
+    assert element_types(values) == {str}
 
 
 async def test_scalar_citext_values_are_str(readonly_db, binding):
@@ -115,7 +121,7 @@ async def test_dict_parameter_inserted_through_the_driver_reads_back_equal(hstor
     # given
     value = {"k": "v", "n": None, 'q"uote': "c,o=>m\\a", "한글": "✓"}
     # when
-    stored = await insert_and_read_back(hstore_table, "data", value)
+    stored = await insert_and_read_back(hstore_table, "data", value, binding.options)
     # then
     assert stored == [value]
 
@@ -124,7 +130,7 @@ async def test_list_of_dicts_inserted_through_the_driver_reads_back_equal(hstore
     # given
     value = [{"a": "1"}, {}, {"b": None}]
     # when
-    stored = await insert_and_read_back(hstore_table, "tags", value)
+    stored = await insert_and_read_back(hstore_table, "tags", value, binding.options)
     # then
     assert stored == [value]
 
@@ -164,16 +170,17 @@ async def test_open_still_asks_for_the_oids_in_a_database_without_the_extensions
 async def test_configure_without_fetched_oids_raises_runtime_error_when_the_flag_is_on(
     django_db_setup,
 ):
+    # given: open() always fetches the OIDs first, so only this direct call reaches the invariant
     # when / then
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="OIDs are unknown"):
         await configure_unopened_driver(register=True)
 
 
 async def test_configure_without_fetched_oids_is_fine_when_the_flag_is_off(django_db_setup):
     # when
-    configured = await configure_unopened_driver(register=False)
+    has_hstore_loader = await configure_unopened_driver(register=False)
     # then
-    assert configured is True
+    assert has_hstore_loader is False
 
 
 # --------------------------------------------------------------------------- loaders
@@ -181,14 +188,8 @@ async def test_every_physical_connection_has_the_hstore_loaders(readonly_db):
     # when
     presence = await loader_presence()
     # then
-    assert presence.every_connection_has_hstore
-
-
-async def test_the_probe_and_the_pool_connections_are_all_inspected(readonly_db):
-    # when
-    presence = await loader_presence()
-    # then
-    assert presence.connections_seen >= 3
+    assert presence.connections_without_hstore == 0
+    assert presence.connections_seen >= 3  # the probe and two pool connections: not vacuous
 
 
 async def test_the_shared_adapters_template_gets_no_hstore_loader(readonly_db):
@@ -196,3 +197,52 @@ async def test_the_shared_adapters_template_gets_no_hstore_loader(readonly_db):
     presence = await loader_presence()
     # then
     assert presence.template_lacks_hstore
+
+
+# --------------------------------------------------------------------------- more shapes
+async def test_citext_array_parameter_round_trips_like_sync_cursor(readonly_db, binding):
+    # when
+    result = await compare_with_sync(
+        "SELECT %s::citext[]",
+        (["Alpha", "beta", "a,b"],),
+        options=binding.options,
+        register_contrib_types=True,
+    )
+    # then
+    assert result.async_rows == result.sync_rows
+    assert result.async_rows[0][0][0] == "list"
+
+
+async def test_hstore_reads_as_dict_from_every_pool_connection_at_once(readonly_db):
+    # when
+    values = await concurrent_hstore_reads(4)
+    # then
+    assert values == [{"a": "1"}] * 4
+
+
+async def test_hstore_reads_as_dict_inside_a_transaction_and_after_rollback(readonly_db, binding):
+    # when
+    values = await hstore_in_transaction_and_after_rollback()
+    # then
+    assert values == [{"a": "1"}, {"a": "1"}]
+
+
+async def test_hstore_reads_as_dict_with_assume_role(readonly_db, binding):
+    # when
+    outcome = await read_hstore_as_assumed_role(binding.options)
+    # then
+    assert outcome.value == {"a": "1"}
+
+
+async def test_assume_role_still_costs_two_catalog_queries(readonly_db, binding):
+    # when
+    outcome = await read_hstore_as_assumed_role(binding.options)
+    # then
+    assert sorted(outcome.catalog_queries) == ["citext", "hstore"]
+
+
+async def test_hstore_types_in_several_schemas_are_all_registered(multi_schema_database):
+    # when
+    values = await read_from_each_schema(multi_schema_database)
+    # then
+    assert values == [{"a": "1"}, {"b": None}]

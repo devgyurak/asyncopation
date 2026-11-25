@@ -39,7 +39,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
 | 1 | `asyncopation.drivers` (internal, experimental) | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
 | 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` (`CompileOnlyMixin` + per-backend composition such as `compile.postgresql`, imported lazily; frozen `ServerInfo`) and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
-| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
+| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.apps` is the one place that asks which apps are installed (`is_installed`; read by `connection.engines` at `configure()` for the contrib.postgres flag, ADR-0003 Decision 2); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
 ## Evaluation pipeline
 
@@ -165,7 +165,7 @@ server info by alias, read-only `PoolStats` and the in-flight statement counter 
 executors, #5b); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
 probe -> inject, under a per-`(alias, loop)` lock) shared by `setup()` and the lazy fallback;
 `close(timeout)` refuses new opens, waits for in-flight statements, closes the current loop's
-drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`
+drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`; whether `django.contrib.postgres` is installed is also fixed at `configure()` (a later `INSTALLED_APPS` change needs `asyncopation.configure()` again, ADR-0003 Decision 2)
 (the test runner's rename: call `asyncopation.configure()` again); `setup()` opens only aliases with
 a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
 until #7.

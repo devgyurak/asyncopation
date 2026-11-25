@@ -13,7 +13,9 @@ from asyncopation.drivers.postgresql.connection import PostgresConnection
 from asyncopation.drivers.postgresql.contrib_types import (
     ContribTypes,
     fetch_contrib_oids,
-    register_contrib_types,
+)
+from asyncopation.drivers.postgresql.contrib_types import (
+    register_contrib_types as register_types,
 )
 from asyncopation.drivers.postgresql.errors import is_disconnect, translate_errors
 from asyncopation.drivers.postgresql.settings import PostgresConfig, build_config
@@ -141,9 +143,10 @@ class PostgresDriver:
                 await self._configure_session(raw)
                 if self._config.register_contrib_types:
                     # After SET ROLE, as in Django, where the handlers register on the configured
-                    # connection. Registering here too keeps the probe identical to pool members.
+                    # connection. Registering on the (about to close) probe connection too keeps
+                    # it identical to pool members, and a registration error fails open() at once.
                     contrib.append(await fetch_contrib_oids(raw))
-                    register_contrib_types(raw, contrib[0])
+                    register_types(raw, contrib[0])
                 return divmod(raw.info.server_version, 10000)
             finally:
                 await raw.close()
@@ -154,9 +157,11 @@ class PostgresDriver:
         """Pool ``configure`` hook: session setup, then the (sync, I/O free) type registration."""
         await self._configure_session(raw)
         if self._config.register_contrib_types:
-            if not contrib:  # never skip silently: hstore would read back as str
+            # Invariant, unreachable through open(): the probe fills `contrib` before the pool
+            # opens. Never skip silently (hstore would read back as str).
+            if not contrib:
                 raise RuntimeError("contrib.postgres type OIDs are unknown: the probe did not run")
-            register_contrib_types(raw, contrib[0])
+            register_types(raw, contrib[0])
 
     async def _configure_session(self, raw: psycopg.AsyncConnection) -> None:
         """Per physical connection; port of Django's ``get_new_connection`` + ``_configure_*``."""

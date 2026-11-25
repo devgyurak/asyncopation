@@ -37,6 +37,11 @@ def python_types(values: list[Any]) -> set[type]:
     return {type(value) for value in values}
 
 
+def element_types(lists: list[list[Any]]) -> set[type]:
+    """Types of the elements of every nested list (e.g. the strings inside ``citext[]`` values)."""
+    return python_types([element for items in lists for element in items])
+
+
 def pg_field_zoo_sql(*columns: str) -> str:
     """Selected columns (default: all five) of every PgFieldZoo row, in seed order."""
     from harness.pgcatalog.models import PgFieldZoo
@@ -63,7 +68,11 @@ async def compare_zoo_with_sync(options: dict[str, Any] | None = None) -> RowsCo
 
 @contextmanager
 def contrib_handlers_disconnected() -> Generator[None]:
-    """Sync Django as it behaves without ``django.contrib.postgres`` (no type handlers)."""
+    """Sync Django as it behaves without ``django.contrib.postgres`` (no type handlers).
+
+    Disconnects a process-global signal receiver: it assumes tests run one at a time and that no
+    other connection is created inside the block (true for these sequential async tests).
+    """
     from django.contrib.postgres.signals import register_type_handlers
     from django.db.backends.signals import connection_created
 
@@ -195,7 +204,7 @@ def lacks_loader(adapters: Any, oids: tuple[int, ...]) -> bool:
 @dataclass(frozen=True)
 class LoaderPresence:
     connections_seen: int
-    every_connection_has_hstore: bool
+    connections_without_hstore: int
     template_lacks_hstore: bool
 
 
@@ -212,7 +221,7 @@ async def loader_presence() -> LoaderPresence:
     instances = connection_class.instances  # ty: ignore[missing-attribute]
     return LoaderPresence(
         connections_seen=len(instances),
-        every_connection_has_hstore=all(has_loader(c.adapters, oids) for c in instances),
+        connections_without_hstore=sum(not has_loader(c.adapters, oids) for c in instances),
         template_lacks_hstore=lacks_loader(template, oids),
     )
 
@@ -230,10 +239,12 @@ async def drop_hstore_table() -> None:
     await admin_query(f"DROP TABLE IF EXISTS {HSTORE_TABLE}")
 
 
-async def insert_and_read_back(table: str, column: str, value: Any) -> list[Any]:
+async def insert_and_read_back(
+    table: str, column: str, value: Any, options: dict[str, Any] | None = None
+) -> list[Any]:
     """Insert `value` as a parameter through the driver, read the column back."""
     async with (
-        open_driver(register_contrib_types=True) as driver,
+        open_driver(options=options, register_contrib_types=True) as driver,
         driver.connection() as conn,
     ):
         await conn.execute(f"INSERT INTO {table} ({column}) VALUES (%s)", (value,))
@@ -270,7 +281,12 @@ async def open_and_query_in_database_without_extensions(name: str) -> BareOpen:
 
 # --------------------------------------------------------------------------- configure step
 async def configure_unopened_driver(*, register: bool) -> bool:
-    """Run the per-connection configure step on a driver that never fetched the OIDs."""
+    """Run the pool's configure step on a driver that never fetched the OIDs.
+
+    ``open()`` always fetches them first (the probe), so this state is unreachable in production:
+    with the flag on the step must refuse (RuntimeError) rather than skip silently, because hstore
+    would then read back as text. Returns whether the configured connection has the hstore loader.
+    """
     from asyncopation.drivers.postgresql import PostgresDriver
     from asyncopation.drivers.postgresql.settings import build_config
 
@@ -285,9 +301,9 @@ async def configure_unopened_driver(*, register: bool) -> bool:
     raw = await psycopg.AsyncConnection.connect(**config.conn_kwargs)
     try:
         await driver._configure_pooled(raw, [])  # the pool's step, with no OIDs fetched
+        return has_loader(raw.adapters, await hstore_oids())
     finally:
         await raw.close()
-    return True
 
 
 # --------------------------------------------------------------------------- unit helpers
@@ -328,3 +344,128 @@ def engine_prepared_flag(*, installed: bool) -> bool:
     ):
         pg_engine().prepare("default", dict(PG_SETTINGS), use_tz=True, time_zone="UTC")
     return spy.call_args.kwargs["register_contrib_types"]
+
+
+# --------------------------------------------------------------------------- recorder sanity
+async def recorded_for_a_known_query() -> list[str]:
+    """What the recorder sees for a plain ``pg_type`` lookup (it must not be blind)."""
+    sql = "SELECT 1 FROM pg_type WHERE typname = %s"
+    with recorded_catalog_queries() as seen:
+        async with open_driver(register_contrib_types=False) as driver, driver.connection() as conn:
+            await conn.fetch_all(sql, ("hstore",))
+    return list(seen)
+
+
+# --------------------------------------------------------------------------- roles
+@dataclass(frozen=True)
+class RoleRead:
+    value: Any
+    catalog_queries: list[str]
+
+
+async def read_hstore_as_assumed_role(options: dict[str, Any]) -> RoleRead:
+    """Open with ``OPTIONS["assume_role"]`` set to a fresh unprivileged role; read one hstore."""
+    from tests.support.drivers.admin import temporary_role
+
+    async with temporary_role("asyncopation_hstore_role") as role:
+        with recorded_catalog_queries() as seen:
+            async with (
+                open_driver(
+                    options={**options, "assume_role": role}, register_contrib_types=True
+                ) as driver,
+                driver.connection() as conn,
+            ):
+                value = (await conn.fetch_all(ONE_HSTORE_SQL, None))[0][0]
+    return RoleRead(value, list(seen))
+
+
+# --------------------------------------------------------------------------- several schemas
+SCHEMA_DATABASE = f"asyncopation_schemas_{RUN_ID}"
+EXTENSION_SCHEMA = "hstore_ext"
+SHADOW_SCHEMA = "hstore_shadow"
+
+
+async def _query_in(database: str, sql: str) -> None:
+    from django.db import connections
+
+    cfg = connections["default"].settings_dict
+    async with await psycopg.AsyncConnection.connect(
+        dbname=database,
+        user=cfg["USER"],
+        password=cfg["PASSWORD"],
+        host=cfg["HOST"],
+        port=cfg["PORT"],
+        autocommit=True,
+    ) as connection:
+        await connection.execute(sql)  # ty: ignore[no-matching-overload]
+
+
+async def create_multi_schema_database() -> str:
+    """hstore installed in a schema that is not on the search_path, and a second type that is
+    also called ``hstore`` (a domain) in another schema: two ``pg_type`` rows, two OID pairs."""
+    await admin_query(f"DROP DATABASE IF EXISTS {SCHEMA_DATABASE}")
+    await admin_query(f"CREATE DATABASE {SCHEMA_DATABASE} TEMPLATE template0")
+    await _query_in(SCHEMA_DATABASE, f"CREATE SCHEMA {EXTENSION_SCHEMA}")
+    await _query_in(SCHEMA_DATABASE, f"CREATE EXTENSION hstore SCHEMA {EXTENSION_SCHEMA}")
+    await _query_in(SCHEMA_DATABASE, f"CREATE SCHEMA {SHADOW_SCHEMA}")
+    await _query_in(
+        SCHEMA_DATABASE, f"CREATE DOMAIN {SHADOW_SCHEMA}.hstore AS {EXTENSION_SCHEMA}.hstore"
+    )
+    return SCHEMA_DATABASE
+
+
+async def drop_multi_schema_database() -> None:
+    await admin_query(f"DROP DATABASE IF EXISTS {SCHEMA_DATABASE} WITH (FORCE)")
+
+
+async def read_from_each_schema(database: str) -> list[Any]:
+    """One value cast to the extension's hstore, one to the same-named domain in another schema."""
+    queries = [
+        f'SELECT \'"a"=>"1"\'::{EXTENSION_SCHEMA}.hstore',
+        f"SELECT '\"b\"=>NULL'::{SHADOW_SCHEMA}.hstore",
+    ]
+    async with (
+        open_driver(overrides={"NAME": database}, register_contrib_types=True) as driver,
+        driver.connection() as conn,
+    ):
+        return [(await conn.fetch_all(sql, None))[0][0] for sql in queries]
+
+
+# --------------------------------------------------------------------------- real wiring
+async def zoo_rows_from_the_registered_driver() -> list[Any]:
+    """PgFieldZoo rows through the driver ``asyncopation`` opened for ``default`` (engines wiring)."""
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    driver = await ensure_driver("default")
+    async with driver.connection() as conn:
+        return await conn.fetch_all(pg_field_zoo_sql(), None)
+
+
+# --------------------------------------------------------------------------- concurrency, txns
+async def concurrent_hstore_reads(count: int) -> list[Any]:
+    """`count` simultaneous reads, each holding its own pooled connection."""
+    import asyncio
+
+    pool = {"min_size": count, "max_size": count}
+
+    async def read(driver: Any) -> Any:
+        async with driver.connection() as conn:
+            value = (await conn.fetch_all(ONE_HSTORE_SQL, None))[0][0]
+            await conn.fetch_all("SELECT pg_sleep(0.1)", None)  # keeps the connection busy
+            return value
+
+    async with open_driver(pool=pool, register_contrib_types=True) as driver:
+        await settled_stats(driver, min_idle=count)
+        return list(await asyncio.gather(*(read(driver) for _ in range(count))))
+
+
+async def hstore_in_transaction_and_after_rollback() -> list[Any]:
+    async with (
+        open_driver(register_contrib_types=True) as driver,
+        driver.connection() as conn,
+    ):
+        await conn.begin()
+        inside = (await conn.fetch_all(ONE_HSTORE_SQL, None))[0][0]
+        await conn.rollback()
+        after = (await conn.fetch_all(ONE_HSTORE_SQL, None))[0][0]
+    return [inside, after]

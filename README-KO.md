@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=22721bfc3192 -->
+<!-- i18n: source=README.md source-sha256=86ce3bd3e070 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -11,7 +11,7 @@ MySQL/MariaDB는 asyncmy)로 실행한다.
 |---|---|
 | PyPI | `django-asyncopation` |
 | import | `asyncopation` |
-| 요구 사항 | Python 3.12+, Django 6.1, ASGI |
+| 요구 사항 | Python 3.12+, Django 6.1, asgiref 3.13+, ASGI |
 | 이름 | *syncopation*(당김음, 엇박) + *async*. 장고 라인하르트에 대한 오마주 |
 
 ```python

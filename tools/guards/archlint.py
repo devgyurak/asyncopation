@@ -31,6 +31,11 @@ Codes
     A203  private Django import (module not in the ledger's [public] list) outside
           ``asyncopation/_django/`` (ADR-0007 Decision 5); independent of A201
 
+A ledger [[dependency]] row (a third-party package such as asgiref whose run-time behaviour we
+rely on without importing it) is parsed and shape-checked here (exact ``X.Y.Z`` ``verified_against``,
+one row per package) but is not an A201/A202 subject: nothing is imported, so nothing can be
+stale; the drift test checks names, the installed version (must equal) and the pyproject floor.
+
 Private Django attributes accessed directly (``qs._fetch_mode``) are not detected by a guard -
 register them as ledger [[attribute]] entries; the drift test protects them and arch review
 catches the unregistered ones. The attribute staleness check is best-effort: it matches the
@@ -125,11 +130,13 @@ def applies_to(path: str) -> bool:
     return p.parts[:2] == ("src", "asyncopation") and p.suffix == ".py"
 
 
-_TOP_KEYS = {"public", "internal", "attribute"}
+_TOP_KEYS = {"public", "internal", "attribute", "dependency"}
 _INTERNAL_KEYS = {
     "module", "names", "used_by", "reason", "verified_against", "signatures", "ported",
 }  # fmt: skip
 _ATTRIBUTE_KEYS = {"owner", "names", "used_by", "reason", "verified_against", "signatures"}
+_DEPENDENCY_KEYS = {"package", "names", "used_by", "reason", "verified_against"}
+_RELEASE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
 @dataclass(frozen=True)
@@ -147,6 +154,12 @@ class Ledger:
         default_factory=frozenset
     )
     ported_used_by: frozenset[tuple[str, str]] = field(  # (module, used_by path) of ported entries
+        default_factory=frozenset
+    )
+    dependencies: frozenset[tuple[str, str]] = field(  # (package, dotted name below it)
+        default_factory=frozenset
+    )
+    dependency_versions: frozenset[tuple[str, str]] = field(  # (package, verified_against)
         default_factory=frozenset
     )
 
@@ -201,6 +214,7 @@ class Ledger:
                 attributes.add((owner, name))
             attribute_signatures |= _signatures(entry, owner, names, "[[attribute]]")
             _check_record(entry, "[[attribute]]", owner)
+        dependencies, dependency_versions = _dependencies(data)
         return cls(
             frozenset(modules),
             frozenset(internal),
@@ -209,12 +223,47 @@ class Ledger:
             frozenset(attribute_signatures),
             frozenset(ported),
             frozenset(ported_used_by),
+            frozenset(dependencies),
+            frozenset(dependency_versions),
         )
 
     def covers(self, module: str, name: str) -> bool:
         """Is importing ``module.name`` recorded? Ported entries are never imported, so no."""
         importable = self.internal - self.ported
         return module in self.public or (module, name) in importable or (module, "*") in importable
+
+
+def _dependencies(data: dict) -> tuple[set[tuple[str, str]], set[tuple[str, str]]]:
+    """Parse the ``[[dependency]]`` rows: third-party packages the runtime behaviour rests on.
+
+    A row records an installed package whose behaviour ``src/`` depends on without importing it
+    (asgiref ``Local`` under ``compile_scope``, ADR-0008). It is deliberately *not* an A201/A202
+    subject: nothing under ``src/`` imports the package, so no import can be checked, and A202
+    would flag every row stale. ``tests/unit/django_drift`` owns the checks instead (names still
+    resolve, installed version equals ``verified_against``, pyproject floor admits it). Hence
+    ``verified_against`` is an exact ``X.Y.Z`` release (compared for equality), the package has
+    one row, and ``signatures`` / ``ported`` do not exist for this table.
+    """
+    names_found: set[tuple[str, str]] = set()
+    versions: dict[str, str] = {}
+    for entry in _tables(data, "dependency"):
+        _check_keys(entry, _DEPENDENCY_KEYS, "[[dependency]]")
+        package = _require(entry, "[[dependency]]", "package", str)
+        names = _names(entry, "[[dependency]]")
+        _check_record(entry, "[[dependency]]", package)
+        if not _RELEASE_VERSION.fullmatch(entry["verified_against"]):
+            raise ValueError(
+                f"[[dependency]] {package}: `verified_against` must be an exact release "
+                f"version (X.Y.Z), got {entry['verified_against']!r}"
+            )
+        if package in versions:
+            raise ValueError(f"[[dependency]] {package}: `{package}` is listed twice")
+        versions[package] = entry["verified_against"]
+        for name in names:
+            if (package, name) in names_found:
+                raise ValueError(f"[[dependency]] {package}: `{name}` is listed twice")
+            names_found.add((package, name))
+    return names_found, set(versions.items())
 
 
 def _tables(data: dict, key: str) -> list[dict]:

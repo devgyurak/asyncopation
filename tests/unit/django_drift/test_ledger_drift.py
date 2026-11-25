@@ -1,5 +1,7 @@
 """The ledger is the single source of the Django drift list (ADR-0007 Decision 6)."""
 
+from importlib import metadata
+
 import django
 import pytest
 
@@ -7,8 +9,12 @@ from tests.support.django_drift import (
     attribute_problem,
     attribute_signature_problem,
     classifier_problem,
+    dependency_name_problem,
     django_requirement,
     import_problem,
+    ledger_pin_problem,
+    ledger_version_problem,
+    package_requirement,
     pin_problem,
     ported_problem,
     raw_entry_count,
@@ -24,7 +30,7 @@ def test_every_written_ledger_entry_is_loaded():
     # given
     written = raw_entry_count((ROOT / LEDGER_PATH).read_text(encoding="utf-8"))
     # when
-    loaded = len(LEDGER.internal) + len(LEDGER.attributes)
+    loaded = len(LEDGER.internal) + len(LEDGER.attributes) + len(LEDGER.dependencies)
     # then
     assert loaded == written
 
@@ -43,6 +49,43 @@ def test_django_classifiers_match_the_pyproject_pin():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     # when
     problem = classifier_problem(pyproject, django.__version__)
+    # then
+    assert problem is None
+
+
+def test_installed_asgiref_is_the_version_the_ledger_was_verified_against():
+    # when
+    problem = ledger_version_problem(
+        LEDGER.dependency_versions, "asgiref", metadata.version("asgiref")
+    )
+    # then
+    assert problem is None
+
+
+def test_installed_asgiref_satisfies_the_pyproject_requirement():
+    # given
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # when
+    problem = pin_problem(
+        package_requirement(pyproject, "asgiref"), metadata.version("asgiref"), "asgiref"
+    )
+    # then
+    assert problem is None
+
+
+def test_asgiref_version_in_the_ledger_satisfies_the_pyproject_requirement():
+    # given
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # when
+    problem = ledger_pin_problem(pyproject, LEDGER.dependency_versions, "asgiref")
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(("package", "name"), sorted(LEDGER.dependencies))
+def test_ledgered_dependency_name_still_exists(package, name):
+    # when
+    problem = dependency_name_problem(package, name)
     # then
     assert problem is None
 

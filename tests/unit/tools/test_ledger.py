@@ -46,6 +46,28 @@ def test_internal_signatures_and_attribute_keys_are_parsed():
     assert ledger.attribute_signatures == {("django.db.models.query.QuerySet", "_fetch_mode", "()")}
 
 
+DEP = (
+    '[[dependency]]\npackage = "asgiref"\nnames = ["local.Local", "sync.sync_to_async"]\n'
+    'used_by = ["src/asyncopation/_django/connections.py"]\nreason = "r"\n'
+    'verified_against = "3.13.0"\n'
+)
+
+
+def test_dependency_rows_are_parsed_into_names_and_versions():
+    # when
+    ledger = Ledger.from_toml(BASE + DEP)
+    # then
+    assert ledger.dependencies == {("asgiref", "local.Local"), ("asgiref", "sync.sync_to_async")}
+    assert ledger.dependency_versions == {("asgiref", "3.13.0")}
+
+
+def test_dependency_rows_are_never_import_coverage_for_the_guards():
+    # when
+    ledger = Ledger.from_toml(BASE + DEP)
+    # then
+    assert (ledger.internal, ledger.covers("asgiref.local", "Local")) == (frozenset(), False)
+
+
 def test_only_ported_entries_are_in_the_ported_set():
     # when
     ledger = Ledger.from_toml(FULL)
@@ -180,6 +202,61 @@ def test_malformed_ledger_entries_are_rejected_with_a_clear_error(entry, message
     # when / then
     with pytest.raises(ValueError, match=message):
         Ledger.from_toml(text)
+
+
+@pytest.mark.parametrize(
+    ("entry", "message"),
+    [
+        (DEP.replace('package = "asgiref"\n', ""), "`package` must be a str"),
+        (DEP.replace('"asgiref"', "1"), "`package` must be a str"),
+        (
+            DEP.replace('names = ["local.Local", "sync.sync_to_async"]', "names = []"),
+            "`names` must be",
+        ),
+        (DEP.replace('"sync.sync_to_async"', '"local.Local"'), "listed twice"),
+        (
+            DEP + DEP.replace("local.Local", "x").replace(', "sync.sync_to_async"', ""),
+            "listed twice",
+        ),
+        (DEP + "ported = true\n", "unknown key"),
+        (DEP + 'signatures = { x = "()" }\n', "unknown key"),
+        (DEP.replace("used_by", "used"), "unknown key"),
+        (
+            DEP.replace('used_by = ["src/asyncopation/_django/connections.py"]\n', ""),
+            "`used_by` must be a non-empty list",
+        ),
+        (DEP.replace('reason = "r"\n', ""), "`reason` must be a non-empty string"),
+        (
+            DEP.replace('verified_against = "3.13.0"\n', ""),
+            "`verified_against` must be a non-empty string",
+        ),
+        (DEP.replace("3.13.0", "3.13"), "release version"),
+        (DEP.replace("3.13.0", "3.13.0rc1"), "release version"),
+        (DEP.replace("3.13.0", ">=3.13"), "release version"),
+        (DEP.replace("3.13.0", "latest"), "release version"),
+    ],
+    ids=[
+        "no-package",
+        "package-not-a-string",
+        "names-empty",
+        "duplicate-name",
+        "duplicate-package-row",
+        "ported-key",
+        "signatures-key",
+        "misspelled-key",
+        "no-used-by",
+        "no-reason",
+        "no-verified-against",
+        "two-part-version",
+        "prerelease-version",
+        "specifier-as-version",
+        "non-version",
+    ],
+)
+def test_malformed_dependency_rows_are_rejected_with_a_clear_error(entry, message):
+    # when / then
+    with pytest.raises(ValueError, match=message):
+        Ledger.from_toml(BASE + entry)
 
 
 @pytest.mark.parametrize(

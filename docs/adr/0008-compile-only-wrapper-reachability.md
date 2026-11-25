@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak) - accepted 2026-11-24 after the Phase 1 spike (#29)
 - Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-25 (#5, PR #52) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#49, PR #PRNUM) - the `asgiref.local` row of the internal API table and the Validation drift item (asgiref semantics now pinned directly on `Local`, version recorded in a ledger `[[dependency]]` row, `asgiref>=3.13` floor); approved by: maintainer (@devgyurak), 2026-11-25 (decisions given with the #49 instruction); architect verdict: ARCHVERDICT
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -256,14 +257,14 @@ reused unchanged.
 
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
 (unless marked `ported = true`; those are checked for a `# Ported from` header in their `used_by` files instead, ADR-0007 Decision 6) and `[[attribute]]` entries never accessed in `src/`, so these enter
-`docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`, and asgiref 3.13.0 for `Local`)
+`docs/django-api-ledger.toml` (with `verified_against = "6.1.3"`; *Amended 2026-11-25 (#49, PR #PRNUM): asgiref `Local` is not an `[[internal]]` entry but a `[[dependency]]` row, see its table row*)
 in the PR that first uses them (#3 / #6 / Phase 5):
 
 | Module | Names | Planned consumer | Why |
 |---|---|---|---|
 | `django.utils.connection` | `BaseConnectionHandler._connections` (an `[[attribute]]` entry) | `_django/connections.py` | peek at the context's wrapper without creating one |
 | `django.utils.connection` | `BaseConnectionHandler.settings` (an `[[attribute]]` entry; *Amended 2026-11-25 (#5, PR #52)*) | `_django/connections.py` | `configured_databases()`: structure copy of Django's configured `DATABASES`, read by `connection/lifecycle.py` |
-| `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on; not imported by `src`, so it is recorded in the `reason` of the `_connections` `[[attribute]]` row and pinned by `tests/unit/django_drift` |
+| `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on; not imported by `src`. *Amended 2026-11-25 (#49, PR #PRNUM): recorded in its own ledger `[[dependency]]` row (`package = "asgiref"`, `names = ["local.Local"]`, `verified_against = "3.13.0"`, installed version must equal it, not an A202 subject), no longer in the `reason` of the `_connections` `[[attribute]]` row; `pyproject.toml` requires `asgiref>=3.13` (Django only requires 3.9.1, older versions were not verified); pinned on `Local` itself by `tests/unit/django_drift/test_asgiref_local_drift.py` and through Django's handler by `test_connection_handler_drift.py`* |
 | `django.db.models.sql.query` | `Query.get_aggregation`, `get_count`, `get_compiler`, `has_results`, `exists` | `_django/aggregation.py` | `acount()` / `aexists()` ports |
 | `django.db.models.sql.compiler` | `SQLAggregateCompiler.as_sql`, `SQLCompiler.get_combinator_sql`, `get_qualify_sql`, `as_sql`, `SQLUpdateCompiler.pre_sql_setup`, `execute_sql` | `_django/*` (`compile/` cannot import private Django modules), `_django/update.py` | re-resolution, `get_autocommit` in `as_sql`, I/O in `pre_sql_setup` |
 | `django.db.backends.base.base` | `BaseDatabaseWrapper.get_autocommit`, `connect`, `_cursor`, `cursor`, `chunked_cursor`, `get_new_connection`, `create_cursor` (signatures pinned; `ensure_connection` is not, because pytest-django replaces it during tests) | `_django/postgresql.py` (overridden by `compile/wrapper.py`) | overridden in the compile-only wrapper |
@@ -298,6 +299,15 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
 - drift tests: ported MySQL wrapper attributes equal Django's; SQL and params identical to Django's
   wrapper on the differential suite (the spike's 770-statement sweep); ledger symbols exist; asgiref
   per-context `Local` semantics pinned (swap invisible to siblings, parent and executor threads).
+  *Amended 2026-11-25 (#49, PR #PRNUM): the asgiref item is tightened: the installed asgiref version
+  equals the ledger `[[dependency]]` row's `verified_against` and satisfies the pyproject floor;
+  `Local(thread_critical=True)` is checked directly: thread-local without a loop, visible to awaited
+  code and later tasks inside one, invisible to the parent, siblings, `asyncio.to_thread`,
+  `sync_to_async` (both modes) and plain threads, against a `thread_critical=False` control that
+  is visible through `sync_to_async`. Not reproducible on Python 3.13 and so not pinned: Python
+  3.14's `thread_inherit_context` (default on free-threaded builds) lets a new thread inherit the
+  spawning thread's context, which asgiref's thread-id tagging of `_Storage` hides; re-check when
+  3.14 is tested.*
 - unit (`compile_scope`): restores when the previous wrapper was present, absent, on exception and
   nested (*Amended 2026-11-24 (#3, PR #45): except a scope exited from another Context inside a
   running loop, Decision 1*); no sync connect inside; wrapper `connect` / `ensure_connection` / `_cursor` raise (*Amended 2026-11-24 (#3, PR #45): and `cursor`, `chunked_cursor`, `create_cursor`, `get_new_connection`*);

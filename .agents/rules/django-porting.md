@@ -28,5 +28,11 @@ paths:
    directly, inside `_django` or not (`qs._fetch_mode`), as an `[[attribute]]` (`owner`, `names`, `used_by`,
    `reason`, `verified_against`); the drift test (`tests/unit/django_drift`) checks all of it against installed Django.
    The guard cannot detect private attribute access - arch review does.
+   A third-party package whose behaviour we depend on at run time without importing it (asgiref
+   `Local`, ADR-0008) is a `[[dependency]]` row (`package`, `names` below the package, `used_by`,
+   `reason`, `verified_against` = an exact `X.Y.Z`, one row per package). A202 does not apply
+   (nothing is imported); the drift test requires the installed version to **equal**
+   `verified_against` and pyproject to carry a floor that admits it: when the lock moves, re-read
+   the pinned behaviour tests, then update `verified_against`.
 6. **Differential test every port** against the sync implementation on all backends.
 7. When the `django-main` CI canary breaks, update ports and bump `verified_against`.

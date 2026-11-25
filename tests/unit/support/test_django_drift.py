@@ -4,8 +4,12 @@ from tests.support.django_drift import (
     attribute_problem,
     attribute_signature_problem,
     classifier_problem,
+    dependency_name_problem,
     django_requirement,
     import_problem,
+    ledger_pin_problem,
+    ledger_version_problem,
+    package_requirement,
     pin_problem,
     ported_problem,
     pyproject_text,
@@ -213,11 +217,12 @@ def test_raw_entry_count_counts_every_written_name():
         "[public]\nmodules = []\n"
         '[[internal]]\nmodule = "m"\nnames = ["A", "B"]\n'
         '[[attribute]]\nowner = "o.C"\nnames = ["_x"]\n'
+        '[[dependency]]\npackage = "p"\nnames = ["m.D", "m.E"]\n'
     )
     # when
     count = raw_entry_count(text)
     # then
-    assert count == 3
+    assert count == 5
 
 
 PIN = "django>=6.1,<6.2"
@@ -587,3 +592,165 @@ def test_classifier_check_does_not_find_a_minor_reachable_only_through_unlisted_
     problem = classifier_problem(text, "6.1.3")
     # then
     assert problem is None
+
+
+AS = "asgiref>=3.13"
+VERSIONS = frozenset({("asgiref", "3.13.0")})
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (pyproject_text(AS, C61), AS),
+        (pyproject_text(["django>=6.1,<6.2", AS], C61), AS),
+        (pyproject_text("ASGIref>=3.13", C61), "ASGIref>=3.13"),
+        (pyproject_text("asgiref_extra>=1", C61), None),
+        (pyproject_text("asgiref>=3.13; python_version<'3.12'", C61), None),
+        (pyproject_text("django>=6.1,<6.2", C61), None),
+        (BARE.format('"asgiref>=3.9", "asgiref>=3.13"'), "asgiref>=3.13,>=3.9"),
+    ],
+    ids=[
+        "plain",
+        "next-to-django",
+        "normalized-name",
+        "similar-name",
+        "marker-only",
+        "absent",
+        "combined",
+    ],
+)
+def test_package_requirement_is_read_by_name(text, expected):
+    # when
+    requirement = package_requirement(text, "asgiref")
+    # then
+    assert requirement == expected
+
+
+@pytest.mark.parametrize(
+    ("requirement", "installed", "fragment"),
+    [
+        (None, "3.13.0", "no unconditional asgiref requirement"),
+        ("asgiref>=3.13", "3.12.9", "installed asgiref 3.12.9 is outside"),
+        ("asgiref", "3.13.0", "does not constrain"),
+    ],
+    ids=["no-requirement", "below-floor", "unconstrained"],
+)
+def test_pin_check_names_the_package_it_was_given(requirement, installed, fragment):
+    # when
+    problem = pin_problem(requirement, installed, "asgiref")
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+def test_pin_check_accepts_an_installed_version_at_the_floor_of_another_package():
+    # when
+    problem = pin_problem(AS, "3.13.0", "asgiref")
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    "installed", ["3.13.0", "3.13.0.0"], ids=["same-string", "same-version-other-spelling"]
+)
+def test_ledger_version_check_accepts_the_exact_version(installed):
+    # when
+    problem = ledger_version_problem(VERSIONS, "asgiref", installed)
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    ("versions", "installed", "fragment"),
+    [
+        (VERSIONS, "3.13.1", "installed asgiref 3.13.1 differs from the ledger's 3.13.0"),
+        (VERSIONS, "3.12.0", "differs from the ledger's 3.13.0"),
+        (VERSIONS, "3.14.0", "differs from the ledger's 3.13.0"),
+        (VERSIONS, "3.13.0rc1", "differs from the ledger's 3.13.0"),
+        (frozenset(), "3.13.0", "no [[dependency]] row for asgiref"),
+        (VERSIONS, "abc", "'abc'"),
+        (frozenset({("asgiref", "x.y")}), "3.13.0", "'x.y'"),
+    ],
+    ids=[
+        "patch-ahead",
+        "older",
+        "newer-minor",
+        "prerelease",
+        "no-row",
+        "bad-installed",
+        "bad-ledger",
+    ],
+)
+def test_ledger_version_check_reports_why_the_installed_version_is_not_the_verified_one(
+    versions, installed, fragment
+):
+    # when
+    problem = ledger_version_problem(versions, "asgiref", installed)
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+def test_ledger_pin_check_accepts_a_verified_version_inside_the_requirement():
+    # when
+    problem = ledger_pin_problem(pyproject_text(AS, C61), VERSIONS, "asgiref")
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    ("text", "versions", "fragment"),
+    [
+        (pyproject_text("asgiref>=3.14", C61), VERSIONS, "ledger's asgiref 3.13.0 is outside"),
+        (pyproject_text("django>=6.1,<6.2", C61), VERSIONS, "no unconditional asgiref requirement"),
+        (pyproject_text("asgiref", C61), VERSIONS, "does not constrain"),
+        (pyproject_text(AS, C61), frozenset(), "no [[dependency]] row for asgiref"),
+        (
+            pyproject_text("not a requirement!!", C61),
+            VERSIONS,
+            "no unconditional asgiref requirement",
+        ),
+    ],
+    ids=[
+        "verified-below-floor",
+        "no-requirement",
+        "unconstrained",
+        "no-row",
+        "invalid-requirement",
+    ],
+)
+def test_ledger_pin_check_reports_why_the_verified_version_is_not_allowed(text, versions, fragment):
+    # when
+    problem = ledger_pin_problem(text, versions, "asgiref")
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+@pytest.mark.parametrize(
+    ("package", "name"),
+    [("asgiref", "local.Local"), ("asgiref", "sync.sync_to_async"), ("asgiref", "local")],
+    ids=["class", "function", "module"],
+)
+def test_dependency_name_check_accepts_names_below_the_package(package, name):
+    # when
+    problem = dependency_name_problem(package, name)
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    ("package", "name", "fragment"),
+    [
+        ("asgiref", "local.NoSuchThing", "not found"),
+        ("asgiref", "no_such_module.X", "not found"),
+        ("no_such_package_zzz", "x", "not importable"),
+    ],
+    ids=["missing-attribute", "missing-module", "missing-package"],
+)
+def test_dependency_name_check_reports_a_name_that_is_gone(package, name, fragment):
+    # when
+    problem = dependency_name_problem(package, name)
+    # then
+    assert problem is not None
+    assert fragment in problem

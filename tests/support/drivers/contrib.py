@@ -432,20 +432,24 @@ async def read_from_each_schema(database: str) -> list[Any]:
 
 
 async def schema_loader_presence(database: str) -> tuple[int, int]:
-    """``(OIDs found, connections missing one of their loaders)``: loaders for every ``hstore`` type of ``database`` (both schemas), on every connection.
+    """``(OIDs found, connections missing a loader)`` for every ``hstore`` type of ``database``.
+
+    Four OIDs are expected: the extension type and the same-named domain, each with an array type
+    (domain array types exist since PostgreSQL 11).
 
     ``read_from_each_schema`` cannot show this: PostgreSQL reports a domain's values under its base
     type's OID, so both reads decode through the extension's loader.
     """
     connection_class = recording_connection_class()
     pool = {"min_size": 1, "max_size": 1, "connection_class": connection_class}
-    async with (
-        open_driver(overrides={"NAME": database}, pool=pool, register_contrib_types=True) as driver,
-        driver.connection() as conn,
-    ):
-        rows = await conn.fetch_all(
-            "SELECT oid, typarray FROM pg_type WHERE typname = 'hstore'", None
-        )
+    async with open_driver(
+        overrides={"NAME": database}, pool=pool, register_contrib_types=True
+    ) as driver:
+        async with driver.connection() as conn:
+            rows = await conn.fetch_all(
+                "SELECT oid, typarray FROM pg_type WHERE typname = 'hstore'", None
+            )
+        await settled_stats(driver, min_idle=1)
     oids = tuple(oid for row in rows for oid in row)
     instances = connection_class.instances  # ty: ignore[missing-attribute]
     return len(oids), sum(not has_loader(c.adapters, oids) for c in instances)

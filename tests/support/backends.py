@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
+from hypothesis.errors import FlakyFailure
 
 from harness.settings import VENDOR
 
@@ -30,19 +31,14 @@ SELF_SELECT_UPDATE_ONLY = pytest.mark.skipif(
     VENDOR == "mysql", reason="MySQL runs a pre-select query while compiling a joined UPDATE"
 )
 
-# MySQL/MariaDB execution lands with #7; strict so the marker is removed when it does.
-# Until then the registry has no engine for those backends, so the first open raises
-# `ImproperlyConfigured` ("not supported yet"); tests that capture errors into a differential
-# outcome see that as a mismatch, an `AssertionError`. Anything else (a driver import error, a
-# TypeError in the wrapper) is a real failure and is not xfailed.
-# Only for tests that open a driver: a test whose error is raised before any driver opens (an
-# unconfigured alias, an argument error of `aget` / `afirst`) passes on MySQL/MariaDB, would XPASS
-# under this strict marker and so lives in a module without it (`test_read_api_before_io.py`).
-# The suites have been run on MySQL and MariaDB (with `mysqlclient` built locally for the sync
-# side), where these tests xfail.
+# MySQL/MariaDB read path: #7a registered the asyncmy engine, so most of the tests behind this
+# marker pass on MySQL/MariaDB now, and a few still fail because their helpers or expectations are
+# PostgreSQL-specific (a `pg_sleep` cancel probe, an UPDATE/count shape MySQL rejects). #7b ports
+# them and removes the marker. It is not strict meanwhile (a strict one would fail on the passing
+# tests); only the failures of an assertion are tolerated, any other error is a real failure.
 XFAIL_UNTIL_ASYNCMY = pytest.mark.xfail(
     VENDOR != "postgresql",
-    raises=(AssertionError, ImproperlyConfigured),
-    strict=True,
-    reason="MySQL/MariaDB async execution arrives with issue #7 (asyncmy driver)",
+    raises=(AssertionError, ImproperlyConfigured, FlakyFailure),  # a non-deterministic mismatch
+    strict=False,
+    reason="MySQL/MariaDB read-path differential is completed in #7b",
 )

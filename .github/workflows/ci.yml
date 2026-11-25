@@ -18,7 +18,10 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --locked
+      # The unit tests compare the composed MySQL wrapper with Django's real MySQL backend,
+      # which imports mysqlclient (MySQLdb).
+      - run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev pkg-config
+      - run: uv sync --locked --group mysql-sync
       - run: make check
 
   integration:

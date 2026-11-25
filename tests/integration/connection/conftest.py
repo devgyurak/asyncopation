@@ -53,6 +53,34 @@ def spy(spy_env: Recorder) -> Recorder:
 
 
 @pytest.fixture
+async def my_spy_env(
+    lifecycle_configured: None,
+    readonly_db: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[Recorder]:
+    """The real MySQL/MariaDB engine, recorded; registry empty and NOT configured."""
+    from asyncopation.connection import registry
+    from tests.support.lifecycle import mysql as lifecycle_mysql
+
+    registry.reset()
+    recorder = Recorder()
+    install_spy_engine(monkeypatch, recorder, lifecycle_mysql.MY_ENGINE)
+    lifecycle_mysql.forget_wrapper("default")
+    yield recorder
+    await teardown_lifecycle()
+    lifecycle_mysql.forget_wrapper("default")
+
+
+@pytest.fixture
+def my_spy(my_spy_env: Recorder) -> Recorder:
+    """`my_spy_env` after `configure()` against the live (test) database settings."""
+    from asyncopation.connection import configure
+
+    configure()
+    return my_spy_env
+
+
+@pytest.fixture
 def tight_spy(spy_env: Recorder, lifecycle_configured: None) -> Iterator[Recorder]:
     """`spy` with a pool of exactly one connection (a second borrower has to wait for it)."""
     from django.db import connections

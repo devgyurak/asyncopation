@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL and MySQL/MariaDB lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -41,7 +41,7 @@ application = LifespanApp(get_asgi_application())
 Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
 themselves. Using a database before `setup()` (the query path, e.g. `alist()`) opens its pool once, lazily, with a logged
 warning that recommends the lifespan wrapper. `setup()` opens every database whose engine is
-supported and skips the others. MySQL/MariaDB are not supported yet.
+supported (`django.db.backends.postgresql` and `django.db.backends.mysql`, which covers MySQL and MariaDB) and skips the others.
 
 To combine the pools with other startup/shutdown work, call `setup()` / `close()` from your own
 lifespan handler instead of wrapping the app:
@@ -96,6 +96,38 @@ The read API on PostgreSQL is `alist()`, `aget()`, `afirst()`, `acount()`, `aexi
 (no `prefetch_related` yet; MySQL/MariaDB follow). A model that declares `aobjects = AsyncObjects()`
 (a third-party one gets it with `AsyncObjects.attach(Model)`) is read through it, as in
 `await Book.aobjects.filter(...).alist()`. `aobjects` does not refuse a swapped-out model; attach it to the model in use.
+## MySQL / MariaDB
+
+`django.db.backends.mysql` covers both servers; the driver is asyncmy (`pip install
+"django-asyncopation[mysql]"`, which also installs `cryptography`, needed by MySQL 8's default
+`caching_sha2_password` login). Asyncopation never imports mysqlclient (`MySQLdb`); note that Django itself still
+loads its MySQL backend, and so mysqlclient, while it defines models under the stock `ENGINE`
+(ADR-0008). `OPTIONS` are checked against `asyncmy.connect` (keys that only mysqlclient knows
+raise `ImproperlyConfigured`, and so does `binary_prefix`, which asyncmy accepts but ignores), and values decode as they do with mysqlclient (`TIME` as
+`datetime.time`, zero dates as `None`).
+
+The pool is configured under a separate key, because Django's MySQL backend forwards every `OPTIONS`
+key to `MySQLdb.connect` (PostgreSQL keeps using `OPTIONS["pool"]`, which its backend understands):
+
+```python
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        ...,
+        "ASYNCOPATION": {
+            "pool": {"min_size": 1, "max_size": 10, "timeout": 30.0, "max_waiting": 0,
+                     "max_idle": 3600},
+        },
+    }
+}
+```
+
+`timeout` is the acquire timeout (`OperationalError`), `max_waiting` limits the acquires in
+progress (0: no limit), `max_idle` is how many seconds a connection may stay idle before it is replaced (asyncmy's `pool_recycle`; not a total lifetime like PostgreSQL's `max_lifetime`). Using `ASYNCOPATION` on a PostgreSQL alias raises `ImproperlyConfigured` (PostgreSQL keeps `OPTIONS["pool"]`). Pool sizing defaults are
+provisional until the #8 benchmark. A statement cancelled in flight costs a reconnect, and a slow
+consumer of an `aiterator()` can lose its connection to the server's `net_write_timeout`. A
+`LOCK TABLES` that is not ended with `UNLOCK TABLES` stays on the pooled connection when it is
+returned (the driver does not track it), and so does any other session state you set yourself.
 
 ## Concurrency and transactions
 
@@ -145,7 +177,7 @@ MySQL wrapper drift suite and the "no `MySQLdb` is loaded" checks only mean some
 them in the integration and Django-main jobs).
 
 ```bash
-uv sync                     # install dev + e2e dependency groups
+uv sync --group mysql-sync   # dev + e2e groups + mysqlclient (a plain `uv sync` removes it)
 make db-up                  # PostgreSQL, MySQL, MariaDB via docker compose (tmpfs)
 make check                  # ruff + ty + import-linter + guards + agent config sync + unit tests
 make test-int               # integration tests (ASYNCOPATION_DB=postgresql|mysql|mariadb)

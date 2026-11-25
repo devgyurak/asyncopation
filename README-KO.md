@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=e95c3af9fe51 -->
+<!-- i18n: source=README.md source-sha256=dfa0e676cfa2 -->
 # Asyncopation
 
-> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL과 MySQL/MariaDB 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -82,6 +82,35 @@ PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexist
 (`prefetch_related`는 아직 없고 MySQL/MariaDB는 뒤따른다). `aobjects = AsyncObjects()`를 선언한
 모델(서드파티 모델은 `AsyncObjects.attach(Model)`)은 `await Book.aobjects.filter(...).alist()`처럼
 `aobjects`로 읽는다. `aobjects`는 교체되어 쓰이지 않는 모델을 거부하지 않으므로, 실제로 사용하는 모델에 붙여야 한다.
+## MySQL / MariaDB
+
+`django.db.backends.mysql`은 두 서버를 모두 포함하며, 드라이버는 asyncmy다(`pip install
+"django-asyncopation[mysql]"`. MySQL 8의 기본 `caching_sha2_password` 로그인에 필요한 `cryptography`도 함께 설치된다).
+Asyncopation은 mysqlclient(`MySQLdb`)를 import하지 않는다. 다만 기본 `ENGINE`으로 모델을 정의하는 동안 Django 자체는
+여전히 MySQL 백엔드를, 따라서 mysqlclient를 로드한다(ADR-0008). `OPTIONS`는 `asyncmy.connect`를 기준으로
+검사하며(mysqlclient만 아는 키는, 그리고 asyncmy가 받기만 하고 무시하는 `binary_prefix`도 `ImproperlyConfigured`를 일으킨다), 값은 mysqlclient를 쓸 때와 같게 디코딩된다(`TIME`은
+`datetime.time`, 0000-00-00 날짜는 `None`).
+
+Django의 MySQL 백엔드는 모든 `OPTIONS` 키를 `MySQLdb.connect`로 전달하므로 풀은 별도의 키에서 설정한다(PostgreSQL은
+백엔드가 이해하는 `OPTIONS["pool"]`을 계속 사용한다).
+
+```python
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        ...,
+        "ASYNCOPATION": {
+            "pool": {"min_size": 1, "max_size": 10, "timeout": 30.0, "max_waiting": 0,
+                     "max_idle": 3600},
+        },
+    }
+}
+```
+
+`timeout`은 획득 타임아웃(`OperationalError`)이고, `max_waiting`은 진행 중인 획득 수를 제한하며(0: 제한 없음),
+`max_idle`은 그 시간(초) 이상 유휴 상태인 연결을 재생성한다(PostgreSQL의 `max_lifetime`처럼 총 수명이 아니다). PostgreSQL 별칭에 `ASYNCOPATION` 키를 쓰면 `ImproperlyConfigured`이다(`OPTIONS["pool"]`를 쓴다). 풀 크기 기본값은 #8 벤치마크 전까지 잠정값이다. 실행 중에 취소된 문장은
+재연결 비용이 들고, `aiterator()`를 느리게 소비하면 서버의 `net_write_timeout` 때문에 연결을 잃을 수 있다. `UNLOCK TABLES`로 끝내지 않은
+`LOCK TABLES`는 연결이 풀로 돌아간 뒤에도 남는다(드라이버는 추적하지 않는다). 직접 설정한 다른 세션 상태도 마찬가지다.
 
 ## 동시성과 트랜잭션
 
@@ -130,7 +159,7 @@ asyncio.run(main())
 (CI는 integration job과 Django main job에서 실행한다).
 
 ```bash
-uv sync                     # dev + e2e 의존성 그룹 설치
+uv sync --group mysql-sync   # dev + e2e 그룹 + mysqlclient (일반 `uv sync`는 mysqlclient를 제거한다)
 make db-up                  # docker compose로 PostgreSQL, MySQL, MariaDB 실행 (tmpfs)
 make check                  # ruff + ty + import-linter + guards + 에이전트 설정 동기화 + 단위 테스트
 make test-int               # 통합 테스트 (ASYNCOPATION_DB=postgresql|mysql|mariadb)

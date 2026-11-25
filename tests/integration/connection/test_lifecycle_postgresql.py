@@ -37,8 +37,7 @@ from tests.support.lifecycle.scenarios import ensure_many
 
 pytestmark = pytest.mark.skipif(
     VENDOR != "postgresql",
-    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; the lifecycle integration "
-    "tests run on PostgreSQL only until then",
+    reason="PostgreSQL lifecycle tests; MySQL/MariaDB run test_lifecycle_mysql.py",
 )
 
 

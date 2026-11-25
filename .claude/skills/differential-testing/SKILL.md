@@ -58,6 +58,16 @@ result sets to `(type name, repr)` pairs and returns a `RowsComparison`; the tes
 sides are equal, so value *and* type drift both fail. Use it for type conversion, `TIME_ZONE` /
 `USE_TZ` matrices and `OPTIONS` such as `server_side_binding`.
 
+MySQL/MariaDB has the same helpers against mysqlclient (Django's real sync backend, `mysql-sync`
+group; run pytest with `uv run --no-sync`): `compare_with_sync(sql, params, options=...)` and
+`compare_outcomes(...)` (rows or the exception class name of each side) in
+`tests/support/mysql_reference.py`, `compare_server_data`, `compare_transaction_isolation`,
+`compare_open_failure` (`mysql_scenarios.py`), a typed-table column comparison
+(`mysql_values.py`) and an errno sweep through a stored procedure (`mysql_errno.py`). Their
+fixtures (`scratch`, `typed`, `binary_table`, `signal_procedure`) are in
+`tests/integration/mysql/conftest.py`; a test that uses mysqlclient needs `readonly_db` (it unblocks
+Django's database access).
+
 ## Adding coverage for a new QuerySet feature
 1. Extend `QuerySetSpec` + `queryset_specs()` with the new dimension (keep generation
    deterministic and bounded: small lists, fields from the catalog models only).

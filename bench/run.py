@@ -174,9 +174,12 @@ async def run_one(
     prefix, template = CONFIGS[config]
     if config == "asyncopation" and args.vendor != "postgresql":
         # `--lifespan on` needs LifespanApp, which the harness wires on PostgreSQL only (no async
-        # MySQL/MariaDB driver until #7); starting it would abort uvicorn and the whole run.
+        # MySQL/MariaDB read path until #7b); starting it would abort uvicorn and the whole run.
         row = {"config": config, "scenario": scenario}
-        return row | {"status": "unavailable", "reason": f"no async driver for {args.vendor} yet"}
+        return row | {
+            "status": "unavailable",
+            "reason": f"no async read path for {args.vendor} until #7b",
+        }
     host = "127.0.0.1" if shutil.which("k6") else "0.0.0.0"  # docker k6 must reach the host
     cmd = [part.format(workers=args.workers, host=host, port=args.port) for part in template]
     base = f"http://127.0.0.1:{args.port}"

@@ -13,8 +13,8 @@ help: ## Show this help
 
 # ------------------------------------------------------------------ setup
 .PHONY: sync
-sync: ## Install dependencies (dev + e2e groups)
-	uv sync
+sync: ## Install dependencies (dev + e2e groups + mysqlclient for the MySQL comparison tests)
+	uv sync --group mysql-sync
 
 .PHONY: hooks-install
 hooks-install: ## Install git pre-commit hooks

@@ -52,11 +52,12 @@ class CountingDriver:
         return getattr(self._inner, name)
 
 
-def install_spy_engine(monkeypatch: Any, recorder: Recorder) -> None:
-    """Wrap the real PostgreSQL engine so that every prepare/build/open/probe is recorded."""
+def install_spy_engine(monkeypatch: Any, recorder: Recorder, engine_key: str = PG_ENGINE) -> None:
+    """Wrap a real engine (PostgreSQL by default) so that every prepare/build/open/probe is
+    recorded."""
     from asyncopation.connection import engines
 
-    real = engines.FACTORIES[PG_ENGINE]()
+    real = engines.FACTORIES[engine_key]()
 
     def prepare(alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str):
         recorder.prepares.append(Prepared(alias, settings_dict["NAME"], use_tz, time_zone))
@@ -78,7 +79,7 @@ def install_spy_engine(monkeypatch: Any, recorder: Recorder) -> None:
         real.inject(alias, settings_dict, info)
 
     spy = dataclasses.replace(real, prepare=prepare, probe=probe, inject=inject)
-    monkeypatch.setitem(engines.FACTORIES, PG_ENGINE, lambda: spy)
+    monkeypatch.setitem(engines.FACTORIES, engine_key, lambda: spy)
 
 
 @contextlib.contextmanager

@@ -217,8 +217,8 @@ def _config(alias: str) -> AliasConfig:
         ) from config.error
     if config.engine is None:
         raise ImproperlyConfigured(
-            f"asyncopation: ENGINE {config.engine_name!r} of {alias!r} is not supported yet "
-            "(MySQL/MariaDB arrive with issue #7)"
+            f"asyncopation: ENGINE {config.engine_name!r} of {alias!r} is not supported "
+            f"(supported: {', '.join(sorted(engines.FACTORIES))})"
         )
     return config
 
@@ -227,7 +227,8 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
     """Open the drivers of ``aliases`` in the running loop.
 
     Without ``aliases`` every configured alias that has a supported engine is opened and the others
-    are skipped with an INFO log (a MySQL-only alias does not stop a PostgreSQL one). Aliases named
+    are skipped with an INFO log (an alias with another ENGINE, SQLite for example, does not stop a
+    PostgreSQL one). Aliases named
     explicitly must be usable: an unsupported or misconfigured one raises. A single ``str`` is a
     ``TypeError`` (it would be read as a sequence of characters).
 
@@ -279,7 +280,7 @@ def _supported_aliases() -> list[str]:
 def _skip_reason(config: AliasConfig) -> str:
     if config.error is not None:
         return f"not usable: {config.error}"
-    return f"ENGINE {config.engine_name!r} is not supported yet"
+    return f"ENGINE {config.engine_name!r} is not supported"
 
 
 async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC109 - public API, applied via asyncio.timeout

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -157,3 +157,13 @@ async def held_close(execenv: ExecEnv) -> AsyncIterator[ClosingScenario]:
     await scenario.begin()
     yield scenario
     await scenario.cleanup()
+
+
+@pytest.fixture
+def my_alias() -> Iterator[str]:
+    """A throwaway alias for the MySQL compile-only wrapper registry (wrapper forgotten after)."""
+    from tests.support.mysql_driver_wrappers import forget_my_wrapper, unique_my_alias
+
+    name = unique_my_alias()
+    yield name
+    forget_my_wrapper(name)

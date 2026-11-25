@@ -80,7 +80,15 @@ Async connections cannot see the sync test transaction, so pytest-django's defau
   needed. Table names carry a per-run random suffix so that concurrent checkouts sharing one test
   database cannot collide; they are not isolated from other connections to the same database.
   Use it for driver-level tests that execute raw SQL; ORM-level tests keep `readonly_db` /
-  `writable_db`.
+  `writable_db`. MySQL/MariaDB driver tests live in `tests/integration/mysql/`: the same fixtures
+  (`scratch`, `typed`, `binary_table`, `signal_procedure`) are in its `conftest.py`, the helpers
+  in `tests/support/mysql_env.py` (`create_scratch_table`, `admin_query`, `open_my_driver`,
+  `tracked_pool_threads` for per-run leak counts) and `mysql_scenarios.py`; mark them
+  `MYSQL_FAMILY` (and `MARIADB_ONLY` / `MYSQL_ONLY` with a reason).
+- Run one integration suite per backend at a time: the committed seed of `readonly_db` /
+  `writable_db` is shared, so two concurrent runs against the same database (two checkouts, or
+  agents in parallel) fail while seeding. Scratch-table tests are safe to overlap; schema-wide
+  names (MySQL check constraints) carry the run suffix too.
 
 ## Differential testing is the default for read APIs
 For every read API compare against the sync ORM with the `differential` fixture
@@ -97,7 +105,8 @@ be invalid (`FieldError`, same type on both sides); use `valid_deferred_specs()`
 Driver-level tests (no QuerySet) use the same idea one layer lower: run the same SQL through the
 async driver and through a synchronous Django `DatabaseWrapper` built from the same settings and
 `OPTIONS`, then compare rows **and** Python types (`compare_with_sync` in
-`tests/support/drivers/reference.py`). See the `differential-testing` skill.
+`tests/support/drivers/reference.py`; MySQL/MariaDB: `compare_with_sync` / `compare_outcomes` in
+`tests/support/mysql_reference.py`, against mysqlclient). See the `differential-testing` skill.
 
 ## Backends
 Every integration test must pass on postgresql, mysql and mariadb. Backend-specific behaviour

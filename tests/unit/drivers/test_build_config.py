@@ -325,3 +325,10 @@ def test_pool_connection_class_accepts_async_connection_subclasses(connection_cl
     error = config_error({"pool": {"connection_class": connection_class}})
     # then
     assert error is None
+
+
+def test_a_postgresql_entry_with_an_asyncopation_key_is_rejected():
+    # when
+    error = config_error(None, ASYNCOPATION={"pool": {"min_size": 2}})
+    # then
+    assert isinstance(error, ImproperlyConfigured)

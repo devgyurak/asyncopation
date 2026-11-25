@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** Only `asyncopation.testing` is usable so far; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -38,7 +38,14 @@ application = LifespanApp(get_asgi_application())
 
 Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
 themselves. A query before `setup()` still works (the pool is opened once, lazily, with a logged
-warning that recommends the lifespan wrapper). MySQL/MariaDB are not supported yet.
+warning that recommends the lifespan wrapper). `setup()` opens every database whose engine is
+supported and skips the others; pass `LifespanApp(app, aliases=[...])` or `setup(aliases=[...])` to
+choose. MySQL/MariaDB are not supported yet.
+
+**In tests**, a test runner creates the test databases after `ready()` and renames `NAME`. Call
+`asyncopation.configure()` once they exist (for example in a session fixture right after
+`setup_databases`); until then opening a driver fails with `ImproperlyConfigured` instead of
+connecting to the original database.
 
 ## Testing upper layers without a database
 

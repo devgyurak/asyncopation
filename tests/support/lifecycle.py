@@ -12,6 +12,9 @@ import contextlib
 import copy
 import dataclasses
 import logging
+import ssl
+import threading
+import uuid
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from typing import Any, Literal, NamedTuple
@@ -23,6 +26,7 @@ from asyncopation.drivers.base import Capabilities, PoolStats
 FAKE_ENGINE = "tests.fake.engine"
 UNSUPPORTED_ENGINE = "django.db.backends.sqlite3"
 PG_ENGINE = "django.db.backends.postgresql"
+POSTGIS_ENGINE = "django.contrib.gis.db.backends.postgis"
 LAZY_LOGGER = "asyncopation.connection"
 DEFAULT_STATS = PoolStats(in_use=1, idle=2, waiting=3)
 FAKE_VERSION = (17, 2)
@@ -41,6 +45,10 @@ class FakeCloseError(Exception):
     """Raised by the fake driver's `close()` when the script says so."""
 
 
+class FakeInjectError(Exception):
+    """Raised by the fake engine's `inject()` while the script says so."""
+
+
 @dataclass(frozen=True, slots=True)
 class FakeInfo(ServerInfo):
     version: tuple[int, ...]
@@ -55,7 +63,9 @@ class Script:
     fail_close: bool = False
     fail_closes: int = 0  # the next N `close()` calls raise (others succeed)
     fail_open_after: int | None = None  # `open()` raises once this many opens succeeded
+    fail_injects: int = 0
     gate: asyncio.Event | None = None  # `open()` waits for it (created in the running loop)
+    gate_after: int | None = None  # the gate only holds opens once this many succeeded
     version: tuple[int, ...] = FAKE_VERSION
     stats: PoolStats = DEFAULT_STATS
 
@@ -99,7 +109,8 @@ class FakeDriver:
 
     async def open(self) -> None:
         self._recorder.open_attempts += 1
-        if self._script.gate is not None:
+        held = self._script.gate_after is None or self._recorder.opens >= self._script.gate_after
+        if self._script.gate is not None and held:
             await self._script.gate.wait()
         await asyncio.sleep(0)  # a real open awaits: concurrent callers interleave here
         after = self._script.fail_open_after
@@ -145,6 +156,9 @@ def make_engine(recorder: Recorder, script: Script) -> Any:
         return FakeInfo(driver.capabilities.server_version)
 
     def inject(alias: str, settings_dict: dict[str, Any], info: Any) -> None:
+        if script.fail_injects > 0:
+            script.fail_injects -= 1
+            raise FakeInjectError("boom: inject")
         recorder.injects.append((alias, info))
 
     return Engine(prepare=prepare, probe=probe, inject=inject)
@@ -168,6 +182,7 @@ class FakeEnv:
         self.script = Script()
         self.names = {"default": "fake_db", "other": "fake_other_db"}
         self.engines = {"default": FAKE_ENGINE, "other": FAKE_ENGINE}
+        self.options: dict[str, dict[str, Any]] = {}
         engine = make_engine(self.recorder, self.script)
         monkeypatch.setitem(engines.FACTORIES, FAKE_ENGINE, lambda: engine)
         self._apply()
@@ -175,9 +190,11 @@ class FakeEnv:
     def _apply(self) -> None:
         from django.db import connections
 
-        databases = {
-            alias: database_entry(name, self.engines[alias]) for alias, name in self.names.items()
-        }
+        databases = {}
+        for alias, name in self.names.items():
+            entry = database_entry(name, self.engines[alias])
+            entry["OPTIONS"] = dict(self.options.get(alias, {}))
+            databases[alias] = entry
         self._monkeypatch.setitem(connections.__dict__, "settings", databases)
 
     def rename(self, alias: str, name: str) -> None:
@@ -185,8 +202,40 @@ class FakeEnv:
         self._apply()
 
     def use_unsupported_engine(self, alias: str) -> None:
-        self.engines[alias] = UNSUPPORTED_ENGINE
+        self.use_engine(alias, UNSUPPORTED_ENGINE)
+
+    def use_engine(self, alias: str, engine: str) -> None:
+        self.engines[alias] = engine
         self._apply()
+
+    def add_alias(self, alias: str, name: str, engine: str) -> None:
+        self.names[alias] = name
+        self.engines[alias] = engine
+        self._apply()
+
+    def add_broken_alias(self, alias: str, error: Exception) -> None:
+        """An alias whose engine factory raises `error` when `configure()` builds it."""
+        from asyncopation.connection import engines
+
+        def factory() -> Any:
+            raise error
+
+        key = f"tests.broken.{alias}"
+        self._monkeypatch.setitem(engines.FACTORIES, key, factory)
+        self.add_alias(alias, f"{alias}_db", key)
+
+    def set_options(self, alias: str, options: dict[str, Any]) -> None:
+        self.options[alias] = options
+        self._apply()
+
+
+def uncopiable_options() -> dict[str, Any]:
+    """OPTIONS leaves that `copy.deepcopy` rejects (an SSL context and an object with a lock)."""
+    return {
+        "ssl": ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
+        "lock": threading.Lock(),
+        "nested": {"hosts": ["a", "b"]},
+    }
 
 
 def install_fake_environment(monkeypatch: Any) -> FakeEnv:
@@ -273,6 +322,12 @@ async def open_in_second_loop(alias: str = "default") -> SecondLoop:
     return await run_in_thread_loop(run())
 
 
+async def _is_closing() -> bool:
+    from asyncopation.connection import registry
+
+    return registry.is_closing(asyncio.get_running_loop())
+
+
 class ClosingScenario:
     """A `close()` that is held back by one statement in flight on `alias`."""
 
@@ -288,11 +343,16 @@ class ClosingScenario:
 
         registry.statement_started(self.alias)
         self.task = asyncio.create_task(close(timeout=self.timeout))
-        await wait_until(lambda: ensure_is_refused(self.alias))
+        await wait_until(_is_closing)
 
     async def join(self) -> None:
         assert self.task is not None
         await self.task
+
+    async def cancel_close(self) -> None:
+        assert self.task is not None
+        self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
 
     async def finish(self) -> None:
         from asyncopation.connection import registry
@@ -430,9 +490,8 @@ class CountingDriver:
 
 def install_spy_engine(monkeypatch: Any, recorder: Recorder) -> None:
     """Wrap the real PostgreSQL engine so that every prepare/build/open/probe is recorded."""
-    from asyncopation.connection import engines, registry
+    from asyncopation.connection import engines
 
-    registry.reset()
     real = engines.FACTORIES[PG_ENGINE]()
 
     def prepare(alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str):
@@ -469,7 +528,7 @@ async def teardown_lifecycle() -> None:
 
     try:
         await close(timeout=1.0)
-        leaked = registry.entries()
+        leaked = [*registry.entries(), *registry.take_leaked()]
         assert leaked == [], f"drivers left open in the registry after the test: {leaked}"
     finally:
         registry.reset()
@@ -707,3 +766,268 @@ def drain_in_flight(alias: str) -> None:
 
     while registry.in_flight(alias) > 0:
         registry.statement_finished(alias)
+
+
+# --------------------------------------------------------------------------- live foreign loop
+class ThreadLoop:
+    """An event loop that keeps running on its own thread (a second, live loop)."""
+
+    def __init__(self) -> None:
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def start(self) -> ThreadLoop:
+        self.thread.start()
+        return self
+
+    async def run(self, coroutine: Any, within: float = 15.0) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coroutine, self.loop)
+        async with asyncio.timeout(within):
+            return await asyncio.wrap_future(future)
+
+    def stop(self) -> None:
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(5)
+        self.loop.close()
+
+
+async def hold_driver_in_live_loop(thread_loop: ThreadLoop, alias: str = "default") -> None:
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    await thread_loop.run(ensure_driver(alias))
+
+
+async def release_live_loop(thread_loop: ThreadLoop) -> None:
+    """Close that loop's drivers (in it) and stop it."""
+    from asyncopation.connection.lifecycle import close
+
+    await thread_loop.run(close())
+    thread_loop.stop()
+
+
+# --------------------------------------------------------------------------- more scenarios (2)
+def error_names(results: list[Any]) -> list[str]:
+    """The class name of every raised error in `results`, `ok` for a value."""
+    return [type(r).__name__ if isinstance(r, BaseException) else "ok" for r in results]
+
+
+async def close_while_opening(scenario: OpeningScenario) -> list[Any]:
+    """`close()` while the first open is held in `driver.open()`; then let that open finish."""
+    from asyncopation.connection.lifecycle import close
+    from tests.support.aio import wait_until
+
+    assert scenario.task is not None
+    close_task = asyncio.create_task(close())
+    await wait_until(_is_closing)
+    gate, scenario.env.script.gate = scenario.env.script.gate, None
+    assert gate is not None
+    gate.set()
+    return list(await asyncio.gather(scenario.task, close_task, return_exceptions=True))
+
+
+async def waiter_meets_closing(scenario: OpeningScenario) -> list[Any]:
+    """A second caller queues on the open lock, `close()` begins, then the open is released."""
+    from asyncopation.connection.lifecycle import close, ensure_driver
+    from tests.support.aio import wait_until
+
+    assert scenario.task is not None
+    waiter = asyncio.create_task(ensure_driver(scenario.alias))
+    await asyncio.sleep(0)  # one turn: the waiter runs up to the lock and queues behind the opener
+    close_task = asyncio.create_task(close())
+    await wait_until(_is_closing)
+    gate, scenario.env.script.gate = scenario.env.script.gate, None
+    assert gate is not None
+    gate.set()
+    return list(await asyncio.gather(scenario.task, waiter, close_task, return_exceptions=True))
+
+
+class SetupScenario:
+    """`setup(aliases)` held inside the second `driver.open()` (the first one succeeded)."""
+
+    def __init__(self, env: FakeEnv, aliases: list[str]) -> None:
+        self.env = env
+        self.aliases = aliases
+        self.task: asyncio.Task[None] | None = None
+
+    async def begin(self) -> None:
+        from asyncopation.connection.lifecycle import setup
+        from tests.support.aio import wait_until
+
+        self.env.script.gate = asyncio.Event()
+        self.env.script.gate_after = 1
+        self.task = asyncio.create_task(setup(self.aliases))
+        await wait_until(lambda: _second_open_started(self.env.recorder))
+
+    async def cancel(self) -> None:
+        assert self.task is not None
+        self.task.cancel()
+        await asyncio.gather(self.task, return_exceptions=True)
+        self.env.script.gate = None
+
+
+async def _second_open_started(recorder: Recorder) -> bool:
+    return recorder.open_attempts >= 2
+
+
+class OverlappingClose:
+    """Close B waits for a statement in flight; close A (short timeout) starts later and ends first."""
+
+    def __init__(self, alias: str = "default") -> None:
+        self.alias = alias
+        self.b: asyncio.Task[None] | None = None
+
+    async def begin(self) -> list[Any]:
+        """Start B, then run A to its timeout; returns A's outcome."""
+        from asyncopation.connection import registry
+        from asyncopation.connection.lifecycle import close
+        from tests.support.aio import wait_until
+
+        registry.statement_started(self.alias)
+        self.b = asyncio.create_task(close(timeout=5.0))
+        await wait_until(_is_closing)
+        return list(await asyncio.gather(close(timeout=0.05), return_exceptions=True))
+
+    async def finish(self) -> None:
+        from asyncopation.connection import registry
+
+        with contextlib.suppress(Exception):
+            registry.statement_finished(self.alias)
+        if self.b is not None:
+            await asyncio.gather(self.b, return_exceptions=True)
+
+
+def errors_logged(caplog: Any) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == LAZY_LOGGER and r.levelno >= logging.ERROR
+    ]
+
+
+def info_messages(caplog: Any) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == LAZY_LOGGER and r.levelno == logging.INFO
+    ]
+
+
+def mention_count(messages: list[str], fragment: str) -> int:
+    return sum(1 for m in messages if fragment in m)
+
+
+async def lifespan_with(app: Any) -> LifespanRun:
+    return await run_lifespan(app)
+
+
+def fake_driver(version: tuple[int, ...]) -> Any:
+    """A stand-in driver exposing only `capabilities.server_version` (what `probe` reads)."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(capabilities=SimpleNamespace(server_version=version))
+
+
+def injected_aliases(recorder: Recorder) -> list[str]:
+    return [alias for alias, _info in recorder.injects]
+
+
+# --------------------------------------------------------------------------- real server checks
+def new_application_name() -> str:
+    return f"asyncopation-test-{uuid.uuid4().hex[:12]}"
+
+
+@contextlib.contextmanager
+def application_name_override(name: str, alias: str = "default") -> Generator[None]:
+    """Run with `OPTIONS["application_name"] = name` for `alias` (so its sessions can be counted)."""
+    from django.db import connections
+
+    options = {**connections.settings[alias].get("OPTIONS", {}), "application_name": name}
+    with patched_alias_settings(alias, OPTIONS=options):
+        yield
+
+
+async def server_connections(name: str) -> int:
+    """Sessions of the test database whose `application_name` is `name` (pg_stat_activity)."""
+    from tests.support.drivers.admin import admin_scalar
+
+    return int(
+        await admin_scalar(
+            "SELECT count(*) FROM pg_stat_activity WHERE application_name = %s", [name]
+        )
+    )
+
+
+async def _none_left(name: str) -> bool:
+    return await server_connections(name) == 0
+
+
+async def server_connections_after_settling(name: str) -> int:
+    """`server_connections`, once the server has reaped the closed sessions (polled, bounded)."""
+    from tests.support.aio import wait_until
+
+    await wait_until(lambda: _none_left(name), within=10.0)
+    return await server_connections(name)
+
+
+async def current_database_of_driver(alias: str = "default") -> str:
+    """`SELECT current_database()` on a connection borrowed from the registry's driver."""
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    driver = await ensure_driver(alias)
+    async with driver.connection() as connection:
+        rows = await connection.fetch_all("SELECT current_database()", None)
+    return rows[0][0]
+
+
+async def ensure_raises_after_rename(alias: str = "default") -> BaseException | None:
+    """`configure()` against the live name, rename `NAME`, then open: the error (if any)."""
+    from asyncopation.connection import configure
+    from asyncopation.connection.lifecycle import ensure_driver
+
+    configure()
+    with patched_alias_settings(alias, NAME="renamed_after_configure"):
+        try:
+            await ensure_driver(alias)
+        except Exception as exc:
+            return exc
+    return None
+
+
+def assert_registry_clean() -> None:
+    """Fail when a test left a driver in the registry (or one was dropped with a closed loop)."""
+    from asyncopation.connection import registry
+
+    leftovers = [*registry.entries(), *registry.take_leaked()]
+    registry.reset()
+    assert leftovers == [], f"the test left drivers in the registry: {leftovers}"
+
+
+def uncopiable_snapshot_facts() -> dict[str, bool]:
+    """`configured_databases()` on settings whose OPTIONS cannot be deep-copied."""
+    from django.db import connections
+
+    from asyncopation._django.connections import configured_databases
+
+    options = uncopiable_options()
+    original = {"default": {**database_entry("x", FAKE_ENGINE), "OPTIONS": options}}
+    with mock.patch.dict(connections.__dict__, {"settings": original}):
+        snapshot = configured_databases()
+    copied = snapshot["default"]["OPTIONS"]
+    return {
+        "leaf_is_shared": copied["lock"] is options["lock"] and copied["ssl"] is options["ssl"],
+        "options_dict_is_copied": copied is not options,
+        "nested_list_is_copied": copied["nested"]["hosts"] is not options["nested"]["hosts"],
+    }
+
+
+async def failing(coroutine: Any, expected: type[BaseException]) -> BaseException:
+    """Await `coroutine`, which must raise `expected`; return the error (for setup steps)."""
+    try:
+        await coroutine
+    except expected as exc:
+        return exc
+    raise AssertionError(f"expected {expected.__name__}, but nothing was raised")

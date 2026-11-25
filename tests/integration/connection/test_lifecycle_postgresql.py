@@ -8,7 +8,6 @@ from django.db import Error as DjangoDbError
 from asyncopation.compile.server_info import PostgreSQLServerInfo
 from asyncopation.connection import close, configure, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
-from asyncopation.drivers.base import PoolStats
 from harness.settings import VENDOR
 from tests.support.drivers.admin import admin_scalar
 from tests.support.lifecycle import (
@@ -16,15 +15,20 @@ from tests.support.lifecycle import (
     attempts_reading_pg_version_without_injection,
     compile_attempts_with_injected_wrapper,
     counts,
+    current_database_of_driver,
     distinct,
     ensure_many,
+    ensure_raises_after_rename,
     fail_first_open_then_recover,
+    injected_aliases,
     last_prepared_name,
     live_database_name,
     open_in_second_loop,
     pg_version_number,
     prepared_names,
     rename_then_restore,
+    server_connections,
+    server_connections_after_settling,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -41,6 +45,7 @@ async def test_compiling_after_setup_makes_no_sync_connection_attempt(spy):
     attempts = compile_attempts_with_injected_wrapper("default")
     # then
     assert attempts == 0
+    assert injected_aliases(spy) == ["default"]
 
 
 async def test_concurrent_first_calls_without_setup_share_one_driver(spy):
@@ -156,32 +161,6 @@ async def test_close_removes_the_entries_of_the_loop(spy):
     assert registry.entries() == []
 
 
-async def test_close_resets_the_pool_stats_to_zero(spy):
-    # given
-    await setup()
-    # when
-    await close()
-    # then
-    assert registry.pool_stats("default") == PoolStats(0, 0, 0)
-
-
-async def test_close_leaves_the_registry_empty_for_the_current_loop(spy):
-    # given
-    await setup()
-    # when
-    await close()
-    # then
-    assert registry.is_empty()
-
-
-async def test_pool_stats_show_an_open_pool_after_setup(spy):
-    # when
-    await setup()
-    # then
-    stats = registry.pool_stats("default")
-    assert stats.in_use + stats.idle > 0
-
-
 async def test_open_entry_belongs_to_the_running_loop(spy):
     # given
     await setup()
@@ -196,3 +175,43 @@ async def test_a_compile_wrapper_that_was_never_injected_does_attempt_a_sync_con
     attempts = await attempts_reading_pg_version_without_injection("default")
     # then
     assert attempts == 1
+
+
+async def test_setup_opens_sessions_on_the_server(spy, app_name):
+    # when
+    await setup()
+    # then
+    assert await server_connections(app_name) >= 1
+
+
+async def test_close_ends_every_session_of_the_pool_on_the_server(spy, app_name):
+    # given
+    await setup()
+    # when
+    await close()
+    # then
+    assert await server_connections_after_settling(app_name) == 0
+
+
+async def test_close_has_removed_the_registry_entries_of_the_loop(spy):
+    # given
+    await setup()
+    # when
+    await close()
+    # then
+    assert registry.entries() == []
+
+
+async def test_the_driver_opened_after_configure_reaches_the_test_database(spy):
+    # when
+    name = await current_database_of_driver("default")
+    # then
+    assert name == live_database_name()
+
+
+async def test_a_rename_after_configure_is_refused_instead_of_reaching_the_old_database(spy):
+    # when
+    error = await ensure_raises_after_rename("default")
+    # then
+    assert type(error).__name__ == "ImproperlyConfigured"
+    assert registry.entries() == []

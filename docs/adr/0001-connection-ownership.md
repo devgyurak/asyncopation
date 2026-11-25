@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approval: **pending maintainer (@devgyurak) review of PR #52**
 
 ## Context
 Django's connections are thread-local (plan §1.3). Asyncopation replaces them with
@@ -74,7 +75,7 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    Reading a stream after its transaction ended raises.
 8. **Pools.** Driver pool defaults, configurable per alias in `DATABASES[alias]["OPTIONS"]`; acquire
    timeout raises `django.db.OperationalError`. Sizing defaults are fixed and benchmarked in #8
-   (*Amended 2026-11-25 (#5a): moved from the ADR-0004 implementation issue to #8, which needs the
+   (*Amended 2026-11-25 (#5, PR #52): moved from the ADR-0004 implementation issue to #8, which needs the
    read path of #6*).
    *Amended 2026-11-24 (#2, PR #46) - implementation note:* the PostgreSQL driver reuses
    `DATABASES[alias]["OPTIONS"]["pool"]`: `OPTIONS["pool"]` accepts `None`, `True`, `False` or any

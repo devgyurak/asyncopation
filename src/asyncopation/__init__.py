@@ -30,8 +30,8 @@ async def setup(aliases: Iterable[str] | None = None) -> None:
     await lifecycle.setup(aliases)
 
 
-async def close(timeout: float = 10.0) -> None:  # noqa: ASYNC109 - public API, see lifecycle.close
-    """Close the running loop's drivers; see ``connection.lifecycle.close``."""
+async def close(timeout: float | None = None) -> None:  # noqa: ASYNC109 - public API, see lifecycle.close
+    """Close the running loop's drivers; ``timeout=None`` is ``lifecycle.DEFAULT_CLOSE_TIMEOUT``."""
     from asyncopation.connection import lifecycle
 
-    await lifecycle.close(timeout)
+    await lifecycle.close(lifecycle.DEFAULT_CLOSE_TIMEOUT if timeout is None else timeout)

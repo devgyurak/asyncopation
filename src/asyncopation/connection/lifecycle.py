@@ -12,6 +12,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Iterable
+from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -31,10 +32,14 @@ __all__ = ["close", "configure", "ensure_driver", "setup"]
 def configure() -> None:
     """Build the per-alias configuration from Django's configured ``DATABASES``.
 
-    Idempotent. Callable again until a driver is open (``RuntimeError`` afterwards), e.g. after a
-    test runner renamed ``NAME``; an alias whose configuration changed loses its server info. An
-    unsupported ENGINE is recorded and fails at the first open, not here. Never inside the loop:
-    resolving a time zone name reads the tz database from disk.
+    Idempotent. Callable again until a driver is open or opening (``RuntimeError`` afterwards),
+    e.g. after a test runner renamed ``NAME`` (tests call ``asyncopation.configure()`` once the
+    test databases exist); an alias whose configuration changed loses its server info. Never inside
+    the loop: resolving a time zone name reads the tz database from disk.
+
+    One alias never breaks ``ready()``: an unsupported ENGINE, a bad setting (``ImproperlyConfigured``
+    from the driver's settings) or a missing driver library is recorded for that alias and raised
+    by its first open.
     """
     if not registry.is_idle():
         raise RuntimeError(
@@ -43,16 +48,24 @@ def configure() -> None:
     use_tz, time_zone = bool(settings.USE_TZ), str(settings.TIME_ZONE)
     new: dict[str, AliasConfig] = {}
     for alias, settings_dict in configured_databases().items():
-        name = settings_dict["ENGINE"]
-        factory = engines.FACTORIES.get(name)
-        engine = factory() if factory is not None else None
-        driver_factory = (
-            engine.prepare(alias, settings_dict, use_tz=use_tz, time_zone=time_zone)
-            if engine is not None
-            else None
-        )
-        new[alias] = AliasConfig(name, settings_dict, use_tz, time_zone, engine, driver_factory)
+        new[alias] = _prepare(alias, settings_dict, use_tz, time_zone)
     registry.set_configs(new)
+
+
+def _prepare(
+    alias: str, settings_dict: dict[str, Any], use_tz: bool, time_zone: str
+) -> AliasConfig:
+    name = settings_dict["ENGINE"]
+    factory = engines.FACTORIES.get(name)
+    if factory is None:
+        return AliasConfig(name, settings_dict, use_tz, time_zone)
+    try:
+        engine = factory()
+        driver_factory = engine.prepare(alias, settings_dict, use_tz=use_tz, time_zone=time_zone)
+    except (ImproperlyConfigured, ImportError) as exc:
+        logger.warning("asyncopation: database %r cannot be prepared: %s", alias, exc)
+        return AliasConfig(name, settings_dict, use_tz, time_zone, error=exc)
+    return AliasConfig(name, settings_dict, use_tz, time_zone, engine, driver_factory)
 
 
 async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
@@ -61,16 +74,18 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
     entry = registry.entry(alias, loop)
     if entry is not None and entry.driver is not None and not entry.closing:
         return entry.driver
+    registry.purge_closed_loops()
     if registry.is_closing(loop):
-        raise RuntimeError(f"asyncopation is closing in this event loop; cannot open {alias!r}")
-    config = _config(alias)
+        raise _closing_error(alias)
+    _config(alias)  # fail early for an unknown or unsupported alias
     entry = registry.entry_or_create(alias, loop)
     async with entry.lock:
         if entry.closing:
-            raise RuntimeError(f"asyncopation is closing in this event loop; cannot open {alias!r}")
+            raise _closing_error(alias)
         if entry.driver is not None:
             return entry.driver
         config = _config(alias)  # re-read: configure() may have replaced it while we queued
+        _check_unchanged(alias, config)
         if lazy and not entry.warned:
             entry.warned = True
             logger.warning(
@@ -83,6 +98,8 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         driver: AsyncDriver = config.factory()
         await driver.open()
         try:
+            if entry.closing:  # a close() began while we were opening: it must not get this pool
+                raise _closing_error(alias)
             info = registry.server_info(alias)  # probed once per alias per process
             if info is None:
                 info = config.engine.probe(driver)
@@ -98,16 +115,37 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         return driver
 
 
+def _closing_error(alias: str) -> RuntimeError:
+    return RuntimeError(f"asyncopation is closing in this event loop; cannot open {alias!r}")
+
+
+def _check_unchanged(alias: str, config: AliasConfig) -> None:
+    """Fail closed when ``DATABASES`` changed after ``configure()`` (e.g. a test runner's rename).
+
+    Opening with the stale configuration would reach the original database instead of the test
+    database.
+    """
+    if configured_databases().get(alias) != config.settings_dict:
+        raise ImproperlyConfigured(
+            "DATABASES changed since configure(); call asyncopation.configure() after the test "
+            "databases are created"
+        )
+
+
 def _config(alias: str) -> AliasConfig:
     configs = registry.configs()
     if not configs:
         raise ImproperlyConfigured(
             "asyncopation is not configured: add 'asyncopation' to INSTALLED_APPS "
-            "(or call asyncopation.connection.configure())"
+            "(or call asyncopation.configure())"
         )
     config = configs.get(alias)
     if config is None:
         raise ImproperlyConfigured(f"asyncopation: unknown database alias {alias!r}")
+    if config.error is not None:
+        raise ImproperlyConfigured(
+            f"asyncopation: database {alias!r} cannot be used: {config.error}"
+        ) from config.error
     if config.engine is None:
         raise ImproperlyConfigured(
             f"asyncopation: ENGINE {config.engine_name!r} of {alias!r} is not supported yet "
@@ -117,19 +155,50 @@ def _config(alias: str) -> AliasConfig:
 
 
 async def setup(aliases: Iterable[str] | None = None) -> None:
-    """Open the drivers of ``aliases`` (default: every configured alias) in the running loop.
+    """Open the drivers of ``aliases`` in the running loop.
 
-    All or nothing: when one alias fails, this loop's drivers are closed again before raising.
+    Without ``aliases`` every configured alias that has a supported engine is opened and the others
+    are skipped with an INFO log (a MySQL-only alias does not stop a PostgreSQL one). Aliases named
+    explicitly must be usable: an unsupported or misconfigured one raises. A single ``str`` is a
+    ``TypeError`` (it would be read as a sequence of characters).
+
+    All or nothing: when an alias fails (or the call is cancelled), the drivers this call opened are
+    closed again before raising; drivers that were already open stay open.
     """
-    names = list(aliases) if aliases is not None else list(registry.configs())
+    if isinstance(aliases, str):
+        raise TypeError("setup(aliases) takes an iterable of alias names, not a single str")
+    names = _supported_aliases() if aliases is None else list(aliases)
+    loop = asyncio.get_running_loop()
+    opened: list[registry.Entry] = []
     try:
         for alias in names:
+            before = registry.entry(alias, loop)
+            was_open = before is not None and before.driver is not None
             await ensure_driver(alias, lazy=False)
+            if not was_open:
+                opened.append(registry.entry_or_create(alias, loop))
     except BaseException:
-        # all or nothing: a failed startup leaves no pool of this loop behind
         with contextlib.suppress(Exception):
-            await asyncio.shield(close())
+            await asyncio.shield(_close_entries(opened))
+        for entry in opened:
+            registry.forget(entry)
         raise
+
+
+def _supported_aliases() -> list[str]:
+    usable: list[str] = []
+    for alias, config in registry.configs().items():
+        if config.engine is not None and config.error is None:
+            usable.append(alias)
+        else:
+            logger.info("asyncopation.setup(): skipping %r (%s)", alias, _skip_reason(config))
+    return usable
+
+
+def _skip_reason(config: AliasConfig) -> str:
+    if config.error is not None:
+        return f"not usable: {config.error}"
+    return f"ENGINE {config.engine_name!r} is not supported yet"
 
 
 async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC109 - public API, applied via asyncio.timeout
@@ -137,8 +206,10 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
 
     New opens are refused first, then in-flight statements get ``timeout`` seconds to finish.
     The drivers are closed either way; ``TimeoutError`` is raised afterwards when statements were
-    still running. Pools of other loops are not touched. An open in progress is awaited first, so
-    ``close()`` can outlast ``timeout`` by the pool's connect time.
+    still running. Pools of other loops are not touched. An open in progress is awaited first (its
+    driver is then closed, and its caller gets a ``RuntimeError``), so ``close()`` can outlast
+    ``timeout`` by the pool's connect time. Overlapping ``close()`` calls are safe: each one
+    removes only the entries it began with.
     """
     loop = asyncio.get_running_loop()
     mine = registry.begin_closing(loop)
@@ -151,7 +222,7 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
         except TimeoutError:
             timed_out = True
     finally:
-        failures = await asyncio.shield(_close_entries(loop, mine))
+        failures = await asyncio.shield(_close_and_end(loop, mine))
     for extra in failures[1:]:
         logger.error("asyncopation: another driver failed to close: %r", extra)
     if failures:
@@ -160,19 +231,24 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
         raise TimeoutError(f"statements still in flight after {timeout}s; drivers were closed")
 
 
-async def _close_entries(
+async def _close_and_end(
     loop: asyncio.AbstractEventLoop, mine: list[registry.Entry]
 ) -> list[Exception]:
-    failures: list[Exception] = []
     try:
-        for entry in mine:
-            async with entry.lock:  # an open in progress finishes first
-                driver, entry.driver = entry.driver, None
-                if driver is not None:
-                    try:
-                        await driver.close()
-                    except Exception as exc:  # keep closing the other pools
-                        failures.append(exc)
+        return await _close_entries(mine)
     finally:
-        registry.end_closing(loop)
+        registry.end_closing(loop, mine)
+
+
+async def _close_entries(entries: list[registry.Entry]) -> list[Exception]:
+    """Close each entry's driver (after any open in progress); one failure does not stop the rest."""
+    failures: list[Exception] = []
+    for entry in entries:
+        async with entry.lock:
+            driver, entry.driver = entry.driver, None
+            if driver is not None:
+                try:
+                    await driver.close()
+                except Exception as exc:
+                    failures.append(exc)
     return failures

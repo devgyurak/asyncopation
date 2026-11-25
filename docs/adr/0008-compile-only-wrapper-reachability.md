@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak) - accepted 2026-11-24 after the Phase 1 spike (#29)
 - Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
-- Amended: 2026-11-25 (#5a) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approval: **pending maintainer (@devgyurak) review of PR #5a**; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #52) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approval: **pending maintainer (@devgyurak) review of PR #52**; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -130,7 +130,7 @@ A-scoped, concretely:
    (ADR-0007), and within it only these operations: `connections.__setitem__` /
    `connections.__delitem__`, and the peek at the previous value through the private
    `connections._connections` (which avoids creating a real wrapper per task context just to
-   remember it). *Amended 2026-11-25 (#5a): a fourth operation, a read of `connections.settings` (Django's configured `DATABASES`, defaults applied), reachable only through `configured_databases()`, which returns `copy.deepcopy(connections.settings)`; `connection/lifecycle.py` may import that one name.* *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
+   remember it). *Amended 2026-11-25 (#5, PR #52): a fourth operation, a read of `connections.settings` (Django's configured `DATABASES`, defaults applied), reachable only through `configured_databases()`, which returns `_snapshot(connections.settings)` - a copy of the dict/list structure that shares the leaf values (`copy.deepcopy` fails in `ready()` on an `ssl.SSLContext` or a lock-holding object in `OPTIONS`); `connection/lifecycle.py` may import that one name.* *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
    `ensure_connection`, `connect`, `django.db.transaction`, and any other use of a sync
    connection. `compile.scope` calls the module, through the single context manager
    `swapped(alias, wrapper)` that the module exposes (it yields nothing, so the previous wrapper
@@ -262,6 +262,7 @@ in the PR that first uses them (#3 / #6 / Phase 5):
 | Module | Names | Planned consumer | Why |
 |---|---|---|---|
 | `django.utils.connection` | `BaseConnectionHandler._connections` (an `[[attribute]]` entry) | `_django/connections.py` | peek at the context's wrapper without creating one |
+| `django.utils.connection` | `BaseConnectionHandler.settings` (an `[[attribute]]` entry; *Amended 2026-11-25 (#5, PR #52)*) | `_django/connections.py` | `configured_databases()`: structure copy of Django's configured `DATABASES`, read by `connection/lifecycle.py` |
 | `asgiref.local` | `Local(thread_critical=True)` per-context storage | `_django/connections.py` | the semantics `compile_scope` relies on; not imported by `src`, so it is recorded in the `reason` of the `_connections` `[[attribute]]` row and pinned by `tests/unit/django_drift` |
 | `django.db.models.sql.query` | `Query.get_aggregation`, `get_count`, `get_compiler`, `has_results`, `exists` | `_django/aggregation.py` | `acount()` / `aexists()` ports |
 | `django.db.models.sql.compiler` | `SQLAggregateCompiler.as_sql`, `SQLCompiler.get_combinator_sql`, `get_qualify_sql`, `as_sql`, `SQLUpdateCompiler.pre_sql_setup`, `execute_sql` | `_django/*` (`compile/` cannot import private Django modules), `_django/update.py` | re-resolution, `get_autocommit` in `as_sql`, I/O in `pre_sql_setup` |

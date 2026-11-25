@@ -36,7 +36,7 @@ Used by ``archlint``; kept apart because the rule set is large. What is rejected
 One module is exempt: ``src/asyncopation/_django/connections.py`` may bind ``connections`` inside a
 function and use it only as ``connections[alias] = value``, ``del connections[alias]`` and
 ``x = getattr(connections._connections, alias, default)``; the reader ``configured_databases`` may
-only ``copy.deepcopy(connections.settings)`` (ADR-0008 Decision 6, amended for #5a). The peeked value ``x`` may only be
+only ``_snapshot(connections.settings)``, the module's own structure copy (ADR-0008 Decision 6, amended for #5, PR #52). The peeked value ``x`` may only be
 compared with ``is`` / ``is not`` or stored back as ``connections[alias] = x``; no sync connection
 operation (``.cursor()``, ``.connect()``, ...) may appear in the module.
 
@@ -74,6 +74,7 @@ POSTGRESQL_TARGET = f"{PACKAGE}.postgresql"
 ADAPTER_TARGET = f"{PACKAGE}.postgresql_adapters"
 SWAP_NAMES = frozenset({"swapped", "_swapped"})
 READER_NAME = "configured_databases"
+SNAPSHOT_NAME = "_snapshot"
 # The only modules that may import a backend's real `DatabaseWrapper`, and only as `BaseWrapper`.
 WRAPPER_BOUNDARIES = frozenset(
     {"src/asyncopation/_django/postgresql.py", "src/asyncopation/_django/mysql.py"}
@@ -463,8 +464,23 @@ class _Checker:
             if reader:
                 self._reader_use(func)
 
+    def _snapshot_binding(self) -> None:
+        """``_snapshot`` must be the module's own ``def`` (not imported or rebound)."""
+        defs = [
+            n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == SNAPSHOT_NAME
+        ]
+        if not defs:
+            self.flag(self.tree, f"the reader needs the module's own `def {SNAPSHOT_NAME}`")
+        for n in ast.walk(self.tree):
+            imported = isinstance(n, ast.Import | ast.ImportFrom) and any(
+                (a.asname or a.name).split(".")[0] == SNAPSHOT_NAME for a in n.names
+            )
+            rebound = _single_name_target(n) == SNAPSHOT_NAME
+            if imported or rebound:
+                self.flag(n, f"`{SNAPSHOT_NAME}` must stay the module's own function")
+
     def _reader_use(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        """``configured_databases`` may only ``copy.deepcopy(connections.settings)``."""
+        """``configured_databases`` may only ``_snapshot(connections.settings)``."""
         for n in _own_nodes(func):
             if not _is_name(n, "connections"):
                 continue
@@ -477,16 +493,13 @@ class _Checker:
                 and isinstance(call, ast.Call)
                 and call.args
                 and call.args[0] is attr
-                and (
-                    _is_name(call.func, "deepcopy")
-                    or (isinstance(call.func, ast.Attribute) and call.func.attr == "deepcopy")
-                )
+                and _is_name(call.func, SNAPSHOT_NAME)
             )
             if not ok:
                 self.flag(
                     n,
-                    f"`{READER_NAME}` may only use `copy.deepcopy(connections.settings)` "
-                    "(ADR-0008, Decision 6, amended for #5a)",
+                    f"`{READER_NAME}` may only use `{SNAPSHOT_NAME}(connections.settings)` "
+                    "(ADR-0008, Decision 6, amended for #5, PR #52)",
                 )
             else:
                 self.reader_allowed.add(id(n))
@@ -503,6 +516,7 @@ class _Checker:
                     n, "the swap module must stay synchronous (the swap never spans an await)"
                 )
         self._swap_functions()
+        self._snapshot_binding()
         for n in ast.walk(tree):
             target = _single_name_target(n)
             value = getattr(n, "value", None)

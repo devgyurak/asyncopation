@@ -3,8 +3,10 @@
 The ASGI app wraps Django in `LifespanApp`, so startup opens the pools and shutdown closes them.
 Registry state lives in the server process; tests read it through two harness hooks:
   * `GET /diag/pool` -> `{"entries": ["default"], "server_info": true, "pool": {alias: {...}}}`
-  * after the lifespan shutdown completed the server prints one line
-    `ASYNCOPATION_DIAG after-shutdown entries=<n> in_use=<n> idle=<n> waiting=<n>`
+  * the process tags its database sessions with `ASYNCOPATION_APP_NAME` and, around the lifespan
+    shutdown, prints one line
+    `ASYNCOPATION_DIAG sessions before-close=<n> after-shutdown=<n>`
+    counting its pg_stat_activity sessions before `close()` and after `shutdown.complete`
 """
 
 from __future__ import annotations
@@ -21,9 +23,7 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
-DIAG_LINE = re.compile(
-    r"ASYNCOPATION_DIAG after-shutdown entries=(\d+) in_use=(\d+) idle=(\d+) waiting=(\d+)"
-)
+DIAG_LINE = re.compile(r"ASYNCOPATION_DIAG sessions before-close=(-?\d+) after-shutdown=(-?\d+)")
 
 
 @dataclass
@@ -33,10 +33,15 @@ class ServerProcess:
     log_path: Path
 
     def stop(self, timeout: float = 15.0) -> int:
-        """SIGTERM (graceful: runs the lifespan shutdown) and wait; returns the exit code."""
+        """SIGTERM (graceful: runs the lifespan shutdown) and wait; kills the process when it does
+        not exit in time. Returns the exit code."""
         if self.proc.poll() is None:
             self.proc.terminate()
-        return self.proc.wait(timeout=timeout)
+        try:
+            return self.proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+            return self.proc.wait(timeout=5)
 
     def log(self) -> str:
         return self.log_path.read_text()
@@ -50,8 +55,8 @@ class ServerProcess:
         """Whether `marker` does not appear in the server log."""
         return marker not in self.log()
 
-    def after_shutdown(self) -> tuple[int, ...]:
-        """(entries, in_use, idle, waiting) printed by the server after shutdown, or ()."""
+    def sessions_around_shutdown(self) -> tuple[int, ...]:
+        """(sessions before close, sessions after shutdown) the server printed, or ()."""
         found = DIAG_LINE.search(self.log())
         return tuple(int(g) for g in found.groups()) if found else ()
 
@@ -62,10 +67,16 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def start_server(db_name: str, log_dir: Path, *, timeout: float = 30.0) -> ServerProcess:
+def start_server(
+    db_name: str, log_dir: Path, app_name: str, *, timeout: float = 30.0
+) -> ServerProcess:
     port = _free_port()
     log_path = log_dir / f"server-{port}.log"
-    env = os.environ | {"ASYNCOPATION_DB_NAME": db_name, "PYTHONPATH": str(ROOT)}
+    env = os.environ | {
+        "ASYNCOPATION_DB_NAME": db_name,
+        "ASYNCOPATION_APP_NAME": app_name,
+        "PYTHONPATH": str(ROOT),
+    }
     with log_path.open("w") as log:
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "harness.site.asgi:application",

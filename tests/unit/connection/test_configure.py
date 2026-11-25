@@ -5,7 +5,20 @@ from django.core.exceptions import ImproperlyConfigured
 
 from asyncopation.connection import close, configure, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import FakeInfo, aliases_of
+from tests.support.lifecycle import (
+    PG_ENGINE,
+    POSTGIS_ENGINE,
+    FakeInfo,
+    aliases_of,
+    capture_logs,
+    entry_aliases,
+    errors_logged,
+    failing,
+    info_messages,
+    lazy_warnings,
+    mention_count,
+    uncopiable_options,
+)
 
 
 def test_configure_returns_none_and_builds_no_driver(fake):
@@ -125,21 +138,59 @@ async def test_first_open_with_an_unsupported_engine_leaves_no_entry(fake):
     # given
     fake.use_unsupported_engine("default")
     configure()
-    with pytest.raises(ImproperlyConfigured):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), ImproperlyConfigured)
     # when
     empty = registry.is_empty()
     # then
     assert empty
 
 
-async def test_setup_with_an_unsupported_engine_raises_improperly_configured(fake):
+async def test_setup_skips_an_unsupported_alias_and_opens_the_others(fake):
+    # given
+    fake.use_unsupported_engine("other")
+    configure()
+    # when
+    await setup()
+    # then
+    assert entry_aliases() == ["default"]
+
+
+async def test_setup_logs_each_skipped_alias_at_info(fake, caplog):
+    # given
+    capture_logs(caplog)
+    fake.use_unsupported_engine("other")
+    fake.add_broken_alias("broken", ImportError("No module named 'psycopg'"))
+    configure()
+    # when
+    await setup()
+    # then
+    messages = info_messages(caplog)
+    assert mention_count(messages, "'other'") == 1
+    assert mention_count(messages, "'broken'") == 1
+
+
+async def test_setup_with_an_explicit_unsupported_alias_raises_improperly_configured(fake):
     # given
     fake.use_unsupported_engine("other")
     configure()
     # when / then
     with pytest.raises(ImproperlyConfigured):
-        await setup()
+        await setup(["other"])
+
+
+async def test_setup_with_an_explicit_misconfigured_alias_raises_improperly_configured(fake):
+    # given
+    fake.add_alias("bad", "", PG_ENGINE)
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="cannot be used"):
+        await setup(["bad"])
+
+
+async def test_setup_with_a_single_string_raises_type_error(configured):
+    # when / then
+    with pytest.raises(TypeError):
+        await setup("default")
 
 
 async def test_ensure_driver_without_configure_raises_improperly_configured_naming_the_app(fake):
@@ -178,3 +229,155 @@ async def test_configure_while_another_loop_holds_a_driver_raises_runtime_error(
     # when / then
     with pytest.raises(RuntimeError):
         configure()
+
+
+async def test_configure_is_not_blocked_by_a_driver_of_a_closed_loop(leaked_driver):
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_dropping_a_closed_loops_driver_logs_an_error(leaked_driver, caplog):
+    # given
+    capture_logs(caplog)
+    # when
+    configure()
+    # then
+    assert mention_count(errors_logged(caplog), "closed without") == 1
+
+
+async def test_dropped_driver_of_a_closed_loop_is_reported_by_take_leaked(leaked_driver):
+    # given
+    configure()
+    # when
+    leaked = registry.take_leaked()
+    # then
+    assert aliases_of(leaked) == ["default"]
+
+
+async def test_take_leaked_clears_the_list(leaked_driver):
+    # given
+    configure()
+    registry.take_leaked()
+    # when
+    again = registry.take_leaked()
+    # then
+    assert again == []
+
+
+async def test_ensure_driver_after_a_rename_without_configure_raises_improperly_configured(
+    configured,
+):
+    # given
+    configured.rename("default", "renamed_after_configure")
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="changed since configure"):
+        await ensure_driver("default")
+
+
+async def test_ensure_driver_after_a_rename_opens_no_driver_and_probes_nothing(configured):
+    # given
+    configured.rename("default", "renamed_after_configure")
+    await failing(ensure_driver("default"), ImproperlyConfigured)
+    # when
+    built = configured.recorder.built
+    # then
+    assert built == []
+    assert registry.entries() == []
+    assert registry.server_info("default") is None
+
+
+async def test_configure_after_a_rename_makes_the_alias_usable_again(configured):
+    # given
+    configured.rename("default", "renamed_after_configure")
+    configure()
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert configured.recorder.last_prepare("default").name == "renamed_after_configure"
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+def test_configure_survives_one_alias_with_an_invalid_postgresql_setting(fake):
+    # given
+    fake.add_alias("bad", "", PG_ENGINE)
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_a_misconfigured_alias_does_not_stop_the_others_from_opening(fake):
+    # given
+    fake.add_alias("bad", "", PG_ENGINE)
+    configure()
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
+
+
+async def test_a_misconfigured_alias_raises_improperly_configured_at_its_first_open(fake):
+    # given
+    fake.add_alias("bad", "", PG_ENGINE)
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="cannot be used"):
+        await ensure_driver("bad")
+
+
+async def test_a_misconfigured_alias_logs_a_warning_when_configured(fake, caplog):
+    # given
+    capture_logs(caplog)
+    fake.add_alias("bad", "", PG_ENGINE)
+    # when
+    configure()
+    # then
+    assert mention_count(lazy_warnings(caplog), "'bad'") == 1
+
+
+def test_configure_survives_an_engine_whose_driver_library_is_missing(fake):
+    # given
+    fake.add_broken_alias("broken", ImportError("No module named 'psycopg'"))
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_an_alias_with_a_missing_driver_library_raises_improperly_configured_at_open(fake):
+    # given
+    fake.add_broken_alias("broken", ImportError("No module named 'psycopg'"))
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="psycopg"):
+        await ensure_driver("broken")
+
+
+async def test_a_postgis_alias_is_unsupported_until_it_has_a_compile_wrapper(fake):
+    # given
+    fake.use_engine("default", POSTGIS_ENGINE)
+    configure()
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="not supported"):
+        await ensure_driver("default")
+
+
+async def test_options_that_cannot_be_deep_copied_do_not_break_configure(fake):
+    # given
+    fake.set_options("default", uncopiable_options())
+    # when
+    result = configure()
+    # then
+    assert result is None
+
+
+async def test_options_that_cannot_be_deep_copied_still_open_a_driver(fake):
+    # given
+    fake.set_options("default", uncopiable_options())
+    configure()
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver

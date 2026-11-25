@@ -62,13 +62,35 @@ async def test_failed_startup_leaves_no_entries(configured):
     assert run.snapshots["lifespan.startup.failed"] == []
 
 
-async def test_unsupported_engine_fails_startup(fake):
+async def test_unsupported_engine_is_skipped_by_the_default_startup(fake):
     # given
     from asyncopation.connection import configure
 
     fake.use_unsupported_engine("default")
     configure()
     app = LifespanApp(FakeApp())
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.snapshots["lifespan.startup.complete"] == ["other"]
+
+
+async def test_aliases_limit_the_startup(configured):
+    # given
+    app = LifespanApp(FakeApp(), aliases=["other"])
+    # when
+    run = await run_lifespan(app)
+    # then
+    assert run.snapshots["lifespan.startup.complete"] == ["other"]
+
+
+async def test_an_explicit_unsupported_alias_fails_the_startup(fake):
+    # given
+    from asyncopation.connection import configure
+
+    fake.use_unsupported_engine("default")
+    configure()
+    app = LifespanApp(FakeApp(), aliases=["default"])
     # when
     run = await run_lifespan(app)
     # then

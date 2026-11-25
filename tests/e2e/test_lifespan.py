@@ -2,7 +2,14 @@
 
 import pytest
 
+from harness.settings import VENDOR
 from tests.support.e2e_server import ServerProcess
+
+pytestmark = pytest.mark.skipif(
+    VENDOR != "postgresql",
+    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; the lifespan e2e runs on "
+    "PostgreSQL only until then",
+)
 
 
 async def test_startup_opens_the_pool_before_any_request(lifespan_http):
@@ -29,11 +36,24 @@ def test_shutdown_completes_the_lifespan_protocol(lifespan_server: ServerProcess
     assert logged is True
 
 
-def test_shutdown_closes_the_pools_and_empties_the_registry(lifespan_server: ServerProcess):
+def test_the_server_holds_sessions_until_the_shutdown_closes_them(
+    lifespan_server: ServerProcess,
+):
     # when
     lifespan_server.stop()
     # then
-    assert lifespan_server.after_shutdown() == (0, 0, 0, 0)
+    before, _after = lifespan_server.sessions_around_shutdown()
+    assert before >= 1
+
+
+def test_the_server_has_no_sessions_left_once_the_shutdown_completed(
+    lifespan_server: ServerProcess,
+):
+    # when
+    lifespan_server.stop()
+    # then
+    _before, after = lifespan_server.sessions_around_shutdown()
+    assert after == 0
 
 
 @pytest.mark.parametrize("prefix", ["/sync", "/core"])

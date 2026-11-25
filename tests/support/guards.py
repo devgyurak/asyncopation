@@ -69,6 +69,7 @@ MODELS = "from django.db import models\n\n"
 MODEL_CLASS = "from django.db.models import Model\n\n"
 
 _EXEMPT_HEAD = (
+    "def _snapshot(value):\n    return value\n\n\n"
     "from contextlib import contextmanager\n\n"
     "def _build():\n"
     "    from django.db import connections\n\n"

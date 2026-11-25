@@ -187,7 +187,7 @@ names = ["settings"]
 used_by = ["src/asyncopation/_django/connections.py"]
 reason = """A cached_property: `ConnectionHandler.configure_settings` fills Django's defaults \
 (`TIME_ZONE`, `OPTIONS`, `TEST`, `CONN_*`) in place on `settings.DATABASES` on first read, and \
-pytest-django later renames `NAME` in the same dict. `configured_databases()` deep-copies it so \
+pytest-django later renames `NAME` in the same dict. `configured_databases()` copies its dict/list structure (leaves shared: `copy.deepcopy` fails in `ready()` on an `ssl.SSLContext`) so \
 `configure()` (ADR-0004) gets the configured dict `wrapper_for` requires without porting Django's \
 defaulting logic; tests/unit/django_drift pins that the defaults are present."""
 verified_against = "6.1.3"

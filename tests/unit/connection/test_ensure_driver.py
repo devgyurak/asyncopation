@@ -6,11 +6,13 @@ from asyncopation.connection import registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
 from tests.support.lifecycle import (
     FakeInfo,
+    FakeInjectError,
     FakeOpenError,
     FakeProbeError,
     aliases_of,
     all_mention,
     capture_logs,
+    close_while_opening,
     count_locks,
     counts,
     distinct,
@@ -18,11 +20,14 @@ from tests.support.lifecycle import (
     ensure_many,
     ensure_many_settled,
     entry_aliases,
+    error_names,
     errors_in,
+    failing,
     lazy_warnings,
     open_in_second_loop,
     reopen_after_cancelled_first_opener,
     setup_and_ensure_concurrently,
+    waiter_meets_closing,
 )
 
 
@@ -94,8 +99,7 @@ async def test_failed_open_leaves_no_entry_and_no_server_info(configured):
     # given
     configured.script.fail_opens = 1
     # when
-    with pytest.raises(FakeOpenError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeOpenError)
     # then
     assert registry.entries() == []
 
@@ -104,8 +108,7 @@ async def test_failed_open_leaves_no_server_info(configured):
     # given
     configured.script.fail_opens = 1
     # when
-    with pytest.raises(FakeOpenError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeOpenError)
     # then
     assert registry.server_info("default") is None
 
@@ -113,8 +116,7 @@ async def test_failed_open_leaves_no_server_info(configured):
 async def test_failed_open_is_retried_by_the_next_call(configured):
     # given
     configured.script.fail_opens = 1
-    with pytest.raises(FakeOpenError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeOpenError)
     # when
     driver = await ensure_driver("default")
     # then
@@ -127,8 +129,7 @@ async def test_failed_probe_leaves_no_entry_and_no_server_info(configured):
     # given
     configured.script.fail_probes = 1
     # when
-    with pytest.raises(FakeProbeError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeProbeError)
     # then
     assert registry.entries() == []
 
@@ -137,8 +138,7 @@ async def test_failed_probe_leaves_no_server_info(configured):
     # given
     configured.script.fail_probes = 1
     # when
-    with pytest.raises(FakeProbeError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeProbeError)
     # then
     assert registry.server_info("default") is None
 
@@ -147,8 +147,7 @@ async def test_failed_probe_closes_the_driver_it_opened(configured):
     # given
     configured.script.fail_probes = 1
     # when
-    with pytest.raises(FakeProbeError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeProbeError)
     # then
     assert configured.recorder.opens == 1
     assert configured.recorder.closes == 1
@@ -157,8 +156,7 @@ async def test_failed_probe_closes_the_driver_it_opened(configured):
 async def test_failed_probe_is_retried_by_the_next_call(configured):
     # given
     configured.script.fail_probes = 1
-    with pytest.raises(FakeProbeError):
-        await ensure_driver("default")
+    await failing(ensure_driver("default"), FakeProbeError)
     # when
     await ensure_driver("default")
     # then
@@ -314,3 +312,71 @@ async def test_concurrent_setup_and_ensure_driver_open_once(configured):
     await setup_and_ensure_concurrently("default")
     # then
     assert counts(configured.recorder)["opens"] == 1
+
+
+async def test_failed_injection_closes_the_driver(configured):
+    # given
+    configured.script.fail_injects = 1
+    # when
+    await failing(ensure_driver("default"), FakeInjectError)
+    # then
+    assert configured.recorder.opens == 1
+    assert configured.recorder.closes == 1
+
+
+async def test_failed_injection_does_not_publish_the_server_info(configured):
+    # given
+    configured.script.fail_injects = 1
+    # when
+    await failing(ensure_driver("default"), FakeInjectError)
+    # then
+    assert registry.server_info("default") is None
+    assert registry.entries() == []
+
+
+async def test_failed_injection_is_retried_by_the_next_call(configured):
+    # given
+    configured.script.fail_injects = 1
+    await failing(ensure_driver("default"), FakeInjectError)
+    # when
+    await ensure_driver("default")
+    # then
+    assert registry.server_info("default") == FakeInfo((17, 2))
+
+
+async def test_close_waits_for_an_open_in_progress_and_leaves_nothing_open(opening):
+    # given
+    await opening.begin()
+    # when
+    results = await close_while_opening(opening)
+    # then
+    assert error_names(results) == ["RuntimeError", "ok"]
+    assert registry.entries() == []
+
+
+async def test_close_closes_the_driver_the_interrupted_open_had_built(opening):
+    # given
+    await opening.begin()
+    # when
+    await close_while_opening(opening)
+    # then
+    assert opening.env.recorder.opens == 1
+    assert opening.env.recorder.closes == 1
+
+
+async def test_a_caller_waiting_on_the_open_lock_that_meets_closing_raises_runtime_error(opening):
+    # given
+    await opening.begin()
+    # when
+    results = await waiter_meets_closing(opening)
+    # then
+    assert error_names(results) == ["RuntimeError", "RuntimeError", "ok"]
+
+
+async def test_the_queued_caller_that_meets_closing_opens_no_second_driver(opening):
+    # given
+    await opening.begin()
+    # when
+    await waiter_meets_closing(opening)
+    # then
+    assert len(opening.env.recorder.built) == 1

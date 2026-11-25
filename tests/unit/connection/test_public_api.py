@@ -2,13 +2,14 @@
 
 import pytest
 from django.apps import apps
+from django.core.exceptions import ImproperlyConfigured
 
 import asyncopation
 import asyncopation.connection as connection
 from asyncopation.apps import AsyncopationConfig
-from asyncopation.connection import lifecycle
+from asyncopation.connection import lifecycle, registry
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import entry_aliases, prepared_aliases
+from tests.support.lifecycle import entry_aliases, prepared_aliases, uncopiable_options
 
 
 async def test_top_level_setup_opens_the_configured_drivers(configured):
@@ -71,12 +72,50 @@ async def test_ready_configures_the_connection_layer(fake):
     assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver
 
 
-async def test_ready_reads_the_settings_at_ready_time_not_at_first_open(fake):
+async def test_a_rename_after_ready_is_refused_until_configure_runs_again(fake):
     # given
     config = AsyncopationConfig("asyncopation", asyncopation)
     config.ready()
     fake.rename("default", "renamed_after_ready")
+    # when / then
+    with pytest.raises(ImproperlyConfigured, match="changed since configure"):
+        await ensure_driver("default")
+
+
+async def test_ready_survives_options_that_cannot_be_deep_copied(fake):
+    # given
+    fake.set_options("default", uncopiable_options())
+    config = AsyncopationConfig("asyncopation", asyncopation)
     # when
-    await ensure_driver("default")
+    config.ready()
     # then
-    assert fake.recorder.last_prepare("default").name == "fake_db"
+    assert registry.configs()["default"].error is None
+
+
+async def test_ready_survives_an_alias_whose_driver_library_is_missing(fake):
+    # given
+    fake.add_broken_alias("broken", ImportError("No module named 'psycopg'"))
+    config = AsyncopationConfig("asyncopation", asyncopation)
+    # when
+    config.ready()
+    # then
+    assert isinstance(registry.configs()["broken"].error, ImportError)
+
+
+async def test_top_level_close_without_a_timeout_uses_the_default_close_timeout(
+    flights, monkeypatch
+):
+    # given
+    monkeypatch.setattr(lifecycle, "DEFAULT_CLOSE_TIMEOUT", 0.05)
+    registry.statement_started("default")
+    # when / then
+    with pytest.raises(TimeoutError):
+        await asyncopation.close()
+
+
+async def test_top_level_close_with_an_explicit_timeout_uses_it(flights):
+    # given
+    registry.statement_started("default")
+    # when / then
+    with pytest.raises(TimeoutError):
+        await asyncopation.close(timeout=0.05)

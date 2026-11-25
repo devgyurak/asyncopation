@@ -12,6 +12,7 @@ from tests.support.configured_databases import (
     mutation_leaks_into_django,
     nested_dicts_are_shared,
 )
+from tests.support.lifecycle import uncopiable_snapshot_facts
 
 
 def test_configured_databases_equals_djangos_configured_settings():
@@ -57,3 +58,18 @@ def test_configured_databases_does_not_share_nested_dicts_with_django():
     shared = nested_dicts_are_shared()
     # then
     assert shared is False
+
+
+def test_configured_databases_shares_leaves_that_cannot_be_deep_copied():
+    # when
+    facts = uncopiable_snapshot_facts()
+    # then
+    assert facts["leaf_is_shared"] is True
+
+
+def test_configured_databases_copies_the_dict_and_list_structure_around_those_leaves():
+    # when
+    facts = uncopiable_snapshot_facts()
+    # then
+    assert facts["options_dict_is_copied"] is True
+    assert facts["nested_list_is_copied"] is True

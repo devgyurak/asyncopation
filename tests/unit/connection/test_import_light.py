@@ -2,7 +2,13 @@
 
 import pytest
 
-from tests.support.lifecycle_scripts import MYSQL_FAKE_OPEN, import_script, run_isolated
+from tests.support.lifecycle_scripts import (
+    MYSQL_FAKE_OPEN,
+    PSYCOPG_MISSING,
+    Ran,
+    import_script,
+    run_isolated,
+)
 
 
 @pytest.mark.parametrize(
@@ -21,13 +27,20 @@ from tests.support.lifecycle_scripts import MYSQL_FAKE_OPEN, import_script, run_
 )
 def test_import_does_not_load_a_driver_package(statement):
     # when
-    loaded = run_isolated(import_script(statement))
+    ran = run_isolated(import_script(statement))
     # then
-    assert loaded == "[]"
+    assert ran == Ran(0, "[]", "")
 
 
 def test_opening_a_mysql_fake_engine_does_not_load_psycopg():
     # when
-    loaded = run_isolated(MYSQL_FAKE_OPEN)
+    ran = run_isolated(MYSQL_FAKE_OPEN)
     # then
-    assert loaded == "[]"
+    assert ran == Ran(0, "[]", "")
+
+
+def test_configuring_a_postgresql_alias_without_psycopg_installed_does_not_fail():
+    # when
+    ran = run_isolated(PSYCOPG_MISSING)
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "configured")

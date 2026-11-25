@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=e28071d09cb0 -->
+<!-- i18n: source=README.md source-sha256=887f2762505d -->
 # Asyncopation
 
-> **상태: pre-alpha.** 지금 사용할 수 있는 것은 `asyncopation.testing`뿐이다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -36,7 +36,9 @@ from django.core.asgi import get_asgi_application
 application = LifespanApp(get_asgi_application())
 ```
 
-스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 쿼리를 실행해도 동작한다(풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다). MySQL/MariaDB는 아직 지원하지 않는다.
+스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 쿼리를 실행해도 동작한다(풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다). `setup()`은 엔진이 지원되는 모든 데이터베이스를 열고 나머지는 건너뛴다. 대상을 직접 고르려면 `LifespanApp(app, aliases=[...])` 또는 `setup(aliases=[...])`를 전달한다. MySQL/MariaDB는 아직 지원하지 않는다.
+
+**테스트에서는** 테스트 러너가 `ready()` 이후에 테스트 데이터베이스를 만들고 `NAME`을 바꾼다. 테스트 데이터베이스가 만들어진 뒤(예를 들어 세션 픽스처에서 `setup_databases` 직후) `asyncopation.configure()`를 한 번 호출한다. 그 전에 드라이버를 열면 원래 데이터베이스에 연결하는 대신 `ImproperlyConfigured`로 실패한다.
 
 ## 데이터베이스 없이 상위 레이어 테스트하기
 

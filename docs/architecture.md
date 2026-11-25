@@ -153,7 +153,7 @@ close on shutdown, with a lock-guarded lazy fallback:
 [ADR-0004](adr/0004-lifecycle-and-registry.md).
 
 Implementation (`asyncopation.connection`): `configure()` reads Django's *configured* `DATABASES`
-through `_django.connections.configured_databases()` (a deep copy; Django fills the defaults in
+through `_django.connections.configured_databases()` (a structure copy: dicts and lists copied, leaves shared; Django fills the defaults in
 place) and may be called again until a driver is open (the test runner renames `NAME` after
 `ready()`); `engines` maps an ENGINE to its driver factory / probe / injection and imports psycopg
 lazily, so `import asyncopation` imports no driver; `registry` holds drivers by `(alias, loop)`,
@@ -161,7 +161,9 @@ server info by alias, read-only `PoolStats` and the in-flight statement counter 
 executors, #5b); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
 probe -> inject, under a per-`(alias, loop)` lock) shared by `setup()` and the lazy fallback;
 `close(timeout)` refuses new opens, waits for in-flight statements, closes the current loop's
-drivers and keeps the server info. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
+drivers and keeps the server info; an open fails closed when `DATABASES` changed after `configure()`
+(the test runner's rename: call `asyncopation.configure()` again); `setup()` opens only aliases with
+a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
 until #7.
 
 ## Harness

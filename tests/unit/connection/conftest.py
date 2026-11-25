@@ -11,10 +11,14 @@ from tests.support.lifecycle import (
     ClosingScenario,
     FakeEnv,
     OpeningScenario,
+    OverlappingClose,
+    ThreadLoop,
     dispose_environment,
     drain_in_flight,
+    hold_driver_in_live_loop,
     install_fake_environment,
     leave_open_in_other_loop,
+    release_live_loop,
 )
 
 
@@ -65,10 +69,26 @@ async def opening(configured: FakeEnv) -> AsyncIterator[OpeningScenario]:
 
 @pytest.fixture
 async def foreign_driver(configured: FakeEnv) -> AsyncIterator[None]:
-    """A driver held open by ANOTHER event loop (dropped with `reset()` at teardown)."""
+    """A driver held open by another, still running event loop (closed again at teardown)."""
+    thread_loop = ThreadLoop().start()
+    await hold_driver_in_live_loop(thread_loop)
+    yield
+    await release_live_loop(thread_loop)
+
+
+@pytest.fixture
+async def leaked_driver(configured: FakeEnv) -> AsyncIterator[None]:
+    """A driver whose event loop was closed without `close()` (dropped with `reset()`)."""
     await leave_open_in_other_loop("default")
     yield
     registry.reset()
+
+
+@pytest.fixture
+async def overlapping(opened: FakeEnv) -> AsyncIterator[OverlappingClose]:
+    scenario = OverlappingClose("default")
+    yield scenario
+    await scenario.finish()
 
 
 @pytest.fixture

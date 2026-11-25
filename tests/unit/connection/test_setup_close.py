@@ -6,7 +6,16 @@ from django.core.exceptions import ImproperlyConfigured
 from asyncopation.connection import close, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
 from asyncopation.drivers.base import PoolStats
-from tests.support.lifecycle import FakeCloseError, FakeInfo, FakeOpenError, entry_aliases
+from tests.support.lifecycle import (
+    FakeCloseError,
+    FakeInfo,
+    FakeOpenError,
+    SetupScenario,
+    ensure_is_refused,
+    entry_aliases,
+    error_names,
+    failing,
+)
 
 
 async def test_setup_opens_every_configured_alias(configured):
@@ -123,8 +132,7 @@ async def test_close_raises_timeout_error_when_a_statement_never_finishes(short_
 async def test_close_force_closes_after_the_timeout(opened, short_closing):
     # given
     await short_closing.begin()
-    with pytest.raises(TimeoutError):
-        await short_closing.join()
+    await failing(short_closing.join(), TimeoutError)
     # when
     closes = opened.recorder.closes
     # then
@@ -164,8 +172,7 @@ async def test_close_with_one_failing_driver_still_closes_the_others(configured)
     await setup()
     configured.script.fail_closes = 1
     # when
-    with pytest.raises(FakeCloseError):
-        await close()
+    await failing(close(), FakeCloseError)
     # then
     assert configured.recorder.closes == 2
     assert registry.entries() == []
@@ -181,8 +188,7 @@ async def test_setup_failing_on_the_second_alias_closes_the_first(configured):
     # given
     configured.script.fail_open_after = 1
     # when
-    with pytest.raises(FakeOpenError):
-        await setup(["default", "other"])
+    await failing(setup(["default", "other"]), FakeOpenError)
     # then
     assert configured.recorder.closes == 1
     assert registry.entries() == []
@@ -194,3 +200,42 @@ async def test_setup_failing_on_the_second_alias_raises_the_open_error(configure
     # when / then
     with pytest.raises(FakeOpenError):
         await setup(["default", "other"])
+
+
+async def test_failed_setup_leaves_drivers_that_were_already_open_alone(opened):
+    # given
+    opened.script.fail_open_after = 1
+    # when
+    await failing(setup(["default", "other"]), FakeOpenError)
+    # then
+    assert opened.recorder.closes == 0
+    assert entry_aliases() == ["default"]
+
+
+async def test_cancelled_setup_closes_the_alias_it_already_opened(configured):
+    # given
+    scenario = SetupScenario(configured, ["default", "other"])
+    await scenario.begin()
+    # when
+    await scenario.cancel()
+    # then
+    assert configured.recorder.closes == 1
+    assert entry_aliases() == []
+
+
+async def test_close_cancelled_while_waiting_still_closes_the_drivers(opened, closing):
+    # given
+    await closing.begin()
+    # when
+    await closing.cancel_close()
+    # then
+    assert opened.recorder.closes == 1
+    assert registry.entries() == []
+
+
+async def test_a_close_that_finishes_first_keeps_the_other_closes_mark(opened, overlapping):
+    # when
+    outcome = await overlapping.begin()
+    # then
+    assert error_names(outcome) == ["TimeoutError"]
+    assert await ensure_is_refused("default") is True

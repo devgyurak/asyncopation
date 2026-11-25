@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from tests.support.e2e_server import ServerProcess, start_server
+from tests.support.lifecycle import new_application_name
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,7 +84,7 @@ def lifespan_server(seeded_db: None, tmp_path) -> Iterator[ServerProcess]:
     """A fresh uvicorn with `--lifespan on` per test; stopped (gracefully) at teardown."""
     from django.db import connection
 
-    server = start_server(connection.settings_dict["NAME"], tmp_path)
+    server = start_server(connection.settings_dict["NAME"], tmp_path, new_application_name())
     yield server
     server.stop()
 

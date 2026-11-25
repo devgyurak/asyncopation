@@ -58,6 +58,6 @@ def _postgresql() -> Engine:
 
 FACTORIES: dict[str, Callable[[], Engine]] = {
     "django.db.backends.postgresql": _postgresql,
-    "django.contrib.gis.db.backends.postgis": _postgresql,
 }
-"""Django ``ENGINE`` string -> lazy engine factory. MySQL/MariaDB arrive with #7."""
+"""Django ``ENGINE`` string -> lazy engine factory. MySQL/MariaDB arrive with #7; PostGIS needs a
+PostGIS compile wrapper first, so its ENGINE is unsupported until then."""

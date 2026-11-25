@@ -36,7 +36,7 @@ CONFIGS = {
     "asgi-core": ("/core", ["uvicorn", "harness.site.asgi:application", "--workers", "{workers}",
                             "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "off"]),
     "asyncopation": ("/aopt", ["uvicorn", "harness.site.asgi:application", "--workers", "{workers}",
-                               "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "off"]),
+                               "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "on"]),
 }  # fmt: skip
 # (method, path) used to probe availability and to warm up each scenario.
 PROBES = {

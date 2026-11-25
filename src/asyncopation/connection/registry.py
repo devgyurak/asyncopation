@@ -8,6 +8,7 @@ another loop's pool.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -17,6 +18,8 @@ from asyncopation.connection.engines import Engine
 from asyncopation.drivers.base import AsyncDriver, PoolStats
 
 type Key = tuple[str, asyncio.AbstractEventLoop]
+
+logger = logging.getLogger("asyncopation.connection")
 
 _ZERO = PoolStats(0, 0, 0)
 
@@ -31,6 +34,8 @@ class AliasConfig:
     time_zone: str
     engine: Engine | None = field(default=None, compare=False)
     factory: Callable[[], AsyncDriver] | None = field(default=None, compare=False)
+    error: Exception | None = field(default=None, compare=False)
+    """Why this alias could not be prepared (``configure()`` records it; the first open raises)."""
 
 
 class Entry:
@@ -59,8 +64,9 @@ class _Flight:
 _entries: dict[Key, Entry] = {}
 _server_info: dict[str, ServerInfo] = {}
 _configs: dict[str, AliasConfig] = {}
-_closing_loops: set[asyncio.AbstractEventLoop] = set()
+_closing_loops: dict[asyncio.AbstractEventLoop, int] = {}  # overlapping close() calls count
 _flights: dict[Key, _Flight] = {}
+_leaked: list[Key] = []
 
 
 # -- configuration ---------------------------------------------------------------------------
@@ -90,8 +96,37 @@ def entry_or_create(alias: str, loop: asyncio.AbstractEventLoop) -> Entry:
     return found
 
 
+def purge_closed_loops() -> None:
+    """Drop the entries of loops that are closed (they were never ``close()``d).
+
+    Such a pool cannot be closed from here (its loop is gone), so it is only forgotten, with an
+    ERROR log, and remembered in ``take_leaked()`` for test teardown. Without this a discarded
+    loop would block ``configure()`` for the rest of the process.
+    """
+    for key, found in list(_entries.items()):
+        if not key[1].is_closed():
+            continue
+        del _entries[key]
+        _flights.pop(key, None)
+        if found.driver is not None:
+            _leaked.append(key)
+            logger.error(
+                "asyncopation: the event loop of %r was closed without asyncopation.close(); "
+                "its connection pool cannot be closed any more and was dropped",
+                key[0],
+            )
+
+
+def take_leaked() -> list[Key]:
+    """Entries dropped by ``purge_closed_loops`` since the last call (test teardown)."""
+    leaked = list(_leaked)
+    _leaked.clear()
+    return leaked
+
+
 def entries() -> list[Key]:
-    """Keys that hold an open driver."""
+    """Keys that hold an open driver (entries of closed loops are purged first)."""
+    purge_closed_loops()
     return [key for key, found in list(_entries.items()) if found.driver is not None]
 
 
@@ -102,6 +137,7 @@ def is_empty() -> bool:
 
 def is_idle() -> bool:
     """No open driver and no open in progress (``configure()`` may replace the configuration)."""
+    purge_closed_loops()
     return all(
         found.driver is None and not found.lock.locked() for found in list(_entries.values())
     )
@@ -127,21 +163,34 @@ def publish_server_info(alias: str, info: ServerInfo) -> ServerInfo:
 
 # -- closing ---------------------------------------------------------------------------------
 def begin_closing(loop: asyncio.AbstractEventLoop) -> list[Entry]:
-    _closing_loops.add(loop)
+    _closing_loops[loop] = _closing_loops.get(loop, 0) + 1
     mine = [found for key, found in list(_entries.items()) if key[1] is loop]
     for found in mine:
         found.closing = True
     return mine
 
 
-def end_closing(loop: asyncio.AbstractEventLoop) -> None:
-    _closing_loops.discard(loop)
-    for key in [key for key in list(_entries) if key[1] is loop]:
-        _entries.pop(key, None)
+def end_closing(loop: asyncio.AbstractEventLoop, mine: list[Entry]) -> None:
+    """Finish one ``close()``: forget only the entries it began with, clear the marker last."""
+    for key, found in list(_entries.items()):
+        if found in mine:
+            del _entries[key]
+    remaining = _closing_loops.get(loop, 1) - 1
+    if remaining > 0:
+        _closing_loops[loop] = remaining
+        return
+    _closing_loops.pop(loop, None)
     # A flight that still counts a statement (the close timed out) stays, so the statement's
     # own ``statement_finished`` keeps balancing the same counter after a re-open.
     for key in [key for key in list(_flights) if key[1] is loop and _flights[key].count == 0]:
-        _flights.pop(key, None)
+        del _flights[key]
+
+
+def forget(entry: Entry) -> None:
+    """Drop one entry (a failed ``setup()`` closing the drivers it opened)."""
+    for key, found in list(_entries.items()):
+        if found is entry:
+            del _entries[key]
 
 
 def is_closing(loop: asyncio.AbstractEventLoop) -> bool:
@@ -197,3 +246,4 @@ def reset() -> None:
     _configs.clear()
     _closing_loops.clear()
     _flights.clear()
+    _leaked.clear()

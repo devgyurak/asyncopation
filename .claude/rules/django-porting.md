@@ -38,4 +38,4 @@ paths:
    `verified_against` and pyproject to carry a requirement for the package that admits it: when the lock moves, re-read
    the pinned behaviour tests, then update `verified_against`.
 6. **Differential test every port** against the sync implementation on all backends.
-7. When the `django-main` CI canary breaks, update ports and bump `verified_against`.
+7. The `django-main` CI canary runs `tests/unit/django_drift -m "not django_pin"` and `tests/integration` against Django main. When it breaks, update ports and bump `verified_against`. (The `django_pin` tests assert the pinned minor and are skipped there; `uv run --no-sync` is required, a re-sync would restore the locked Django.)

@@ -52,6 +52,11 @@ async def test_filter_by_title_matches_sync(readonly_db, differential, title, ex
   Asyncopation (harness self-check).
 - `live_server_url` (e2e) - uvicorn serving `harness.site` against the test DB.
 
+## Markers
+`integration`/`e2e` are automatic by directory. Add `@pytest.mark.django_pin` only to a test that
+asserts the pinned Django version (it fails by design on Django main); the `django-main` canary
+runs `tests/unit/django_drift -m "not django_pin"`. Ledger and dependency drift checks stay unmarked.
+
 ## Checklist before handing off
 1. `uv run python -m tools.guards tests/...` clean.
 2. `uv run pytest <file> -q` passes (or fails for the intended reason in the red phase).

@@ -72,7 +72,6 @@ modules = [
     "django.db.models.functions",
     "django.db.models.signals",
     "django.dispatch",
-    "django.utils.functional",
 ]
 
 # --------------------------------------------------------------------------- PostgreSQL driver (#2)
@@ -216,7 +215,8 @@ verified_against = "6.1.3"
 owner = "django.utils.connection.BaseConnectionHandler"
 names = ["settings"]
 used_by = ["src/asyncopation/_django/connections.py"]
-reason = """A cached_property: `ConnectionHandler.configure_settings` fills Django's defaults \
+reason = """A cached property (Django's `cached_property` on 6.1, `functools.cached_property` on Django main): \
+`ConnectionHandler.configure_settings` fills Django's defaults \
 (`TIME_ZONE`, `OPTIONS`, `TEST`, `CONN_*`) in place on `settings.DATABASES` on first read, and \
 pytest-django later renames `NAME` in the same dict. `configured_databases()` copies its dict/list structure (leaves shared: `copy.deepcopy` fails in `ready()` on an `ssl.SSLContext`) so \
 `configure()` (ADR-0004) gets the configured dict `wrapper_for` requires without porting Django's \
@@ -234,7 +234,7 @@ verified_against = "6.1.3"
 owner = "django.db.backends.postgresql.base.DatabaseWrapper"
 names = ["pg_version"]
 used_by = ["src/asyncopation/_django/postgresql.py"]
-reason = "A cached_property that connects on first read; server info is injected into the instance `__dict__` instead."
+reason = "A cached property (Django's `cached_property` on 6.1, `functools.cached_property` on Django main) that connects on first read; both are non-data descriptors, so server info is injected into the instance `__dict__` instead."
 verified_against = "6.1.3"
 
 # --------------------------------------------------------------------------- Runtime dependencies (#49)

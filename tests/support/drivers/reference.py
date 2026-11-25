@@ -98,6 +98,11 @@ async def sync_rows(
         settings_dict = pg_settings(
             options=options, db_time_zone=case.db_time_zone, overrides=overrides
         )
+        from django.db import connections
+
+        # Django caches the hstore/citext OIDs of connections["default"]: another NAME would get
+        # the wrong ones (see the docstring).
+        assert settings_dict["NAME"] == connections["default"].settings_dict["NAME"]
         with override_settings(USE_TZ=case.use_tz, TIME_ZONE=case.settings_time_zone):
             wrapper = DatabaseWrapper(settings_dict, alias="default")
             try:

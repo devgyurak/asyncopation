@@ -97,7 +97,11 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         if config.engine is None or config.factory is None:  # narrowed by _config
             raise ImproperlyConfigured(f"asyncopation: {alias!r} has no engine")
         driver: AsyncDriver = config.factory()
-        await driver.open()  # cleans up after itself when it fails or is cancelled (ADR-0003)
+        entry.opening = asyncio.current_task()
+        try:
+            await driver.open()  # cleans up after itself when it fails or is cancelled (ADR-0003)
+        finally:
+            entry.opening = None
         try:
             if entry.closing:  # a close() began while we were opening: it must not get this pool
                 raise _closing_error(alias)
@@ -226,11 +230,12 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
     New opens are refused first, then in-flight statements get ``timeout`` seconds to finish.
     The drivers are closed either way; ``TimeoutError`` is raised afterwards when statements were
     still running. Pools of other loops are not touched. An open in progress is awaited first (its
-    driver is then closed, and its caller gets a ``RuntimeError``), so ``close()`` can outlast
-    ``timeout`` by the pool's connect time. Overlapping ``close()`` calls are safe: each one
+    driver is then closed, and its caller gets a ``RuntimeError``) until the timeout, then it is
+    cancelled. Overlapping ``close()`` calls are safe: each one
     removes only the entries it began with.
     """
     loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
     mine = registry.begin_closing(loop)
     timed_out = False
     failures: list[Exception] = []
@@ -245,7 +250,7 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
         interrupted = True  # close() itself is being cancelled: nobody would see the failures
         raise
     finally:
-        failures = await asyncio.shield(_close_and_end(loop, mine))
+        failures = await asyncio.shield(_close_and_end(loop, mine, deadline))
         if interrupted:
             for failure in failures:
                 logger.error("asyncopation: a driver failed to close: %r", failure)
@@ -258,23 +263,45 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
 
 
 async def _close_and_end(
-    loop: asyncio.AbstractEventLoop, mine: list[registry.Entry]
+    loop: asyncio.AbstractEventLoop, mine: list[registry.Entry], deadline: float
 ) -> list[Exception]:
     try:
-        return await _close_entries(mine)
+        return await _close_entries(mine, deadline)
     finally:
         registry.end_closing(loop, mine)
 
 
-async def _close_entries(entries: list[registry.Entry]) -> list[Exception]:
-    """Close each entry's driver (after any open in progress); one failure does not stop the rest."""
+async def _acquire(entry: registry.Entry, deadline: float | None) -> None:
+    """Take the entry lock; an open still running at ``deadline`` is cancelled (ADR-0004 D5)."""
+    if deadline is not None:
+        try:
+            async with asyncio.timeout_at(deadline):
+                await entry.lock.acquire()
+            return
+        except TimeoutError:
+            if entry.opening is not None:
+                entry.opening.cancel()  # the driver's open() cleans up after itself
+    await entry.lock.acquire()
+
+
+async def _close_entries(
+    entries: list[registry.Entry], deadline: float | None = None
+) -> list[Exception]:
+    """Close each entry's driver; one failure does not stop the rest.
+
+    An open in progress gets until ``deadline`` to finish (its driver is then closed); after that
+    it is cancelled, so ``close()`` never outlasts its timeout by a hung connect.
+    """
     failures: list[Exception] = []
     for entry in entries:
-        async with entry.lock:
+        await _acquire(entry, deadline)
+        try:
             driver, entry.driver = entry.driver, None
             if driver is not None:
                 try:
                     await driver.close()
                 except Exception as exc:
                     failures.append(exc)
+        finally:
+            entry.lock.release()
     return failures

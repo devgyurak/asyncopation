@@ -2,7 +2,8 @@
 
 import pytest
 
-from tests.support.lifecycle import leave_open_in_other_loop, teardown_lifecycle
+from tests.support.lifecycle.checks import teardown_lifecycle
+from tests.support.lifecycle.loops import leave_open_in_other_loop
 
 
 async def test_teardown_check_fails_when_a_driver_is_left_open_in_another_loop(configured):

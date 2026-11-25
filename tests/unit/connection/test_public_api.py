@@ -9,7 +9,8 @@ import asyncopation.connection as connection
 from asyncopation.apps import AsyncopationConfig
 from asyncopation.connection import lifecycle, registry
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import entry_aliases, prepared_aliases, uncopiable_options
+from tests.support.lifecycle.fakes import uncopiable_options
+from tests.support.lifecycle.helpers import entry_aliases, prepared_aliases
 
 
 async def test_top_level_setup_opens_the_configured_drivers(configured):

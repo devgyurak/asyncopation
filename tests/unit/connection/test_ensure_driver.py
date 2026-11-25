@@ -4,27 +4,29 @@ import pytest
 
 from asyncopation.connection import registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import (
+from tests.support.lifecycle.fakes import (
     FakeInfo,
     FakeInjectError,
     FakeOpenError,
     FakeProbeError,
-    aliases_of,
-    all_mention,
-    capture_logs,
-    close_while_opening,
-    count_locks,
     counts,
+)
+from tests.support.lifecycle.helpers import (
+    aliases_of,
     distinct,
     drivers_in,
-    ensure_many,
-    ensure_many_settled,
     entry_aliases,
     error_names,
     errors_in,
     failing,
-    lazy_warnings,
-    open_in_second_loop,
+)
+from tests.support.lifecycle.logs import all_mention, capture_logs, lazy_warnings
+from tests.support.lifecycle.loops import open_in_second_loop
+from tests.support.lifecycle.scenarios import (
+    close_while_opening,
+    count_locks,
+    ensure_many,
+    ensure_many_settled,
     reopen_after_cancelled_first_opener,
     setup_and_ensure_concurrently,
     waiter_meets_closing,

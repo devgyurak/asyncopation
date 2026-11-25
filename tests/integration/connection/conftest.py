@@ -6,13 +6,13 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from tests.support.lifecycle import (
-    Recorder,
+from tests.support.lifecycle.checks import teardown_lifecycle
+from tests.support.lifecycle.fakes import Recorder
+from tests.support.lifecycle.postgres import (
     application_name_override,
     forget_wrapper,
     install_spy_engine,
     new_application_name,
-    teardown_lifecycle,
 )
 
 

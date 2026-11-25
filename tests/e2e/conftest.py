@@ -15,7 +15,7 @@ import pytest
 
 from harness.settings import VENDOR
 from tests.support.e2e_server import ServerProcess, start_server
-from tests.support.lifecycle import new_application_name
+from tests.support.lifecycle.postgres import new_application_name
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -7,21 +7,21 @@ from collections.abc import AsyncIterator
 import pytest
 
 from asyncopation.connection import registry
-from tests.support.lifecycle import (
+from tests.support.lifecycle.checks import dispose_environment, drain_in_flight
+from tests.support.lifecycle.fakes import FakeEnv, install_fake_environment
+from tests.support.lifecycle.loops import (
+    ThreadLoop,
+    hold_driver_in_live_loop,
+    leave_open_in_other_loop,
+    release_live_loop,
+)
+from tests.support.lifecycle.scenarios import (
     ClosingScenario,
     ConcurrentOpenScenario,
-    FakeEnv,
     OpeningScenario,
     OverlappingClose,
     RollbackScenario,
-    ThreadLoop,
     count_locks,
-    dispose_environment,
-    drain_in_flight,
-    hold_driver_in_live_loop,
-    install_fake_environment,
-    leave_open_in_other_loop,
-    release_live_loop,
 )
 
 

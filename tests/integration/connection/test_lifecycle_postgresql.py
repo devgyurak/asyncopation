@@ -11,27 +11,29 @@ from asyncopation.connection import close, configure, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
 from harness.settings import VENDOR
 from tests.support.drivers.admin import admin_scalar
-from tests.support.lifecycle import (
+from tests.support.lifecycle.fakes import counts
+from tests.support.lifecycle.helpers import (
     aliases_of,
-    attempts_reading_pg_version_without_injection,
-    compile_attempts_with_injected_wrapper,
-    counts,
-    current_database_of_driver,
     distinct,
-    ensure_after_rename,
-    ensure_many,
-    fail_first_open_then_recover,
     failing,
     injected_aliases,
     last_prepared_name,
-    live_database_name,
-    open_in_second_loop,
     pg_version_number,
     prepared_names,
+)
+from tests.support.lifecycle.loops import open_in_second_loop
+from tests.support.lifecycle.postgres import (
+    attempts_reading_pg_version_without_injection,
+    compile_attempts_with_injected_wrapper,
+    current_database_of_driver,
+    ensure_after_rename,
+    fail_first_open_then_recover,
+    live_database_name,
     rename_then_restore,
     server_connections,
     server_connections_after_settling,
 )
+from tests.support.lifecycle.scenarios import ensure_many
 
 pytestmark = pytest.mark.skipif(
     VENDOR != "postgresql",

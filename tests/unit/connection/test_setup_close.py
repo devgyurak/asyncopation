@@ -6,18 +6,13 @@ from django.core.exceptions import ImproperlyConfigured
 from asyncopation.connection import close, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
 from asyncopation.drivers.base import PoolStats
-from tests.support.lifecycle import (
-    FakeCloseError,
-    FakeInfo,
-    FakeOpenError,
+from tests.support.lifecycle.fakes import FakeCloseError, FakeInfo, FakeOpenError
+from tests.support.lifecycle.helpers import entry_aliases, error_names, failing
+from tests.support.lifecycle.logs import capture_logs, errors_logged, mention_count
+from tests.support.lifecycle.scenarios import (
     SetupScenario,
-    capture_logs,
+    close_while_open_hangs,
     ensure_is_refused,
-    entry_aliases,
-    error_names,
-    errors_logged,
-    failing,
-    mention_count,
 )
 
 
@@ -310,3 +305,43 @@ async def test_an_uninterrupted_close_does_not_log_the_failure_it_raises(opened,
     logged = errors_logged(caplog)
     # then
     assert logged == []
+
+
+async def test_close_with_a_hung_open_returns_within_its_timeout(opening):
+    # given
+    await opening.begin()
+    # when
+    hung = await close_while_open_hangs(opening, 0.1)
+    # then
+    assert hung.close_error is None
+    assert hung.elapsed < 5.0
+
+
+async def test_close_with_a_hung_open_cancels_the_opener(opening):
+    # given
+    await opening.begin()
+    # when
+    hung = await close_while_open_hangs(opening, 0.1)
+    # then
+    assert error_names([hung.opener_outcome]) == ["CancelledError"]
+
+
+async def test_close_with_a_hung_open_leaves_no_open_driver(opening):
+    # given
+    await opening.begin()
+    # when
+    await close_while_open_hangs(opening, 0.1)
+    # then
+    assert registry.entries() == []
+    assert opening.env.recorder.opens == 0
+
+
+async def test_close_with_a_hung_open_leaves_the_registry_usable_afterwards(opening):
+    # given
+    await opening.begin()
+    await close_while_open_hangs(opening, 0.1)
+    opening.env.script.gate = None
+    # when
+    driver = await ensure_driver("default")
+    # then
+    assert driver.is_open  # ty: ignore[missing-attribute] - the fake driver

@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.support.lifecycle import assert_registry_clean
+from tests.support.lifecycle.checks import assert_registry_clean
 
 
 @pytest.fixture(autouse=True)

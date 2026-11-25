@@ -25,7 +25,7 @@ settings.configure(
 import django
 django.setup()
 from asyncopation.connection import configure, engines, setup
-from tests.support.lifecycle import Recorder, Script, make_engine
+from tests.support.lifecycle.fakes import Recorder, Script, make_engine
 engine = make_engine(Recorder(), Script())
 engines.FACTORIES["django.db.backends.mysql"] = lambda: engine
 configure()

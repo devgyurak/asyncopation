@@ -5,7 +5,8 @@ import asyncio
 from asyncopation.connection import configure, registry
 from asyncopation.connection.lifecycle import ensure_driver
 from asyncopation.drivers.base import PoolStats
-from tests.support.lifecycle import FakeInfo, fresh_loop, in_flight_in_other_loop
+from tests.support.lifecycle.fakes import FakeInfo
+from tests.support.lifecycle.loops import fresh_loop, in_flight_in_other_loop
 
 
 def test_registry_is_empty_before_anything_opens(fake):

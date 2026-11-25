@@ -12,7 +12,7 @@ from tests.support.configured_databases import (
     mutation_leaks_into_django,
     nested_dicts_are_shared,
 )
-from tests.support.lifecycle import uncopiable_snapshot_facts
+from tests.support.lifecycle.fakes import uncopiable_snapshot_facts
 
 
 def test_configured_databases_equals_djangos_configured_settings():

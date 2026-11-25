@@ -42,10 +42,11 @@ class AliasConfig:
 class Entry:
     """One ``(alias, loop)``. Created inside that loop, so its lock belongs to it (rule 5)."""
 
-    __slots__ = ("closing", "driver", "lock", "opener", "warned")
+    __slots__ = ("closing", "driver", "lock", "opener", "opening", "warned")
 
     def __init__(self) -> None:
         self.driver: AsyncDriver | None = None
+        self.opening: asyncio.Task[Any] | None = None  # the task inside open(), for close()
         self.opener: weakref.ReferenceType[asyncio.Task[Any]] | None = None  # who ran open()
         self.lock = asyncio.Lock()
         self.warned = False

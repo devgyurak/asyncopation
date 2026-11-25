@@ -4,7 +4,8 @@ import pytest
 
 from asyncopation.connection import registry
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import assert_registry_clean, leave_open_in_other_loop
+from tests.support.lifecycle.checks import assert_registry_clean
+from tests.support.lifecycle.loops import leave_open_in_other_loop
 
 
 async def test_registry_clean_check_passes_when_nothing_is_open(configured):

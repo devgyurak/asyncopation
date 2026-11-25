@@ -5,14 +5,8 @@ import pytest
 from asyncopation.compile.server_info import PostgreSQLServerInfo
 from asyncopation.connection.engines import FACTORIES, Engine
 from tests.support.compile_wrappers import PG_SETTINGS
-from tests.support.lifecycle import (
-    PG_ENGINE,
-    FakeInfo,
-    fake_driver,
-    forget_wrapper,
-    injected_wrapper,
-    pg_engine,
-)
+from tests.support.lifecycle.fakes import PG_ENGINE, FakeInfo, fake_driver
+from tests.support.lifecycle.postgres import forget_wrapper, injected_wrapper, pg_engine
 
 
 def test_factories_are_keyed_by_the_django_engine_string():

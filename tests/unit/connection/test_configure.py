@@ -5,25 +5,27 @@ from django.core.exceptions import ImproperlyConfigured
 
 from asyncopation.connection import close, configure, registry, setup
 from asyncopation.connection.lifecycle import ensure_driver
-from tests.support.lifecycle import (
+from tests.support.lifecycle.fakes import (
     PG_ENGINE,
     POSTGIS_ENGINE,
     FakeInfo,
-    aliases_of,
     apply_change,
-    capture_logs,
-    entry_aliases,
-    errors_logged,
-    failing,
-    info_messages,
-    lazy_warnings,
-    leave_closing_and_flight_in_a_closed_loop,
-    mention_count,
-    opener_is_the_opening_task,
-    pg_engine,
-    purge_and_report_leaks,
     uncopiable_options,
 )
+from tests.support.lifecycle.helpers import aliases_of, entry_aliases, failing
+from tests.support.lifecycle.logs import (
+    capture_logs,
+    errors_logged,
+    info_messages,
+    lazy_warnings,
+    mention_count,
+)
+from tests.support.lifecycle.loops import (
+    leave_closing_and_flight_in_a_closed_loop,
+    purge_and_report_leaks,
+)
+from tests.support.lifecycle.postgres import pg_engine
+from tests.support.lifecycle.scenarios import opener_is_the_opening_task
 
 
 def test_configure_returns_none_and_builds_no_driver(fake):
@@ -459,7 +461,7 @@ async def test_a_bad_time_zone_leaves_the_other_aliases_usable(fake):
 def test_the_real_postgresql_engine_prepares_options_that_cannot_be_deep_copied():
     # given
     from tests.support.compile_wrappers import PG_SETTINGS
-    from tests.support.lifecycle import uncopiable_options
+    from tests.support.lifecycle.fakes import uncopiable_options
 
     settings_dict = {**PG_SETTINGS, "OPTIONS": uncopiable_options()}
     # when

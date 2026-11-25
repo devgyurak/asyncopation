@@ -292,8 +292,8 @@ async def close(timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:  # noqa: ASYNC1
 async def _close_and_end(
     loop: asyncio.AbstractEventLoop, mine: list[registry.Entry], deadline: float
 ) -> list[Exception]:
-    registry.close_pins(loop)  # pins that outlived the wait lose their connection with the pool
     try:
+        registry.close_pins(loop)  # pins that outlived the wait lose their connection with it
         return await _close_entries(mine, deadline)
     finally:
         registry.end_closing(loop, mine)

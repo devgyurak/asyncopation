@@ -8,6 +8,8 @@ from tests.support.executors.close_pins import (
     close_gives_up_on_a_pin_whose_block_already_ended,
     finalize_a_lost_pin_in_another_context,
     get_a_connection_after_close_passed,
+    marker_after_reset,
+    pin_after_a_normal_close,
     pin_again_after_close_gave_up_on_the_pin,
     select_an_executor_after_close_gave_up_on_the_pin,
     use_a_pin_after_close_gave_up,
@@ -174,25 +176,32 @@ async def test_close_does_not_flag_a_pin_whose_block_already_ended(execenv):
     assert drivers_closed is False
 
 
-async def test_a_pin_whose_connection_arrives_after_close_passed_is_closed(execenv):
+async def test_a_pin_waiting_in_the_pool_when_close_gave_up_is_closed_on_arrival(execenv):
     # when
     outcome = await get_a_connection_after_close_passed(execenv)
     # then
     assert outcome.executor_closed is True
 
 
-async def test_its_first_statement_is_refused_and_never_reaches_the_driver(execenv):
+async def test_a_pin_waiting_in_the_pool_when_close_gave_up_refuses_its_first_statement(execenv):
     # when
     outcome = await get_a_connection_after_close_passed(execenv)
     # then
     assert (type(outcome.error), outcome.statement_kinds) == (ConcurrentQueryError, [])
 
 
-async def test_leaving_that_pin_leaves_nothing_in_flight(execenv):
+async def test_a_pin_waiting_in_the_pool_when_close_gave_up_releases_its_connection(execenv):
     # when
     outcome = await get_a_connection_after_close_passed(execenv)
     # then
-    assert outcome.in_flight == 0
+    assert (outcome.in_flight, outcome.released) == (0, [True])
+
+
+async def test_close_gives_up_on_a_pin_and_marks_it_before_it_is_finalized_elsewhere(execenv):
+    # when
+    outcome = await finalize_a_lost_pin_in_another_context()
+    # then
+    assert (type(outcome.close_error), outcome.pin_closed) == (TimeoutError, True)
 
 
 async def test_the_owner_of_a_lost_pin_finalized_elsewhere_borrows_again(execenv):
@@ -202,8 +211,29 @@ async def test_the_owner_of_a_lost_pin_finalized_elsewhere_borrows_again(execenv
     assert isinstance(outcome.current, BorrowedExecutor)
 
 
-async def test_the_owner_of_a_lost_pin_finalized_elsewhere_can_query_and_pin_again(execenv):
+async def test_the_owner_of_a_lost_pin_finalized_elsewhere_can_query_again(execenv):
     # when
     outcome = await finalize_a_lost_pin_in_another_context()
     # then
-    assert (outcome.rows, outcome.pinned_again) == ([(1,)], [(1,)])
+    assert outcome.rows == [(1,)]
+
+
+async def test_the_owner_of_a_lost_pin_finalized_elsewhere_can_pin_the_alias_anew(execenv):
+    # when
+    outcome = await finalize_a_lost_pin_in_another_context()
+    # then
+    assert outcome.pinned_again == [(1,)]
+
+
+async def test_a_pin_after_a_close_that_ended_normally_is_usable(execenv):
+    # when
+    rows = await pin_after_a_normal_close()
+    # then
+    assert rows == [(1,)]
+
+
+async def test_reset_forgets_the_pins_closed_marker(execenv):
+    # when
+    marked = marker_after_reset()
+    # then
+    assert marked is False

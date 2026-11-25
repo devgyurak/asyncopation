@@ -159,13 +159,14 @@ class LatePin:
     executor_closed: bool
     error: BaseException | None
     statement_kinds: list[str]
-    exit_error: None
     in_flight: int
+    released: list[bool]
 
 
 async def get_a_connection_after_close_passed(env: ExecEnv) -> LatePin:
     """A pin waits for its connection while `close()` gives up on the pins of the loop; the
-    connection then arrives and the first statement must be refused."""
+    connection then arrives and the first statement must be refused. The registry call is what
+    `lifecycle.close()` makes once its wait ran out (that wiring has its own test)."""
     driver = env.default
     hold = driver.hold_borrows()
     reg = _registry()
@@ -176,16 +177,39 @@ async def get_a_connection_after_close_passed(env: ExecEnv) -> LatePin:
             return executor.closed, await raised_by(executor.fetch_all("SELECT 1", None))
 
     task = asyncio.create_task(block())
-    await hold.wait_entered()
-    reg.close_pins(loop)  # what close() does when its wait ran out
-    hold.release()
-    executor_closed, error = await task
-    reg.end_closing(loop, [])
-    return LatePin(executor_closed, error, driver.kinds(), None, reg.in_flight(ALIAS))
+    try:
+        await hold.wait_entered()
+        reg.close_pins(loop)
+        hold.release()
+        executor_closed, error = await task
+    finally:
+        hold.release()
+        reg.end_closing(loop, [])
+    return LatePin(executor_closed, error, driver.kinds(), reg.in_flight(ALIAS), driver.released)
+
+
+async def pin_after_a_normal_close() -> list[Any]:
+    """A `close()` that ends normally clears the marker: a later pin works."""
+    from asyncopation.connection import close
+
+    await close(timeout=1.0)
+    async with _executors().pin(ALIAS) as executor:
+        return await executor.fetch_all("SELECT 1", None)
+
+
+def marker_after_reset() -> bool:
+    """`registry.reset()` forgets the marker."""
+    reg = _registry()
+    loop = asyncio.get_running_loop()
+    reg.close_pins(loop)
+    reg.reset()
+    return reg.pins_closed(loop)
 
 
 @dataclass(frozen=True)
 class LostAndFinalized:
+    close_error: BaseException | None
+    pin_closed: bool
     current: Any
     rows: list[Any]
     pinned_again: Any
@@ -200,11 +224,12 @@ async def finalize_a_lost_pin_in_another_context() -> LostAndFinalized:
 
     mod = _executors()
     generator = _pinning_generator()
-    await anext(generator)
-    await raised_by(close(timeout=0.05))
+    executor = await anext(generator)
+    close_error = await raised_by(close(timeout=0.05))
+    pin_closed = executor.closed  # lost before the finalizer runs
     await in_gather_child(generator.aclose())
     current = mod.current_executor(ALIAS)
     rows = await current.fetch_all("SELECT 1", None)
     async with mod.pin(ALIAS) as again:
         again_rows = await again.fetch_all("SELECT 1", None)
-    return LostAndFinalized(current, rows, again_rows)
+    return LostAndFinalized(close_error, pin_closed, current, rows, again_rows)

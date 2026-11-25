@@ -258,7 +258,9 @@ def install_executor_environment(fake: FakeEnv, monkeypatch: Any) -> ExecEnv:
 def drain_all(env: ExecEnv) -> None:
     from tests.support.lifecycle.checks import drain_in_flight
 
-    for alias in env.drivers:
+    for alias, driver in env.drivers.items():
+        if driver.borrow_hold is not None:
+            driver.borrow_hold.release()  # a failed test must not leave a borrow blocked
         drain_in_flight(alias)
 
 

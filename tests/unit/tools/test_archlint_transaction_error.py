@@ -1,4 +1,4 @@
-"""A101 lets exactly `TransactionManagementError` through, and only inside `_django/` (#5)."""
+"""A101 lets exactly `TransactionManagementError` through, and only in `_django/transaction.py` (#5)."""
 
 import pytest
 
@@ -7,11 +7,12 @@ from tests.support.guards import distinct_codes, has_violation
 P = pytest.param
 DJANGO = "src/asyncopation/_django/transaction.py"
 ELSEWHERE = "src/asyncopation/connection/executor.py"
+DJANGO_SIBLING = "src/asyncopation/_django/other.py"
 MODULE = "django.db.transaction"
 ERROR = "from django.db.transaction import TransactionManagementError\n"
 
 
-def test_the_error_class_may_be_imported_inside_the_django_package():
+def test_the_error_class_may_be_imported_in_the_one_reexporting_module():
     # given
     source = ERROR
     # when
@@ -67,3 +68,12 @@ def test_the_rest_of_the_transaction_module_stays_banned_inside_the_django_packa
     codes = distinct_codes(source, DJANGO)
     # then
     assert codes == expected
+
+
+def test_the_error_class_is_banned_in_a_sibling_module_of_the_django_package():
+    # given
+    source = ERROR
+    # when
+    banned = has_violation(source, DJANGO_SIBLING, "A101", MODULE)
+    # then
+    assert banned is True

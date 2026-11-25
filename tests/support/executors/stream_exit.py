@@ -4,12 +4,14 @@ Every function only *observes* and returns an outcome; the tests assert."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import kinds_of, raised_by
 from tests.support.executors.scenarios import ALIAS, SELECT, _executors, _registry
+from tests.support.executors.streams import open_streams_past_the_busy_guard
 
 
 @dataclass(frozen=True)
@@ -34,30 +36,19 @@ async def rollback_when_stream_close_fails(
         return RollbackAfterFailedClose(error, kinds_of(driver), driver.streams_open)
 
 
-async def exit_pin_with_close_faults(env: ExecEnv, *faults: BaseException) -> BaseException | None:
-    """Leave a pin with one open stream per fault, each close failing with its fault in turn.
-
-    The busy guard is lifted to open several streams (see `exit_pin_with_two_open_streams`).
-    """
+async def close_error_at_pin_exit(
+    env: ExecEnv, fault_types: Sequence[type[BaseException]]
+) -> BaseException | None:
+    """Leave a pin with one open stream per fault type, each close failing with its fault in turn
+    (in the given order); the error the exit raised."""
     driver = env.default
-    driver.queue(*[[(1,), (2,)] for _ in faults])
-    for fault in faults:
-        driver.fail_next("stream_close", fault)
+    driver.queue(*[[(1,), (2,)] for _ in fault_types])
+    for fault_type in fault_types:
+        driver.fail_next("stream_close", fault_type("close failed"))
     pin_cm = _executors().pin(ALIAS)
     executor = await pin_cm.__aenter__()
-    for _ in faults:
-        executor._busy = False
-        await executor.stream(SELECT, None, 1).__aenter__()
+    await open_streams_past_the_busy_guard(executor, len(fault_types))
     return await raised_by(pin_cm.__aexit__(None, None, None))
-
-
-async def close_error_kind(env: ExecEnv) -> str:
-    """Name of the exception raised when one stream close fails with an ordinary error and
-    another with a cancellation."""
-    error = await exit_pin_with_close_faults(
-        env, ValueError("close failed"), asyncio.CancelledError()
-    )
-    return type(error).__name__
 
 
 @dataclass(frozen=True)
@@ -127,3 +118,35 @@ async def rollback_when_the_stream_close_is_cancelled(env: ExecEnv) -> RollbackA
     """A cancelled stream close inside a transaction breaks it: `rollback()` must raise that
     cancellation (not `TransactionManagementError`) and send no ROLLBACK."""
     return await rollback_when_stream_close_fails(env, asyncio.CancelledError())
+
+
+@dataclass(frozen=True)
+class UnenteredStream:
+    close_error: BaseException | None
+    enter_error: BaseException | None
+    rows_after: list[Any]
+
+
+async def close_a_stream_that_was_never_entered(env: ExecEnv) -> UnenteredStream:
+    """A stream is closed before it was entered, then entered; a statement follows."""
+    async with _executors().pin(ALIAS) as executor:
+        stream = executor.stream(SELECT, None, 1)
+        close_error = await raised_by(stream.close())
+        enter_error = await raised_by(stream.__aenter__())
+        return UnenteredStream(close_error, enter_error, await executor.fetch_all(SELECT, None))
+
+
+async def reenter_a_stream_whose_open_failed(env: ExecEnv) -> SecondEntry:
+    """The driver fails to open the stream; entering the same stream again; a statement follows."""
+    env.default.queue(ValueError("open failed"))
+    async with _executors().pin(ALIAS) as executor:
+        stream = executor.stream(SELECT, None, 1)
+        await raised_by(stream.__aenter__())
+        error = await raised_by(stream.__aenter__())
+        return SecondEntry(error, await executor.fetch_all(SELECT, None))
+
+
+async def iterate_a_stream_that_was_never_entered(env: ExecEnv) -> BaseException | None:
+    """Ask a pinned stream for a chunk without `async with`."""
+    async with _executors().pin(ALIAS) as executor:
+        return await raised_by(anext(executor.stream(SELECT, None, 1)))

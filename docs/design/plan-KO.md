@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=91376f84510e -->
+<!-- i18n: source=docs/design/plan.md source-sha256=23672c4e93d0 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안

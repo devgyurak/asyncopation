@@ -10,6 +10,7 @@ from asyncopation.drivers.base import PoolStats
 from harness.settings import VENDOR
 from tests.support.executors.postgres import (
     break_out_of_a_pinned_stream,
+    cancel_a_pin_waiting_for_a_connection,
     cancel_pin_mid_statement,
     cancel_racing_the_release,
     cancel_while_waiting_for_a_connection,
@@ -21,6 +22,7 @@ from tests.support.executors.postgres import (
     deadline_outside_transaction,
     gather_sleeping_queries,
     leave_pin_with_open_stream,
+    observe_gathered_queries_on_the_server,
     pinned_backends,
     savepoint_from_taskgroup_child,
     terminate_pinned_backend,
@@ -33,6 +35,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 CHILDREN = pytest.mark.parametrize("taskgroup", [False, True], ids=["gather", "taskgroup"])
+# Race probes, not exact interleavings: the delays only make a given order likely. What every
+# case asserts holds for any order (nothing leaks), so a different interleaving still passes.
 RACES = pytest.mark.parametrize(
     ("delay", "cancel_first"),
     [
@@ -51,6 +55,21 @@ async def test_gathered_queries_run_on_separate_backends(spy):
     outcome = await gather_sleeping_queries(4, 0.5)
     # then
     assert outcome.backends == 4
+
+
+async def test_gathered_queries_overlap_on_the_server(spy, app_name):
+    # when
+    outcome = await observe_gathered_queries_on_the_server(app_name, 3)
+    # then
+    assert outcome.active_on_server == 3
+
+
+async def test_gathered_queries_cancelled_while_overlapping_leak_nothing(spy, app_name):
+    # when
+    outcome = await observe_gathered_queries_on_the_server(app_name, 3)
+    # then
+    assert outcome.all_cancelled is True
+    assert (outcome.in_flight, outcome.pool.in_use, outcome.pool.waiting) == (0, 0, 0)
 
 
 async def test_gathered_queries_leave_nothing_on_the_server_after_close(spy, app_name):
@@ -252,27 +271,35 @@ async def test_the_pool_replaces_a_terminated_backend_and_nothing_stays_in_fligh
     assert (outcome.pool.in_use, outcome.pool.waiting, outcome.in_flight) == (0, 0, 0)
 
 
-async def test_close_gives_up_on_an_open_pin_transaction_with_a_timeout_error(spy):
+async def test_close_gives_up_on_an_open_pin_transaction_with_a_timeout_error(spy, app_name):
     # when
-    outcome = await close_while_a_transaction_is_pinned(0.3)
+    outcome = await close_while_a_transaction_is_pinned(0.3, app_name)
     # then
     assert isinstance(outcome.close_error, TimeoutError)
 
 
-async def test_a_pin_still_runs_statements_after_close_gave_up_on_it(spy):
+async def test_a_statement_on_a_pin_close_gave_up_on_raises_concurrent_query_error(spy, app_name):
     # when
-    outcome = await close_while_a_transaction_is_pinned(0.3)
+    outcome = await close_while_a_transaction_is_pinned(0.3, app_name)
     # then
-    assert outcome.statement_error is None
+    assert isinstance(outcome.statement_error, ConcurrentQueryError)
+    assert "drivers were closed by close()" in str(outcome.statement_error)
 
 
-async def test_leaving_a_pin_after_close_gave_up_raises_nothing_and_ends_the_backend(spy):
+async def test_leaving_a_pin_after_close_gave_up_raises_nothing_and_ends_the_backend(spy, app_name):
     # when
-    outcome = await close_while_a_transaction_is_pinned(0.3)
+    outcome = await close_while_a_transaction_is_pinned(0.3, app_name)
     # then
     assert outcome.exit_error is None
     assert outcome.backend_ended is True
     assert outcome.in_flight == 0
+
+
+async def test_no_session_is_left_after_leaving_a_pin_close_gave_up_on(spy, app_name):
+    # when
+    outcome = await close_while_a_transaction_is_pinned(0.3, app_name)
+    # then
+    assert outcome.sessions == 0
 
 
 # --------------------------------------------------------------------------- streams
@@ -336,6 +363,29 @@ async def test_a_cancelled_waiting_borrower_stops_counting_as_in_flight(tight_sp
 async def test_a_cancelled_waiting_borrower_leaks_no_connection(tight_spy):
     # when
     outcome = await cancel_while_waiting_for_a_connection()
+    # then
+    assert outcome.pool == PoolStats(in_use=0, idle=1, waiting=0)
+    assert outcome.fresh_rows == [(1,)]
+
+
+async def test_a_pin_cancelled_while_waiting_for_a_connection_is_cancelled(tight_spy):
+    # when
+    outcome = await cancel_a_pin_waiting_for_a_connection()
+    # then
+    assert outcome.cancelled is True
+
+
+async def test_a_cancelled_waiting_pin_stops_counting_as_in_flight(tight_spy):
+    # when
+    outcome = await cancel_a_pin_waiting_for_a_connection()
+    # then
+    assert outcome.in_flight_after_cancel == 1  # only the stream that holds the connection
+    assert outcome.in_flight == 0
+
+
+async def test_a_cancelled_waiting_pin_leaks_no_connection(tight_spy):
+    # when
+    outcome = await cancel_a_pin_waiting_for_a_connection()
     # then
     assert outcome.pool == PoolStats(in_use=0, idle=1, waiting=0)
     assert outcome.fresh_rows == [(1,)]

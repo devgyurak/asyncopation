@@ -30,7 +30,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 
 | Layer | Package | Responsibility | May not |
 |---|---|---|---|
-| - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`); imports nothing (import-linter contract), so `import asyncopation` stays light; re-exported at the package root | import anything |
+| - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`); imports nothing (an import-linter contract keeps it free of `asyncopation` layers, a subprocess import test of Django and the drivers), so `import asyncopation` stays light; re-exported at the package root | import anything |
 | 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
 | 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
@@ -155,17 +155,20 @@ Implementation (`asyncopation.connection.executor`, internal until `async_atomic
 release -> `statement_finished` (in `finally`, also on cancellation); a stream holds the connection
 and the in-flight count until it ends. `pin(alias)` (an async context manager) borrows one connection,
 counts as one in-flight unit for its whole lifetime, records the owner task and registers a
-`PinnedExecutor` in a contextvar *mapping* (alias -> executor, replaced never mutated; no counter lives
-in a contextvar because gathered children copy the context). A `PinnedExecutor` rejects, with
+`PinnedExecutor` in a contextvar *mapping* (alias -> executor, replaced never mutated, and a block exit removes only its own entry from the
+current mapping; no counter lives in a contextvar because gathered children copy the context). A `PinnedExecutor` rejects, with
 `ConcurrentQueryError`, use from another task, re-entrant use while a statement or stream is in
 flight and any use after the block exited (a stale child task still sees the closed executor through
-its copied context); it marks itself `broken` when a statement is cancelled inside a transaction
+its copied context; once `close(timeout)` gave up waiting for a pin it marks the pin closed before
+it closes the drivers); it marks itself `broken` when a statement is cancelled inside a transaction
 (later statements raise Django's `TransactionManagementError`, `rollback()` is a no-op, the driver
 has already discarded the connection - ADR-0003); closing a stream is exempt from the owner check
 and pin exit closes the streams still open. It passes `begin` / `commit` / `rollback` / savepoint
 calls through with no policy (#19). `current_executor(alias)` returns the contextvar's pinned executor
-(even a closed one, so use raises) or the alias's borrowed executor. Every statement passes one
-internal function, `_run` (the ADR-0005 hook point, #4). `ConcurrentQueryError` lives in
+(even a closed one, so a child's use raises; the owner task gets a borrowed executor again once its
+own block ended) or the alias's borrowed executor. Every call to a connection - statements,
+streams and transaction control - passes one internal function, `_run` (the ADR-0005 hook point,
+#4; `EVENT_KINDS` maps each call to its `query` / `transaction` kind). `ConcurrentQueryError` lives in
 `asyncopation.errors`, a module that imports nothing (import-linter contract), and is re-exported at
 the package root.
 

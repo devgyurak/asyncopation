@@ -200,6 +200,13 @@ class GatedDriver(RecordingDriver):
         return [connection.released for connection in self.connections]
 
 
+async def opened_gated_driver(alias: str = "default") -> GatedDriver:
+    """A `GatedDriver` that is already open (for tests of the driver on its own)."""
+    driver = GatedDriver(alias)
+    await driver.open()
+    return driver
+
+
 class ExecEnv:
     """Fake DATABASES (`default`, `other`) whose drivers are `GatedDriver`s, one per alias."""
 

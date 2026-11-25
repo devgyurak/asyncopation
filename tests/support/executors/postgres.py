@@ -50,14 +50,17 @@ async def in_open_transaction(executor: Any) -> bool:
     return bool((await executor.fetch_all(IN_TRANSACTION_SQL, None))[0][0])
 
 
-async def _active_like(app_name: str, pattern: str) -> bool:
-    count = await admin_scalar(
+async def _active_count(app_name: str, pattern: str) -> int:
+    return await admin_scalar(
         "SELECT count(*) FROM pg_stat_activity "
         "WHERE application_name = %s AND query LIKE %s AND pid <> pg_backend_pid() "
         "AND state = 'active'",
         (app_name, pattern),
     )
-    return count > 0
+
+
+async def _active_like(app_name: str, pattern: str) -> bool:
+    return await _active_count(app_name, pattern) > 0
 
 
 async def settled_pool(within: float = 5.0) -> PoolStats:
@@ -96,6 +99,36 @@ async def gather_sleeping_queries(count: int, seconds: float) -> Gathered:
         ]
     )
     return Gathered(len({rows[0][0] for rows in results}))
+
+
+@dataclass(frozen=True)
+class Overlap:
+    active_on_server: int
+    all_cancelled: bool
+    in_flight: int
+    pool: PoolStats
+
+
+async def observe_gathered_queries_on_the_server(app_name: str, count: int) -> Overlap:
+    """`count` gathered borrowed queries, each tagged with a unique marker in its text: wait until
+    the server shows all of them active at the same time (then cancel them)."""
+    marker = _marker()
+    executor = _executors().BorrowedExecutor(ALIAS)
+    gathered = asyncio.gather(
+        *[executor.fetch_all(f"SELECT pg_sleep(30) /* {marker} */", None) for _ in range(count)]
+    )
+    seen: list[int] = []
+
+    async def all_active() -> bool:
+        seen.append(await _active_count(app_name, f"%{marker}%"))
+        return seen[-1] == count
+
+    await raised_by(wait_until(all_active))  # a timeout shows up as the last count seen
+    gathered.cancel()
+    outcomes = await asyncio.gather(gathered, return_exceptions=True)
+    pool = await settled_pool()
+    cancelled = isinstance(outcomes[0], asyncio.CancelledError)
+    return Overlap(seen[-1], cancelled, _registry().in_flight(ALIAS), pool)
 
 
 async def pinned_backends(statements: int) -> list[int]:
@@ -315,6 +348,24 @@ async def cancel_while_waiting_for_a_connection() -> Waiter:
     return await _settled_outcome(waiter, state)
 
 
+async def cancel_a_pin_waiting_for_a_connection() -> Waiter:
+    """The pool (size 1) is held by a stream; a task entering `pin` waits in `getconn` and is
+    cancelled there (its unit has started already)."""
+
+    async def enter_pin() -> None:
+        async with _executors().pin(ALIAS):
+            pass
+
+    holder, _chunks = await _hold_the_only_connection()
+    waiter = asyncio.create_task(enter_pin())
+    await wait_until(_one_waiter)
+    waiter.cancel()
+    await asyncio.wait([waiter])
+    state = _registry().in_flight(ALIAS)
+    await holder.__aexit__(None, None, None)
+    return await _settled_outcome(waiter, state)
+
+
 async def cancel_racing_the_release(delay: float, *, cancel_first: bool) -> Waiter:
     """Release the connection a borrower waits for and cancel that borrower at about the same
     moment (`delay` seconds apart, or the cancel first)."""
@@ -379,11 +430,13 @@ class CloseUnderPin:
     backend_ended: bool
     in_flight: int
     pool: PoolStats
+    sessions: int
 
 
-async def close_while_a_transaction_is_pinned(give_up_after: float) -> CloseUnderPin:
-    """`close(timeout=give_up_after)` gives up on a pin whose transaction is open; then the owner runs a
-    statement and leaves the block."""
+async def close_while_a_transaction_is_pinned(give_up_after: float, app_name: str) -> CloseUnderPin:
+    """`close(timeout=give_up_after)` gives up on a pin whose transaction is open; then the owner
+    runs a statement and leaves the block. `sessions` counts the server sessions of `app_name`
+    left after that."""
     from asyncopation.connection import close
 
     pin_cm = _executors().pin(ALIAS)
@@ -401,4 +454,5 @@ async def close_while_a_transaction_is_pinned(give_up_after: float) -> CloseUnde
         ended,
         _registry().in_flight(ALIAS),
         _registry().pool_stats(ALIAS),
+        await server_connections_after_settling(app_name),
     )

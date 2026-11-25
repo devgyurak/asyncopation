@@ -163,6 +163,19 @@ async def broken_pin(env: ExecEnv) -> AsyncGenerator[Any]:
         yield ex
 
 
+@asynccontextmanager
+async def lost_connection_pin(env: ExecEnv) -> AsyncGenerator[Any]:
+    """A pinned executor whose transaction is broken by a statement that lost the connection."""
+    from tests.support.executors.fakes import LostConnection
+
+    env.default.disconnect_errors = (LostConnection,)
+    async with _executors().pin(ALIAS) as ex:
+        await ex.begin()
+        env.default.queue(LostConnection())
+        await raised_by(ex.fetch_all(SELECT, None))
+        yield ex
+
+
 async def second_pin_after_broken_exit(env: ExecEnv) -> Any:
     """Leave a broken pin, then pin the alias again and run a statement."""
     async with broken_pin(env):

@@ -23,6 +23,7 @@ transaction    async_atomic, savepoints, async on_commit
 connection     executors (borrowed/pinned, `executor.py`), registry (alias, loop), lifecycle, hooks
 drivers | compile
 _django        sole importer of non-public Django APIs (and the one reader of the app registry, `_django.apps`)
+errors         (outside the stack) public exceptions such as ConcurrentQueryError; imports nothing
 ```
 - `drivers/` is the **only** place that imports `psycopg`, `psycopg_pool`, `asyncmy`.
   Postgres and MySQL drivers never import each other.
@@ -51,8 +52,8 @@ deviating needs a superseding ADR.
 - `asgiref.sync` (`sync_to_async`, `async_to_sync`), `threading`, `concurrent.futures`,
   `multiprocessing` - a thread hop is exactly what this project removes.
 - `django.db.connection(s)`, `django.db.transaction`, `django.db.router` sync machinery (the only
-  exception: `from django.db.transaction import TransactionManagementError` inside
-  `asyncopation/_django/`, for the broken-transaction error of ADR-0001 6c).
+  exception: `from django.db.transaction import TransactionManagementError` in
+  `asyncopation/_django/transaction.py`, for the broken-transaction error of ADR-0001 6c).
 - `time.sleep`, `asyncio.run`, `asyncio.get_event_loop`, `run_until_complete`.
 - Sync drivers (`psycopg2`, `MySQLdb`, `pymysql`).
 - Dynamic imports and code evaluation that bypass the import guards: `importlib` (except

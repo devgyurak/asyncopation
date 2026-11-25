@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`_django.transaction` re-exports `TransactionManagementError`, the one name of the banned `django.db.transaction` that guard A101 lets through, only inside `_django`); approved by: maintainer (@devgyurak), to be confirmed in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`_django.transaction` re-exports `TransactionManagementError`, the one name of the banned `django.db.transaction` that guard A101 lets through, only in `_django/transaction.py`); approved by: maintainer (@devgyurak), to be confirmed in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.4 requires rewriting Django code that interleaves I/O and logic as async:
@@ -71,8 +71,8 @@ differential tests of the core itself. - generator protocol is less familiar.
    *Amended 2026-11-25 (#5, PR #61): `_django/transaction.py` re-exports Django's
    `TransactionManagementError` (ledger `[[internal]]` entry), which a pinned executor raises for a
    broken transaction (ADR-0001 6c). Guard A101 keeps `django.db.transaction` banned everywhere
-   except exactly `from django.db.transaction import TransactionManagementError` inside
-   `asyncopation/_django/`; `atomic` and the rest of that module stay banned.*
+   except exactly `from django.db.transaction import TransactionManagementError` in
+   `asyncopation/_django/transaction.py`; `atomic` and the rest of that module stay banned.*
 6. **Ledger semantics.** Ledger entries keep `used_by` listing the real consumers (not just
    `_django`); A202 flags an `[[internal]]` entry that nothing under `_django` imports (unless it is
    `ported`; a `ported` entry is checked instead for a `used_by` file that exists under

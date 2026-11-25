@@ -2,6 +2,15 @@
 
 import pytest
 
+from asyncopation import ConcurrentQueryError
+from asyncopation.connection.executor import BorrowedExecutor
+from tests.support.executors.close_pins import (
+    close_gives_up_on_a_pin_whose_block_already_ended,
+    pin_again_after_close_gave_up_on_the_pin,
+    select_an_executor_after_close_gave_up_on_the_pin,
+    use_a_pin_after_close_gave_up,
+)
+from tests.support.executors.ops import CONTROLS, STATEMENTS
 from tests.support.executors.scenarios import (
     close_while_open,
     trace_pin_in_flight,
@@ -90,3 +99,74 @@ async def test_a_refused_borrow_does_not_leak_the_in_flight_counter(execenv, hel
     outcome = await use_while_closing(kind)
     # then
     assert outcome.in_flight == 1  # only the unit that holds the close back
+
+
+DRIVERS_CLOSED = "drivers were closed by close()"
+
+
+@pytest.mark.parametrize("op", [*STATEMENTS, *CONTROLS])
+async def test_an_operation_on_a_pin_close_gave_up_on_raises_concurrent_query_error(execenv, op):
+    # when
+    outcome = await use_a_pin_after_close_gave_up(execenv, op)
+    # then
+    assert type(outcome.error) is ConcurrentQueryError
+    assert DRIVERS_CLOSED in str(outcome.error)
+
+
+async def test_a_pin_close_gave_up_on_is_closed(execenv):
+    # when
+    outcome = await use_a_pin_after_close_gave_up(execenv, "fetch_all")
+    # then
+    assert isinstance(outcome.close_error, TimeoutError)
+    assert outcome.closed is True
+
+
+@pytest.mark.parametrize("op", [*STATEMENTS, *CONTROLS])
+async def test_a_refused_operation_on_a_pin_close_gave_up_on_never_reaches_the_driver(execenv, op):
+    # when
+    outcome = await use_a_pin_after_close_gave_up(execenv, op)
+    # then
+    assert outcome.kinds == []
+
+
+async def test_leaving_a_pin_close_gave_up_on_releases_its_connection_and_unit(execenv):
+    # when
+    outcome = await use_a_pin_after_close_gave_up(execenv, "fetch_all")
+    # then
+    assert outcome.exit_error is None
+    assert (outcome.in_flight, outcome.released) == (0, [True])
+
+
+async def test_the_owner_still_gets_its_pin_from_current_executor_after_close_gave_up(execenv):
+    # when
+    outcome = await select_an_executor_after_close_gave_up_on_the_pin()
+    # then
+    assert outcome.current is outcome.pin
+
+
+async def test_that_pin_refuses_the_owners_statement_after_close_gave_up(execenv):
+    # when
+    outcome = await select_an_executor_after_close_gave_up_on_the_pin()
+    # then
+    assert isinstance(outcome.error, ConcurrentQueryError)
+
+
+async def test_the_owner_borrows_again_once_the_block_it_lost_ended(execenv):
+    # when
+    outcome = await select_an_executor_after_close_gave_up_on_the_pin()
+    # then
+    assert isinstance(outcome.after_exit, BorrowedExecutor)
+
+
+async def test_a_nested_block_of_the_alias_is_refused_after_close_gave_up_on_the_pin(execenv):
+    # when
+    error = await pin_again_after_close_gave_up_on_the_pin()
+    # then
+    assert isinstance(error, ConcurrentQueryError)
+
+
+async def test_close_does_not_flag_a_pin_whose_block_already_ended(execenv):
+    # when
+    drivers_closed = await close_gives_up_on_a_pin_whose_block_already_ended()
+    # then
+    assert drivers_closed is False

@@ -21,6 +21,8 @@ from tests.support.lifecycle_scripts import (
         pytest.param("import asyncopation.connection.engines", id="engines"),
         pytest.param("import asyncopation.connection.registry", id="registry"),
         pytest.param("import asyncopation.connection.asgi", id="asgi"),
+        pytest.param("import asyncopation.connection.executor", id="executor"),
+        pytest.param("import asyncopation.connection.lifecycle", id="lifecycle"),
         pytest.param("import asyncopation; asyncopation.setup; asyncopation.close", id="lazy-api"),
         pytest.param(
             "import asyncopation.connection as c; c.setup; c.close; c.configure", id="reexports"

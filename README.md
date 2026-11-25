@@ -68,13 +68,14 @@ connecting to the original database.
 
 ## Concurrency and transactions
 
-Outside a transaction every statement borrows its own pooled connection, so statements run under
-`asyncio.gather` execute in parallel. Inside a transaction one connection is pinned to the task
-that opened it: using it from another task (a `gather` or `TaskGroup` child, a task created
-inside the block), re-entrantly while a statement or stream is in flight, or after the block ended
-raises `asyncopation.ConcurrentQueryError` (a `RuntimeError`, not a `DatabaseError`, so retry loops
-do not swallow it). Run concurrent work outside the transaction. The query API and `async_atomic`
-are not available yet; this is the ownership model they will build on (ADR-0001).
+There is no query API yet, and `async_atomic` (#19) is not available: what follows is the ownership
+model they will build on (ADR-0001). Outside a transaction every statement will borrow its own
+pooled connection, so statements run under `asyncio.gather` execute in parallel. Inside an
+`async_atomic` block one connection will be pinned to the task that opened it: using it from
+another task (a `gather` or `TaskGroup` child, a task created inside the block), re-entrantly
+while a statement or stream is in flight, or after the block ended raises
+`asyncopation.ConcurrentQueryError` (a `RuntimeError`, not a `DatabaseError`, so retry loops do
+not swallow it). Run concurrent work outside the transaction.
 
 ## Testing upper layers without a database
 

@@ -63,7 +63,11 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    above), re-entrant use while a statement or stream is in flight, and any use after the pin block
    exited. The owner is stored as a weak reference to the task; a missing task is a non-owner. The
    pinned executor lives in a contextvar *mapping* (alias -> executor) that is replaced on entry and
-   restored with the reset token on exit, never mutated.
+   on exit, never mutated; exit removes only its own entry from the *current* mapping (no reset
+   token: the block may exit in another Context, e.g. an async generator finalized by another task,
+   and a restored copy would revive or drop other pins' entries). A closed executor stays visible to
+   child tasks that copied the context (they get the error); `current_executor` hands the owner
+   task a borrowed executor again once its own block has ended.
 4. **Nested blocks.** `async_atomic` on the same alias in a non-owner task raises (it never opens an
    independent transaction on another connection; *amended 2026-11-25 (#5, PR #61): `pin()` raises
    `ConcurrentQueryError` with its own message*). `async_atomic` on a different alias is
@@ -80,15 +84,19 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
       *Amended 2026-11-25 (#5, PR #61) - implementation note (D2):* the executor tracks an open
       transaction from the `begin()` passthrough. Any statement, stream open/read/close or
       transaction-control call (including `BEGIN` and `COMMIT`) cancelled while one is open, and a
-      lost connection (`driver.is_disconnect`) while one is open, mark the pinned executor `broken`. Every later statement and every transaction-control call except `rollback()`
-      raises `django.db.transaction.TransactionManagementError` (the exact type Django's sync `atomic`
-      raises for a broken transaction; it is re-exported by `asyncopation._django.transaction`, the one
-      name of `django.db.transaction` the guards let through). `rollback()` on a broken executor is
-      a no-op that never raises for the broken state (the owner and closed checks still apply), so cleanup code cannot replace the error that broke the transaction.
-      The connection itself is already closed by the driver (ADR-0003 cancel contract); pin exit does
-      not touch it and the pool drops it. A cancelled statement without `begin()` (autocommit) is not
-      broken: the driver cancels and rolls back. A cancelled `COMMIT` leaves its outcome unknown and
-      also marks the executor broken.
+      lost connection (`driver.is_disconnect`) while one is open, mark the pinned executor `broken`.
+      Every later statement and every transaction-control call except `rollback()` raises
+      `django.db.transaction.TransactionManagementError` (the exact type Django's sync `atomic`
+      raises for a broken transaction; it is re-exported by `asyncopation._django.transaction`, the
+      one name of `django.db.transaction` the guards let through). `rollback()` on a broken executor
+      is a no-op that never raises for the broken state (the owner and closed checks still apply),
+      so cleanup code cannot replace the error that broke the transaction. The connection itself is
+      already closed by the driver (ADR-0003 Decision 7); pin exit does not touch it and the pool
+      drops it. A cancelled statement without `begin()` (autocommit) is not broken: the driver
+      cancels and rolls back (a cancelled `BEGIN` does mark the executor broken, because the driver
+      may already have discarded the connection; a cancelled autocommit stream leaves the driver to
+      discard it, and the executor never saw a transaction). A cancelled `COMMIT` leaves its outcome
+      unknown and also marks the executor broken.
 7. **Streams (`aiterator`).** Streams are closed with `async with` or `aclose()`. Inside a
    transaction they use the pinned connection, so another query while a stream is open raises
    (rule 3) - a documented usability cost, chosen for identical behaviour on PostgreSQL and
@@ -134,19 +142,26 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
     a. (D3) A pin counts as one in-flight unit (`registry.statement_started` /
        `statement_finished`) for its whole lifetime; statements inside it do not count again, so
        `close(timeout)` waits for open pin blocks and open streams up to its timeout and then closes
-       anyway (a pin that outlives the timeout loses its connection: its next statement raises a
-       driver error, not `ConcurrentQueryError`). An executor calls `ensure_driver` first and starts
-       its unit right after it returns, with no `await` in between (`statement_started` has no
-       closing check); the borrowed executor counts from before the pool acquire to after the release,
-       and a stream for its whole lifetime.
+       anyway. A pin that outlives the timeout is marked closed when `close()` closes the drivers
+       (the registry tracks open pinned executors per `(alias, loop)` in a `WeakSet`): its next
+       statement or transaction-control call raises `ConcurrentQueryError` ("the drivers were
+       closed by close()"; `current_executor` keeps returning the pin to its owner for as long as the
+       block is open, so nothing silently runs outside the transaction), and leaving the block
+       closes its connection. An executor calls
+       `ensure_driver` first and starts its unit right after it returns, with no `await` in between
+       (`statement_started` has no closing check); the borrowed executor counts from before the pool
+       acquire to after the release, and a stream for its whole lifetime.
     b. (D4) `PinnedExecutor` passes `begin` / `commit` / `rollback` / `savepoint` /
        `release_savepoint` / `rollback_to_savepoint` straight to the connection after the owner,
        re-entrancy and broken checks. It has no policy: nesting, `durable`, `on_commit` and
        `needs_rollback` belong to `async_atomic` (#19). The same task pinning the same alias again
        reuses the executor (`depth` + 1); another task doing so raises (Decision 4); another alias is
        independent.
-    c. Every statement of both executors goes through one internal function (`_run`), the place
-       where the ADR-0005 hooks run (#4); no hook is implemented here.
+    c. Every call to a connection from either executor - statements, streams and transaction
+       control (`begin` / `commit` / `rollback` / savepoint calls) - goes through one internal
+       function (`_run`), the place where the ADR-0005 hooks run (#4); `EVENT_KINDS` maps each call
+       to its ADR-0005 Decision 2 kind (`query`, with SAVEPOINT statements, or `transaction` for
+       connection-level BEGIN / COMMIT / ROLLBACK). No hook is implemented here.
 
 **Divergence from Django core:** core pins per task; we borrow per query outside transactions to
 get real `gather` parallelism. Public names stay aligned with core (`async_atomic(using,

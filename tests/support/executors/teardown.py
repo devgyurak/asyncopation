@@ -16,6 +16,7 @@ from tests.support.executors.scenarios import (
     _executors,
     _registry,
 )
+from tests.support.executors.streams import open_streams_past_the_busy_guard
 
 
 # --------------------------------------------------------------------------- pin leak paths
@@ -163,18 +164,51 @@ class TwoStreamsAtExit:
 async def exit_pin_with_two_open_streams(env: ExecEnv) -> TwoStreamsAtExit:
     """Leave a pin with two open streams whose first close fails.
 
-    Through the public API only one stream can be open at a time (the executor is busy), so the
-    busy guard is lifted to reach the defence in depth of the pin exit.
+    Two streams are opened past the busy guard to reach the defence in depth of the pin exit.
     """
     driver = env.default
     driver.queue([(1,), (2,)], [(3,), (4,)])
     driver.fail_next("stream_close", ValueError("close failed"))
     pin_cm = _executors().pin(ALIAS)
     executor = await pin_cm.__aenter__()
-    await executor.stream(SELECT, None, 1).__aenter__()
-    executor._busy = False
-    await executor.stream(SELECT, None, 1).__aenter__()
+    await open_streams_past_the_busy_guard(executor, 2)
     error = await raised_by(pin_cm.__aexit__(None, None, None))
     return TwoStreamsAtExit(
         error, driver.streams_open, driver.released, _registry().in_flight(ALIAS)
     )
+
+
+# --------------------------------------------------------------------------- unusual exits
+@dataclass(frozen=True)
+class ForeignExit:
+    error: BaseException | None
+    executor_closed: bool
+    in_flight: int
+    released: list[bool]
+
+
+async def leave_a_pin_from_another_task(env: ExecEnv) -> ForeignExit:
+    """The block is left by a task that is not the one that entered it (a finalizer)."""
+    pin_cm = _executors().pin(ALIAS)
+    executor = await pin_cm.__aenter__()
+    error = await raised_by(in_gather_child(pin_cm.__aexit__(None, None, None)))
+    return ForeignExit(error, executor.closed, _registry().in_flight(ALIAS), env.default.released)
+
+
+async def depth_after_a_nested_pin_raises() -> int:
+    """The depth of the outer pin after an inner pin of the same task ended with an exception."""
+
+    async def inner() -> None:
+        async with _executors().pin(ALIAS):
+            raise ValueError("boom")
+
+    async with _executors().pin(ALIAS) as executor:
+        await raised_by(inner())
+        return executor.depth
+
+
+async def stream_of_a_closed_pin() -> Any:
+    """`stream()` called on an executor whose block ended (no `await`, no `async with`)."""
+    async with _executors().pin(ALIAS) as executor:
+        pass
+    return executor.stream(SELECT, None, 1)

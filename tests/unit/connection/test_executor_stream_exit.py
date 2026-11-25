@@ -4,12 +4,17 @@ import asyncio
 
 import pytest
 
+from tests.support.executors.fakes import LostConnection
+from tests.support.executors.ownership import broken_after_a_stream_body_raises
 from tests.support.executors.stream_exit import (
-    close_error_kind,
+    close_a_stream_that_was_never_entered,
+    close_error_at_pin_exit,
     enter_stream_after_close,
     enter_stream_twice,
     enter_stream_whose_open_fails,
+    iterate_a_stream_that_was_never_entered,
     pin_exit_with_failing_stream_close,
+    reenter_a_stream_whose_open_failed,
     rollback_when_stream_close_fails,
     rollback_when_the_stream_close_is_cancelled,
 )
@@ -33,11 +38,16 @@ async def test_rollback_raises_the_stream_close_error_after_rolling_back(execenv
     assert (type(outcome.error), str(outcome.error)) == (ValueError, "close failed")
 
 
-async def test_a_cancellation_during_stream_closes_wins_over_an_ordinary_error(execenv):
+@pytest.mark.parametrize(
+    "faults",
+    [[ValueError, asyncio.CancelledError], [asyncio.CancelledError, ValueError]],
+    ids=["ordinary-first", "cancellation-first"],
+)
+async def test_a_cancellation_during_stream_closes_wins_over_an_ordinary_error(execenv, faults):
     # when
-    name = await close_error_kind(execenv)
+    error = await close_error_at_pin_exit(execenv, faults)
     # then
-    assert name == "CancelledError"
+    assert type(error) is asyncio.CancelledError
 
 
 async def test_the_block_error_wins_over_a_failing_stream_close_at_pin_exit(execenv):
@@ -112,3 +122,63 @@ async def test_rollback_sends_no_rollback_after_a_stream_close_broke_the_transac
     outcome = await rollback_when_the_stream_close_is_cancelled(execenv)
     # then
     assert outcome.kinds == ["begin", "stream"]
+
+
+async def test_a_stream_whose_open_failed_cannot_be_entered_again(execenv):
+    # when
+    outcome = await reenter_a_stream_whose_open_failed(execenv)
+    # then
+    assert (type(outcome.error), str(outcome.error)) == (RuntimeError, ENTERED_ONCE)
+
+
+async def test_a_refused_second_entry_after_a_failed_open_leaves_the_pin_usable(execenv):
+    # when
+    outcome = await reenter_a_stream_whose_open_failed(execenv)
+    # then
+    assert outcome.rows_after == [(1,)]
+
+
+async def test_closing_a_stream_that_was_never_entered_is_a_no_op(execenv):
+    # when
+    outcome = await close_a_stream_that_was_never_entered(execenv)
+    # then
+    assert outcome.close_error is None
+
+
+async def test_the_pin_stays_usable_after_closing_a_stream_that_was_never_entered(execenv):
+    # when
+    outcome = await close_a_stream_that_was_never_entered(execenv)
+    # then
+    assert outcome.rows_after == [(1,)]
+
+
+async def test_a_stream_closed_before_it_was_entered_cannot_be_entered(execenv):
+    # when
+    outcome = await close_a_stream_that_was_never_entered(execenv)
+    # then
+    assert (type(outcome.enter_error), str(outcome.enter_error)) == (RuntimeError, ENTERED_ONCE)
+
+
+async def test_iterating_a_stream_that_was_never_entered_raises_runtime_error(execenv):
+    # when
+    error = await iterate_a_stream_that_was_never_entered(execenv)
+    # then
+    assert type(error) is RuntimeError
+    assert "async with" in str(error)
+
+
+@pytest.mark.parametrize(
+    ("error_type", "broken"),
+    [
+        pytest.param(ValueError, False, id="ordinary-error"),
+        pytest.param(LostConnection, False, id="lost-connection-in-the-body"),
+        pytest.param(asyncio.CancelledError, True, id="cancellation"),
+    ],
+)
+async def test_only_a_cancelled_body_breaks_the_transaction_when_its_stream_closes(
+    execenv, error_type, broken
+):
+    # when
+    outcome = await broken_after_a_stream_body_raises(execenv, error_type)
+    # then
+    assert outcome is broken

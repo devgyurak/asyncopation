@@ -2,19 +2,13 @@
 
 import asyncio
 
-from tests.support.executors.fakes import GatedDriver
+from tests.support.executors.fakes import opened_gated_driver
 from tests.support.executors.ops import call_with, in_gather_child, in_taskgroup_child, raised_by
-
-
-async def opened(alias="default") -> GatedDriver:
-    driver = GatedDriver(alias)
-    await driver.open()
-    return driver
 
 
 async def test_an_unqueued_statement_returns_one_row_instead_of_failing():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     # when
     async with driver.connection() as connection:
         rows = await connection.fetch_all("SELECT 1", None)
@@ -24,7 +18,7 @@ async def test_an_unqueued_statement_returns_one_row_instead_of_failing():
 
 async def test_queued_results_are_served_before_the_default_row():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     driver.queue([(5,)])
     # when
     async with driver.connection() as connection:
@@ -35,7 +29,7 @@ async def test_queued_results_are_served_before_the_default_row():
 
 async def test_every_borrow_is_counted_and_released():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     # when
     async with driver.connection():
         pass
@@ -47,7 +41,7 @@ async def test_every_borrow_is_counted_and_released():
 
 async def test_a_held_statement_waits_at_the_gate_until_released():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     hold = driver.hold_statements()
     async with driver.connection() as connection:
         task = asyncio.create_task(connection.fetch_all("SELECT 1", None))
@@ -62,7 +56,7 @@ async def test_a_held_statement_waits_at_the_gate_until_released():
 
 async def test_the_during_hook_runs_inside_the_statement():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     calls = []
 
     async def during():
@@ -78,7 +72,7 @@ async def test_the_during_hook_runs_inside_the_statement():
 
 async def test_the_recording_log_still_sees_the_statements():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     # when
     async with driver.connection() as connection:
         await connection.begin()
@@ -111,7 +105,7 @@ async def test_taskgroup_helper_unwraps_a_single_error():
 
 async def test_a_queued_begin_fault_is_raised_once():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     driver.fail_next("begin", KeyError("x"))
     # when
     async with driver.connection() as connection:
@@ -123,7 +117,7 @@ async def test_a_queued_begin_fault_is_raised_once():
 
 async def test_a_queued_chunk_fault_is_raised_by_the_next_read():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     driver.fail_next("chunk", KeyError("x"))
     # when
     async with driver.connection() as connection, connection.stream("SELECT 1", None, 1) as chunks:
@@ -134,7 +128,7 @@ async def test_a_queued_chunk_fault_is_raised_by_the_next_read():
 
 async def test_a_queued_stream_close_fault_is_raised_when_the_stream_ends():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     driver.fail_next("stream_close", KeyError("x"))
     # when
     async with driver.connection() as connection:
@@ -147,7 +141,7 @@ async def test_a_queued_stream_close_fault_is_raised_when_the_stream_ends():
 
 async def test_a_held_stream_close_waits_until_released():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     hold = driver.hold_stream_closes()
     async with driver.connection() as connection:
         task = asyncio.create_task(call_with(connection, "stream", "SELECT 1", None))
@@ -162,7 +156,7 @@ async def test_a_held_stream_close_waits_until_released():
 
 async def test_a_borrow_error_is_raised_before_a_connection_is_handed_out():
     # given
-    driver = await opened()
+    driver = await opened_gated_driver()
     driver.borrow_error = KeyError("pool")
     # when
     error = await raised_by(driver.connection().__aenter__())

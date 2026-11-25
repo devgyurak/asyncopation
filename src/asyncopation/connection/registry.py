@@ -70,6 +70,7 @@ _configs: dict[str, AliasConfig] = {}
 _closing_loops: dict[asyncio.AbstractEventLoop, int] = {}  # overlapping close() calls count
 _flights: dict[Key, _Flight] = {}
 _leaked: list[Key] = []
+_pins: dict[Key, weakref.WeakSet[Any]] = {}  # open pinned executors, for close()
 
 
 # -- configuration ---------------------------------------------------------------------------
@@ -110,6 +111,8 @@ def purge_closed_loops() -> None:
         del _closing_loops[loop]
     for key in [key for key in list(_flights) if key[1].is_closed()]:
         del _flights[key]
+    for key in [key for key in list(_pins) if key[1].is_closed()]:
+        del _pins[key]
     for key, found in list(_entries.items()):
         if not key[1].is_closed():
             continue
@@ -246,6 +249,25 @@ async def wait_idle(loop: asyncio.AbstractEventLoop) -> None:
         await busy[0].idle.wait()
 
 
+# -- open pinned executors (used by connection.executor) ---------------------------------------
+def register_pin(alias: str, pin: Any) -> None:
+    _pins.setdefault((alias, asyncio.get_running_loop()), weakref.WeakSet()).add(pin)
+
+
+def unregister_pin(alias: str, pin: Any) -> None:
+    pins = _pins.get((alias, asyncio.get_running_loop()))
+    if pins is not None:
+        pins.discard(pin)
+
+
+def close_pins(loop: asyncio.AbstractEventLoop) -> None:
+    """``close()`` is about to close the drivers of ``loop``: pins still open (it gave up waiting
+    for them) must not run another statement on a pool that is going away."""
+    for key in [key for key in list(_pins) if key[1] is loop]:
+        for pin in list(_pins.pop(key)):
+            pin.mark_drivers_closed()
+
+
 def reset() -> None:
     """Forget everything without closing anything (test teardown helper)."""
     _entries.clear()
@@ -253,4 +275,5 @@ def reset() -> None:
     _configs.clear()
     _closing_loops.clear()
     _flights.clear()
+    _pins.clear()
     _leaked.clear()

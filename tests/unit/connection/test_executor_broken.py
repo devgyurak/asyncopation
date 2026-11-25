@@ -1,12 +1,17 @@
 """A statement cancelled inside a transaction breaks the pinned executor (ADR-0001 Decision 6c)."""
 
+import asyncio
+
 import pytest
 from django.db.transaction import TransactionManagementError
 
-from asyncopation.connection.executor import pin
-from tests.support.executors.ops import CONTROLS_THAT_RAISE_WHEN_BROKEN, STATEMENTS, call, kinds_of
+from tests.support.executors.broken import (
+    other_alias_beside_a_broken_pin,
+    roll_back_a_broken_pin,
+    use_a_broken_pin,
+)
+from tests.support.executors.ops import CONTROLS_THAT_RAISE_WHEN_BROKEN, STATEMENTS
 from tests.support.executors.scenarios import (
-    broken_pin,
     cancel_in_pin,
     cancel_owner_mid_statement,
     second_pin_after_broken_exit,
@@ -39,7 +44,7 @@ async def test_the_cancellation_still_reaches_the_caller(execenv):
     # when
     outcome = await cancel_in_pin(execenv, begin=True)
     # then
-    assert type(outcome.cancelled).__name__ == "CancelledError"
+    assert type(outcome.cancelled) is asyncio.CancelledError
 
 
 async def test_cancelled_statement_without_a_transaction_does_not_break_the_executor(execenv):
@@ -58,59 +63,41 @@ async def test_executor_stays_usable_after_a_cancelled_autocommit_statement(exec
 
 @pytest.mark.parametrize("op", [*STATEMENTS, *CONTROLS_THAT_RAISE_WHEN_BROKEN])
 async def test_broken_executor_refuses_the_operation(execenv, op):
-    # when / then
-    async with broken_pin(execenv) as ex:
-        with pytest.raises(TransactionManagementError):
-            await call(ex, op)
-
-
-async def test_refused_operation_on_a_broken_executor_never_reaches_the_driver(execenv):
-    # given
-    async with broken_pin(execenv) as ex:
-        calls_before = execenv.default.statement_calls
-        with pytest.raises(TransactionManagementError):
-            await call(ex, "fetch_all")
-        # when
-        calls_after = execenv.default.statement_calls
+    # when
+    outcome = await use_a_broken_pin(execenv, op)
     # then
-    assert calls_after == calls_before
+    assert type(outcome.error) is TransactionManagementError
+
+
+@pytest.mark.parametrize("op", STATEMENTS)
+async def test_refused_statement_on_a_broken_executor_never_reaches_the_driver(execenv, op):
+    # when
+    outcome = await use_a_broken_pin(execenv, op)
+    # then
+    assert outcome.calls_after == outcome.calls_before
 
 
 async def test_rollback_on_a_broken_executor_is_a_no_op_that_returns(execenv):
-    # given
-    async with broken_pin(execenv) as ex:
-        # when
-        result = await ex.rollback()
-        kinds = kinds_of(execenv.default)
+    # when
+    outcome = await roll_back_a_broken_pin(execenv)
     # then
-    assert result is None
-    assert kinds == ["begin", "fetch_all"]
+    assert outcome.errors == [None]
+    assert outcome.kinds == ["begin", "fetch_all"]
 
 
 async def test_rollback_on_a_broken_executor_can_be_repeated(execenv):
     # when
-    async with broken_pin(execenv) as ex:
-        await ex.rollback()
-        await ex.rollback()
+    outcome = await roll_back_a_broken_pin(execenv, times=2)
     # then
-    assert "rollback" not in kinds_of(execenv.default)
+    assert outcome.errors == [None, None]
+    assert "rollback" not in outcome.kinds
 
 
-async def test_leaving_a_broken_pin_does_not_roll_back_through_the_driver(execenv):
+async def test_no_rollback_is_sent_for_a_connection_the_driver_discarded(execenv):
     # when
     outcome = await cancel_in_pin(execenv, begin=True)
     # then
     assert outcome.kinds_after_exit == ["begin", "fetch_all"]
-
-
-async def test_leaving_a_broken_pin_discards_the_connection(execenv):
-    # given
-    async with broken_pin(execenv):
-        pass
-    # when
-    discarded = execenv.default.discarded
-    # then
-    assert discarded == 1
 
 
 async def test_leaving_a_broken_pin_does_not_raise_and_closes_the_executor(execenv):
@@ -128,10 +115,8 @@ async def test_a_new_pin_after_a_broken_one_is_healthy(execenv):
 
 
 async def test_broken_state_belongs_to_one_alias(execenv):
-    # given
-    async with broken_pin(execenv), pin("other") as other:
-        # when
-        rows = await other.fetch_all("SELECT 1", None)
+    # when
+    rows = await other_alias_beside_a_broken_pin(execenv)
     # then
     assert rows == [(1,)]
 
@@ -151,3 +136,26 @@ async def test_real_cancellation_of_the_owner_leaves_nothing_in_flight(execenv):
     outcome = await cancel_owner_mid_statement(execenv, begin=True)
     # then
     assert outcome.in_flight == 0
+
+
+async def test_a_lost_connection_in_a_transaction_makes_the_next_statement_raise(execenv):
+    # when
+    outcome = await use_a_broken_pin(execenv, "fetch_all", cause="lost_connection")
+    # then
+    assert type(outcome.error) is TransactionManagementError
+
+
+async def test_a_statement_refused_on_a_pin_broken_by_a_lost_connection_stays_off_the_driver(
+    execenv,
+):
+    # when
+    outcome = await use_a_broken_pin(execenv, "fetch_all", cause="lost_connection")
+    # then
+    assert outcome.calls_after == outcome.calls_before
+
+
+async def test_rollback_on_a_pin_broken_by_a_lost_connection_is_a_no_op(execenv):
+    # when
+    outcome = await roll_back_a_broken_pin(execenv, cause="lost_connection")
+    # then
+    assert outcome.errors == [None]

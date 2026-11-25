@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak) - accepted 2026-11-24 after the Phase 1 spike (#29)
 - Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
+- Amended: 2026-11-25 (#5a) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approval: **pending maintainer (@devgyurak) review of PR #5a**; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -129,7 +130,7 @@ A-scoped, concretely:
    (ADR-0007), and within it only these operations: `connections.__setitem__` /
    `connections.__delitem__`, and the peek at the previous value through the private
    `connections._connections` (which avoids creating a real wrapper per task context just to
-   remember it). *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
+   remember it). *Amended 2026-11-25 (#5a): a fourth operation, a read of `connections.settings` (Django's configured `DATABASES`, defaults applied), reachable only through `configured_databases()`, which returns `copy.deepcopy(connections.settings)`; `connection/lifecycle.py` may import that one name.* *Amended 2026-11-24 (#3, PR #45): the two operations are reachable only through the single context manager `swapped`; the peek is not exposed.* Still forbidden in that module, as everywhere in `src/`: `.cursor()`,
    `ensure_connection`, `connect`, `django.db.transaction`, and any other use of a sync
    connection. `compile.scope` calls the module, through the single context manager
    `swapped(alias, wrapper)` that the module exposes (it yields nothing, so the previous wrapper

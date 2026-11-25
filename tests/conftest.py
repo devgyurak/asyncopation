@@ -67,6 +67,17 @@ def django_db_setup(
 
 
 @pytest.fixture(scope="session")
+def lifecycle_configured(django_db_setup: None) -> Iterator[None]:
+    """`configure()` again once the test database name is known (ADR-0004: `ready()` saw the
+    original name); at session end no driver may be left in the registry."""
+    from tests.support.lifecycle import assert_registry_empty_at_session_end, configure_session
+
+    configure_session()
+    yield
+    assert_registry_empty_at_session_end()
+
+
+@pytest.fixture(scope="session")
 def seeded_db(django_db_setup: None, django_db_blocker) -> None:
     with django_db_blocker.unblock():
         reset()

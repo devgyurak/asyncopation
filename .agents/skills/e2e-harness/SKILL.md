@@ -10,6 +10,10 @@ description: End-to-end tests against a real uvicorn process serving the harness
   the pytest test database (seeded and committed), waits for `/health/`, and stops it after the
   session. Server logs are attached to failures.
 - Client: `httpx.AsyncClient(base_url=live_server_url)` via the `http` fixture.
+- Lifespan: the harness ASGI app is wrapped in `LifespanApp` on PostgreSQL (ADR-0004); `GET /diag/pool`
+  returns the server process's registry (`entries`, `server_info`, per-alias `PoolStats`) and the
+  wrapper prints `ASYNCOPATION_DIAG after-shutdown ...` after shutdown. Use the `lifespan_server` /
+  `lifespan_http` fixtures (tests/e2e/conftest.py, tests/support/e2e_server.py) for lifecycle tests.
 
 ## Adding a scenario
 1. Implement the view in all three variants in `harness/site/views.py` (same semantics) and

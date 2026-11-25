@@ -20,8 +20,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from asyncopation._django.postgresql_adapters import adapters_template
 
-# psycopg_pool defaults are min_size=4 / max_size=min_size; these are provisional until the
-# ADR-0004 implementation issue benchmarks pool sizing.
+# psycopg_pool defaults are min_size=4 / max_size=min_size; these are provisional until #8
+# benchmarks pool sizing.
 DEFAULT_POOL_OPTIONS: dict[str, Any] = {"min_size": 1, "max_size": 10}
 
 # OPTIONS["pool"] keys rejected by NAME because the driver passes the same argument itself

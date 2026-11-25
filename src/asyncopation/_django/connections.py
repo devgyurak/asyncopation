@@ -2,9 +2,10 @@
 
 ``compile_scope`` needs ``connections[alias]`` to resolve to the compile-only wrapper while Django
 generates SQL. This module is the only code in ``src/`` allowed to touch ``django.db.connections``,
-and only through three operations: ``connections.__setitem__``, ``connections.__delitem__`` and a
+and only through four operations: ``connections.__setitem__``, ``connections.__delitem__`` and a
 read of the private ``connections._connections`` (to remember the previous wrapper without
-creating a real one). Everything else - ``connections[alias]`` reads, ``.cursor()``,
+creating a real one), plus :func:`configured_databases`, a read of ``connections.settings``
+(ADR-0008 Decision 6, amended for #5a). Everything else - ``connections[alias]`` reads, ``.cursor()``,
 ``ensure_connection``, ``connect``, ``django.db.transaction`` - stays forbidden (guard A102).
 
 The module exposes a single context manager, :func:`swapped`, which yields nothing: the previous
@@ -24,11 +25,12 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import copy
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from typing import Any
 
-__all__ = ["ScopeContextError", "swapped"]
+__all__ = ["ScopeContextError", "configured_databases", "swapped"]
 
 _ABSENT: Any = object()
 
@@ -95,3 +97,17 @@ def _build() -> Callable[[str, Any], AbstractContextManager[None]]:
 
 swapped = _build()
 del _build
+
+
+def configured_databases() -> dict[str, dict[str, Any]]:
+    """Deep copy of Django's *configured* ``DATABASES`` (defaults applied), keyed by alias.
+
+    ``connections.settings`` is the handler's cached ``configure_settings`` result: it fills
+    ``TIME_ZONE``, ``OPTIONS``, ``TEST``, ``CONN_*`` ... in place on ``settings.DATABASES`` the
+    first time it is read, which this call forces. The copy is a snapshot: pytest-django renames
+    ``NAME`` to the test database in place later, so callers re-read after that (ADR-0004,
+    ``configure()``). Pure Python, no I/O, no connection is created.
+    """
+    from django.db import connections
+
+    return copy.deepcopy(connections.settings)

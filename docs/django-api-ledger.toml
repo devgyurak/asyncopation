@@ -182,6 +182,17 @@ tests/unit/django_drift pins them (asgiref is not imported by src, so it has no 
 verified_against = "6.1.3"
 
 [[attribute]]
+owner = "django.utils.connection.BaseConnectionHandler"
+names = ["settings"]
+used_by = ["src/asyncopation/_django/connections.py"]
+reason = """A cached_property: `ConnectionHandler.configure_settings` fills Django's defaults \
+(`TIME_ZONE`, `OPTIONS`, `TEST`, `CONN_*`) in place on `settings.DATABASES` on first read, and \
+pytest-django later renames `NAME` in the same dict. `configured_databases()` deep-copies it so \
+`configure()` (ADR-0004) gets the configured dict `wrapper_for` requires without porting Django's \
+defaulting logic; tests/unit/django_drift pins that the defaults are present."""
+verified_against = "6.1.3"
+
+[[attribute]]
 owner = "django.db.backends.postgresql.base.DatabaseWrapper"
 names = ["pg_version"]
 used_by = ["src/asyncopation/_django/postgresql.py"]

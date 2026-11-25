@@ -111,6 +111,7 @@ root_package = "asyncopation"
 name = "asyncopation layers"
 type = "layers"
 layers = [
+    "asyncopation.apps",
     "asyncopation.testing",
     "asyncopation.query",
     "asyncopation.deletion | asyncopation.prefetch",

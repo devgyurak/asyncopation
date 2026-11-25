@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=8d0c75749fcf -->
+<!-- i18n: source=README.md source-sha256=e28071d09cb0 -->
 # Asyncopation
 
 > **상태: pre-alpha.** 지금 사용할 수 있는 것은 `asyncopation.testing`뿐이다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -20,6 +20,23 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 ```
 
 원문(영어): [README.md](README.md)
+
+## 설정 (PostgreSQL)
+
+앱을 등록하면 `AppConfig.ready()`가 `DATABASES`로부터 async 드라이버를 구성한다. 그리고 ASGI 애플리케이션을 감싸서 시작할 때 풀을 열고 종료할 때 닫는다.
+
+```python
+# settings.py
+INSTALLED_APPS = ["asyncopation", ...]
+
+# asgi.py
+from asyncopation.connection.asgi import LifespanApp
+from django.core.asgi import get_asgi_application
+
+application = LifespanApp(get_asgi_application())
+```
+
+스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 쿼리를 실행해도 동작한다(풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다). MySQL/MariaDB는 아직 지원하지 않는다.
 
 ## 데이터베이스 없이 상위 레이어 테스트하기
 

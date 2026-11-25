@@ -20,6 +20,26 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 
 Translations: [Korean](README-KO.md)
 
+## Setup (PostgreSQL)
+
+Add the app, so that `AppConfig.ready()` configures the async drivers from `DATABASES`, and wrap
+the ASGI application so that the pools are opened at startup and closed at shutdown:
+
+```python
+# settings.py
+INSTALLED_APPS = ["asyncopation", ...]
+
+# asgi.py
+from asyncopation.connection.asgi import LifespanApp
+from django.core.asgi import get_asgi_application
+
+application = LifespanApp(get_asgi_application())
+```
+
+Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
+themselves. A query before `setup()` still works (the pool is opened once, lazily, with a logged
+warning that recommends the lifespan wrapper). MySQL/MariaDB are not supported yet.
+
 ## Testing upper layers without a database
 
 `asyncopation.testing.RecordingDriver` implements the `AsyncDriver` protocol in memory: queue the

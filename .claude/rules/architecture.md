@@ -16,6 +16,7 @@ and it is natively async. Never make `as_sql()` or any expression/lookup method 
 
 ## Layers (imports point downwards only - enforced by import-linter)
 ```
+apps           Django AppConfig entry module (ready() -> connection.configure())
 testing
 query          public facade: aq(), AsyncObjects (aobjects), evaluation methods
 deletion | prefetch   sans-I/O cores (Collector, prefetch_one_level)
@@ -32,7 +33,8 @@ _django        sole importer of non-public Django APIs
   Server version/features are injected into it by `connection/` (ADR-0004); how Django's
   compilers reach it is ADR-0008 (Accepted): a synchronous `compile_scope` swap
   of `connections[alias]` implemented in `_django.connections` (single `swapped` context manager, imported only by
-  `compile/scope.py`), the only A102 exception.
+  `compile/scope.py`; plus the read-only `configured_databases()`, imported only by
+  `connection/lifecycle.py`), the only A102 exceptions.
 - Upper layers talk to drivers only through the `AsyncDriver` protocol. Core code never reads
   vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
   `Capabilities` (ADR-0003).

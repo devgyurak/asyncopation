@@ -73,13 +73,14 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    run in another task), and `async_atomic` exit closes any stream still open on its connection.
    Reading a stream after its transaction ended raises.
 8. **Pools.** Driver pool defaults, configurable per alias in `DATABASES[alias]["OPTIONS"]`; acquire
-   timeout raises `django.db.OperationalError`. Sizing defaults are fixed and benchmarked in the
-   ADR-0004 implementation issue.
+   timeout raises `django.db.OperationalError`. Sizing defaults are fixed and benchmarked in #8
+   (*Amended 2026-11-25 (#5a): moved from the ADR-0004 implementation issue to #8, which needs the
+   read path of #6*).
    *Amended 2026-11-24 (#2, PR #46) - implementation note:* the PostgreSQL driver reuses
    `DATABASES[alias]["OPTIONS"]["pool"]`: `OPTIONS["pool"]` accepts `None`, `True`, `False` or any
    mapping of `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`,
    `timeout`, `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults"
-   (provisional `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async
+   (provisional `min_size=1`, `max_size=10` until the #8 benchmark): the async
    side always pools, a deliberate divergence from Django, where `pool=False` means no pool, and the
    driver ignores `CONN_MAX_AGE`. Other types, unknown keys, `close_returns` unless it is exactly
    `False`, and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes

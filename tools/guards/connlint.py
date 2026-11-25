@@ -15,7 +15,7 @@ Used by ``archlint``; kept apart because the rule set is large. What is rejected
   attribute chain (unpacking, ``for`` targets, containers, arguments, returns, class attributes):
   ``models.base.connections`` could ride along;
 - importing ``asyncopation._django.connections`` anywhere but ``compile/scope.py`` (which may only
-  import ``swapped``), importing the ``asyncopation._django`` package object, using
+  import ``swapped``) and ``connection/lifecycle.py`` (``configured_databases`` only), importing the ``asyncopation._django`` package object, using
   ``asyncopation._django.connections`` or ``swapped`` / ``_swapped`` anywhere else;
 - importing Django's real PostgreSQL wrapper class (``BaseWrapper``, from any module) outside
   ``compile/`` and ``_django/``, renaming it on import (``BaseWrapper as X``) or rebinding it
@@ -35,7 +35,8 @@ Used by ``archlint``; kept apart because the rule set is large. What is rejected
 
 One module is exempt: ``src/asyncopation/_django/connections.py`` may bind ``connections`` inside a
 function and use it only as ``connections[alias] = value``, ``del connections[alias]`` and
-``x = getattr(connections._connections, alias, default)``. The peeked value ``x`` may only be
+``x = getattr(connections._connections, alias, default)``; the reader ``configured_databases`` may
+only ``copy.deepcopy(connections.settings)`` (ADR-0008 Decision 6, amended for #5a). The peeked value ``x`` may only be
 compared with ``is`` / ``is not`` or stored back as ``connections[alias] = x``; no sync connection
 operation (``.cursor()``, ``.connect()``, ...) may appear in the module.
 
@@ -66,11 +67,13 @@ BANNED_NAMES = frozenset(
 )
 CONNECTIONS_MODULE = "src/asyncopation/_django/connections.py"
 CONNECTIONS_IMPORTER = "src/asyncopation/compile/scope.py"
+CONFIGURED_IMPORTER = "src/asyncopation/connection/lifecycle.py"
 PACKAGE = "asyncopation._django"
 CONNECTIONS_TARGET = f"{PACKAGE}.connections"
 POSTGRESQL_TARGET = f"{PACKAGE}.postgresql"
 ADAPTER_TARGET = f"{PACKAGE}.postgresql_adapters"
 SWAP_NAMES = frozenset({"swapped", "_swapped"})
+READER_NAME = "configured_databases"
 # The only modules that may import a backend's real `DatabaseWrapper`, and only as `BaseWrapper`.
 WRAPPER_BOUNDARIES = frozenset(
     {"src/asyncopation/_django/postgresql.py", "src/asyncopation/_django/mysql.py"}
@@ -124,6 +127,7 @@ class _Checker:
         ] in (("postgresql",), ("postgresql.py",))
         self.out: list[Violation] = []
         self.parents = {id(c): p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+        self.reader_allowed: set[int] = set()
         self.roots = _django_roots(tree)
         self.module_paths = module_paths(tree, is_module)
         self.package_roots = _asyncopation_roots(tree)
@@ -294,17 +298,19 @@ class _Checker:
     def _connections_importer(self, node: ast.AST, names: set[str]) -> None:
         if self.exempt:
             return
-        ok = (
-            self.importer
-            and isinstance(node, ast.ImportFrom)
-            and _resolve(self.path, node) == CONNECTIONS_TARGET
-            and names <= {"swapped", "ScopeContextError"}
+        direct = (
+            isinstance(node, ast.ImportFrom) and _resolve(self.path, node) == CONNECTIONS_TARGET
+        )
+        ok = direct and (
+            (self.importer and names <= {"swapped", "ScopeContextError"})
+            or (self.path == CONFIGURED_IMPORTER and names <= {READER_NAME})
         )
         if not ok:
             self.flag(
                 node,
                 "`asyncopation._django.connections` may only be imported by compile/scope.py "
-                "and only for `swapped` (ADR-0008, Decision 6)",
+                f"(for `swapped`) and connection/lifecycle.py (for `{READER_NAME}`) "
+                "(ADR-0008, Decision 6)",
             )
 
     # attributes and getattr -----------------------------------------------------------------
@@ -447,11 +453,43 @@ class _Checker:
                 continue
             uses = [n for n in _own_nodes(func) if _is_name(n, "connections")]
             decorated = any(_is_name(d, "contextmanager") for d in func.decorator_list)
-            if uses and not (func.name == "swapped" and decorated):
+            reader = func.name == READER_NAME and not func.decorator_list
+            if uses and not (func.name == "swapped" and decorated) and not reader:
                 self.flag(
                     func,
-                    f"`{func.name}` uses `connections`: only the `swapped` context manager may",
+                    f"`{func.name}` uses `connections`: only the `swapped` context manager and "
+                    f"the `{READER_NAME}` reader may",
                 )
+            if reader:
+                self._reader_use(func)
+
+    def _reader_use(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """``configured_databases`` may only ``copy.deepcopy(connections.settings)``."""
+        for n in _own_nodes(func):
+            if not _is_name(n, "connections"):
+                continue
+            attr = self.parents.get(id(n))
+            call = self.parents.get(id(attr)) if attr is not None else None
+            ok = (
+                isinstance(attr, ast.Attribute)
+                and attr.attr == "settings"
+                and isinstance(attr.ctx, ast.Load)
+                and isinstance(call, ast.Call)
+                and call.args
+                and call.args[0] is attr
+                and (
+                    _is_name(call.func, "deepcopy")
+                    or (isinstance(call.func, ast.Attribute) and call.func.attr == "deepcopy")
+                )
+            )
+            if not ok:
+                self.flag(
+                    n,
+                    f"`{READER_NAME}` may only use `copy.deepcopy(connections.settings)` "
+                    "(ADR-0008, Decision 6, amended for #5a)",
+                )
+            else:
+                self.reader_allowed.add(id(n))
 
     def _exempt_module(self) -> None:
         tree = self.tree
@@ -484,6 +522,7 @@ class _Checker:
                 and n.slice.id in keys
             ):
                 allowed.add(id(n.value))
+        allowed |= self.reader_allowed
         for n in ast.walk(tree):
             if _is_name(n, "connections") and id(n) not in allowed:
                 self.flag(

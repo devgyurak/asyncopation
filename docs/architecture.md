@@ -28,6 +28,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 
 | Layer | Package | Responsibility | May not |
 |---|---|---|---|
+| 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
 | 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
 | 6 | `asyncopation.deletion`, `asyncopation.prefetch` | async `Collector`, async `prefetch_related` as sans-I/O cores | import each other |
@@ -82,7 +83,7 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
 - **Pool options.** `OPTIONS["pool"]` accepts `None`, `True`, `False` or any mapping of
   `psycopg_pool` `AsyncConnectionPool` keyword arguments (`min_size`, `max_size`, `timeout`,
   `max_lifetime`, ...). `None`, `True` and `False` all mean "use the defaults" (provisional
-  `min_size=1`, `max_size=10` until the ADR-0004 implementation benchmark): the async side always
+  `min_size=1`, `max_size=10`; the defaults are decided by benchmark in #8): the async side always
   pools, a deliberate divergence from Django, where `pool=False` means no pool, and the driver
   ignores `CONN_MAX_AGE`. Other types, unknown keys, `close_returns` unless it is exactly `False`,
   and the keys `name`, `configure`, `kwargs`, `conninfo` and `open` (the driver passes those itself)
@@ -144,11 +145,24 @@ connection from another task raises `ConcurrentQueryError`:
 
 ## Lifecycle
 
-Configure in `AppConfig.ready()` (no I/O) -> open drivers per `(alias, loop)` in the ASGI lifespan
+Configure in `AppConfig.ready()` (`asyncopation.apps.AsyncopationConfig`, an entry module above
+every layer; no I/O) -> open drivers per `(alias, loop)` in the ASGI lifespan
 (`asyncopation.connection.asgi.LifespanApp`) -> probe server info once per alias (open -> probe:
 PostgreSQL reads `driver.capabilities`, MySQL/MariaDB run the full `mysql_server_data` query) ->
 close on shutdown, with a lock-guarded lazy fallback:
 [ADR-0004](adr/0004-lifecycle-and-registry.md).
+
+Implementation (`asyncopation.connection`): `configure()` reads Django's *configured* `DATABASES`
+through `_django.connections.configured_databases()` (a deep copy; Django fills the defaults in
+place) and may be called again until a driver is open (the test runner renames `NAME` after
+`ready()`); `engines` maps an ENGINE to its driver factory / probe / injection and imports psycopg
+lazily, so `import asyncopation` imports no driver; `registry` holds drivers by `(alias, loop)`,
+server info by alias, read-only `PoolStats` and the in-flight statement counter (used by the
+executors, #5b); `lifecycle.ensure_driver(alias)` is the single open path (build -> `open()` ->
+probe -> inject, under a per-`(alias, loop)` lock) shared by `setup()` and the lazy fallback;
+`close(timeout)` refuses new opens, waits for in-flight statements, closes the current loop's
+drivers and keeps the server info. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
+until #7.
 
 ## Harness
 

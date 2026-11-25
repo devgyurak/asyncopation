@@ -3,6 +3,7 @@
 from tests.support.pin_marker import (
     ASGIREF_VERSION_TEST,
     PIN_TESTS,
+    canary_drift_command,
     collected_test_names,
 )
 
@@ -28,8 +29,16 @@ def test_the_canary_selection_keeps_the_asgiref_version_check():
     assert ASGIREF_VERSION_TEST in selected
 
 
-def test_an_unfiltered_collection_sees_the_pin_and_asgiref_tests():
+def test_the_default_selection_sees_the_pin_and_asgiref_tests():
     # when
     everything = collected_test_names("not integration")
     # then
     assert everything >= PIN_TESTS | {ASGIREF_VERSION_TEST}
+
+
+def test_the_canary_runs_the_drift_tests_without_resyncing_and_without_the_pin_tests():
+    # when
+    command = canary_drift_command()
+    # then
+    assert "uv run --no-sync" in command
+    assert '-m "not django_pin"' in command

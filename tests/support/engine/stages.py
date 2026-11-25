@@ -65,6 +65,19 @@ def attribute_values(result: list[Any], attribute: str) -> list[Any]:
     return [getattr(obj, attribute) for obj in result]
 
 
+def cached_related(result: list[Any], name: str) -> list[Any]:
+    """The related object cached on each instance under `name` (None when nothing is cached)."""
+    return [obj._state.fields_cache.get(name) for obj in result]
+
+
+def none_flags(values: list[Any]) -> list[bool]:
+    return [value is None for value in values]
+
+
+def same_object_flags(values: list[Any], expected: Any) -> list[bool]:
+    return [value is expected for value in values]
+
+
 def peer_shape(result: list[Any]) -> tuple[int, int, bool]:
     """(distinct peer lists, length of the first, whether it holds exactly these instances)."""
     lists = [getattr(obj._state, "peers", None) for obj in result]

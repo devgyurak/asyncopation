@@ -9,6 +9,7 @@ synchronous evaluators raise ``SyncEvaluationError`` instead of blocking the eve
 
 from __future__ import annotations
 
+import copy
 import functools
 import inspect
 from typing import Any
@@ -72,7 +73,11 @@ class AsyncQuerySet:
 
     # -- evaluation -------------------------------------------------------------------------
     async def alist(self) -> list[Any]:
-        """Evaluate the QuerySet and return the rows as a list (fills its result cache)."""
+        """Evaluate the QuerySet and return the rows as a list.
+
+        Fills the result cache of the wrapped QuerySet (``aq()`` cloned it, so the QuerySet you passed
+        in is untouched); a second call returns the cache without I/O, as Django's does.
+        """
         return await evaluate_list(self._queryset)
 
     def __aiter__(self) -> Any:
@@ -93,12 +98,36 @@ class AsyncQuerySet:
             return _wrap(self._queryset[key])
         raise _evaluation_error("indexing an aq() QuerySet", "aget")
 
+    def __reduce__(self) -> Any:
+        # QuerySet.__getstate__ evaluates the QuerySet (blocking I/O), so pickling is refused.
+        raise _evaluation_error("pickling an aq() QuerySet")
+
+    def __copy__(self) -> AsyncQuerySet:
+        return AsyncQuerySet(self._queryset.all())  # a clone; copy.copy would evaluate it
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> AsyncQuerySet:
+        return AsyncQuerySet(copy.deepcopy(self._queryset, memo))
+
+    # -- combining ----------------------------------------------------------------------------
+    def __or__(self, other: Any) -> AsyncQuerySet:
+        return _wrap(self._queryset | _unwrap(other))
+
+    def __and__(self, other: Any) -> AsyncQuerySet:
+        return _wrap(self._queryset & _unwrap(other))
+
+    def __xor__(self, other: Any) -> AsyncQuerySet:
+        return _wrap(self._queryset ^ _unwrap(other))
+
     def __repr__(self) -> str:
         # QuerySet.__repr__ evaluates self[:21]; this one never touches the database.
         return f"<AsyncQuerySet of {self._queryset.model._meta.label} using {self._queryset.db!r}>"
 
     # -- proxying -----------------------------------------------------------------------------
     def __getattr__(self, name: str) -> Any:
+        if name == "_queryset" or (name.startswith("__") and name.endswith("__")):
+            # Not proxied: protocol lookups (copy, pickle) and an instance without its slot yet
+            # must not recurse into the QuerySet.
+            raise AttributeError(name)
         if name in _SYNC_EVALUATORS:
             raise _evaluation_error(f"QuerySet.{name}()", _SYNC_EVALUATORS[name])
         if name in _DJANGO_COROUTINES:
@@ -115,6 +144,10 @@ def _proxy(method: Any) -> Any:
         return _wrap(method(*args, **kwargs))
 
     return call
+
+
+def _unwrap(value: Any) -> Any:
+    return value._queryset if isinstance(value, AsyncQuerySet) else value
 
 
 def _wrap(value: Any) -> Any:

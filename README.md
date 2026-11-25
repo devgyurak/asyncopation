@@ -39,7 +39,7 @@ application = LifespanApp(get_asgi_application())
 ```
 
 Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
-themselves. Using a database before `setup()` (the future query path) opens its pool once, lazily, with a logged
+themselves. Using a database before `setup()` (the query path, e.g. `alist()`) opens its pool once, lazily, with a logged
 warning that recommends the lifespan wrapper. `setup()` opens every database whose engine is
 supported and skips the others. MySQL/MariaDB are not supported yet.
 
@@ -87,7 +87,7 @@ MySQL/MariaDB follow.
 
 ## Concurrency and transactions
 
-There is no query API yet, and `async_atomic` (#19) is not available: what follows is the ownership
+Only `alist()` exists so far, and `async_atomic` (#19) is not available: what follows is the ownership
 model they will build on (ADR-0001). Outside a transaction every statement will borrow its own
 pooled connection, so statements run under `asyncio.gather` execute in parallel. Inside an
 `async_atomic` block one connection will be pinned to the task that opened it: using it from

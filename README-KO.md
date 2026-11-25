@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=fff73bfe7a47 -->
+<!-- i18n: source=README.md source-sha256=0c5a2f8bb970 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs).alist()`로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -37,7 +37,7 @@ from django.core.asgi import get_asgi_application
 application = LifespanApp(get_asgi_application())
 ```
 
-스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 데이터베이스를 사용하면(향후의 쿼리 경로) 풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다. `setup()`은 엔진이 지원되는 모든 데이터베이스를 열고 나머지는 건너뛴다. MySQL/MariaDB는 아직 지원하지 않는다.
+스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 데이터베이스를 사용하면(쿼리 경로, 예: `alist()`) 풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다. `setup()`은 엔진이 지원되는 모든 데이터베이스를 열고 나머지는 건너뛴다. MySQL/MariaDB는 아직 지원하지 않는다.
 
 풀을 다른 시작/종료 작업과 함께 사용하려면 앱을 감싸는 대신 직접 작성한 lifespan 핸들러에서 `setup()` / `close()`를 호출한다.
 
@@ -78,7 +78,7 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 
 ## 동시성과 트랜잭션
 
-아직 쿼리 API도 `async_atomic`(#19)도 없다. 아래는 그것들이 기반으로 삼을 소유권 모델(ADR-0001)이다.
+지금은 `alist()`만 있고 `async_atomic`(#19)은 없다. 아래는 그것들이 기반으로 삼을 소유권 모델(ADR-0001)이다.
 트랜잭션 밖에서는 구문마다 풀에서 연결을 따로 빌리므로 `asyncio.gather` 아래의 구문이 병렬로
 실행된다. `async_atomic` 블록 안에서는 연결 하나가 그 블록을 연 태스크에 고정된다. 다른
 태스크(`gather`나 `TaskGroup`의 자식, 블록 안에서 만든 태스크)에서 쓰거나, 구문이나 스트림이 진행

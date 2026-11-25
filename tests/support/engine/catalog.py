@@ -14,6 +14,22 @@ from typing import Any
 from django.db.models import FETCH_PEERS, FETCH_RAISE, F, QuerySet  # ty: ignore[missing-module-member] - missing from django-types
 
 from harness.catalog.models import Author, Book
+from tests.support.seeded import books_manager_of
+
+_KNOWN_AUTHORS: dict[str, Author] = {}
+
+
+def known_author(alias: str) -> Author:
+    """An unsaved author (pk 10) per alias: the known related object of its related manager.
+
+    One per alias (the tests assert on its identity). Assigning it to a book records the alias on
+    its `_state.db`, which a later related manager would use as a routing hint, so every call
+    clears that again.
+    """
+    author = _KNOWN_AUTHORS.setdefault(alias, Author(pk=10, name="known"))
+    author._state.db = None
+    return author
+
 
 type Builder = Callable[[str], QuerySet[Any]]
 type Rows = list[tuple[Any, ...]]
@@ -62,6 +78,11 @@ QUERYSETS: dict[str, Builder] = {
     "values_list": lambda a: Book.objects.using(a).values_list("title", "pages"),
     "values_list_flat": lambda a: Book.objects.using(a).values_list("title", flat=True),
     "values_list_named": lambda a: Book.objects.using(a).values_list("title", "pages", named=True),
+    "author_books": lambda a: books_manager_of(known_author(a)).using(a).all(),
+    "author_books_select_related": lambda a: (
+        books_manager_of(known_author(a)).using(a).select_related("author")
+    ),
+    "author_books_only_title": lambda a: books_manager_of(known_author(a)).using(a).only("title"),
     "book_empty": lambda a: Book.objects.using(a).filter(pk__in=[]),
     "book_filtered": lambda a: Book.objects.using(a).filter(pages=5, published=True),
     "book_for_update": lambda a: Book.objects.using(a).select_for_update(),
@@ -79,6 +100,9 @@ ROWS: dict[str, Rows] = {
     "book_peers": BOOK_ROWS,
     "book_only_raise": [(1, "alpha"), (2, "beta")],
     "author_select_related_publisher": _joined(_author_rows(), PUBLISHER_COLUMNS[:2]),
+    "author_books": BOOK_ROWS,
+    "author_books_select_related": _joined(BOOK_ROWS, AUTHOR_COLUMNS),
+    "author_books_only_title": [(1, "alpha"), (2, "beta")],
     "values": [("alpha", 120), ("beta", 0)],
     "values_list": [("alpha", 120), ("beta", 0)],
     "values_list_flat": [("alpha",), ("beta",)],

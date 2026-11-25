@@ -2,12 +2,16 @@
 
 import pytest
 
+from tests.support.engine.catalog import known_author
 from tests.support.engine.stages import (
     access_error,
     attribute_values,
+    cached_related,
     django_materialized,
     materialized,
+    none_flags,
     peer_shape,
+    same_object_flags,
     snapshots,
 )
 
@@ -21,6 +25,9 @@ CASES = [
     "values_list",
     "values_list_flat",
     "values_list_named",
+    "author_books",
+    "author_books_select_related",
+    "author_books_only_title",
 ]
 
 
@@ -61,7 +68,8 @@ def test_materialize_caches_a_null_select_related_as_none(alias):
     # when
     result = materialized("author_select_related_publisher", alias)
     # then
-    assert attribute_values(result, "publisher") == [attribute_values(result, "publisher")[0], None]
+    assert none_flags(attribute_values(result, "publisher")) == [False, True]
+    assert "publisher" in result[1]._state.fields_cache
 
 
 def test_materialize_applies_field_converters(alias):
@@ -102,3 +110,36 @@ def test_materialize_keeps_loaded_fields_readable_under_fetch_raise(alias):
     result = materialized("book_only_raise", alias)
     # then
     assert attribute_values(result, "title") == ["alpha", "beta"]
+
+
+def test_materialize_sets_the_known_related_object_of_a_related_manager_queryset(alias):
+    # when
+    result = materialized("author_books", alias)
+    # then
+    assert same_object_flags(cached_related(result, "author"), known_author(alias)) == [
+        True,
+        False,
+        True,
+    ]
+
+
+def test_materialize_leaves_the_relation_uncached_for_rows_of_another_parent(alias):
+    # when
+    result = materialized("author_books", alias)
+    # then
+    assert none_flags(cached_related(result, "author")) == [False, True, False]
+
+
+def test_materialize_prefers_the_select_related_object_over_the_known_related_object(alias):
+    # when
+    result = materialized("author_books_select_related", alias)
+    # then
+    assert same_object_flags(cached_related(result, "author"), known_author(alias)) == [False] * 3
+    assert attribute_values(cached_related(result, "author"), "name") == ["ann", "bob", "ann"]
+
+
+def test_materialize_skips_the_known_related_object_when_the_fk_attname_is_deferred(alias):
+    # when
+    result = materialized("author_books_only_title", alias)
+    # then
+    assert none_flags(cached_related(result, "author")) == [True, True]

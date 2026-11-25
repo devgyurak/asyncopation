@@ -6,7 +6,7 @@ from django.db.models import Count
 import asyncopation
 from asyncopation import aq
 from asyncopation.errors import SyncEvaluationError
-from tests.support.aq_wrapper import fresh_books
+from tests.support.aq_wrapper import call_named, fresh_books, sync_evaluator_names
 
 EVALUATORS = [
     pytest.param(lambda w: list(w), id="iter"),
@@ -34,6 +34,15 @@ def test_sync_evaluator_raises_sync_evaluation_error(no_sql, evaluate):
     # when / then
     with pytest.raises(SyncEvaluationError):
         evaluate(wrapper)
+
+
+@pytest.mark.parametrize("name", sync_evaluator_names())
+def test_every_listed_sync_evaluator_raises_sync_evaluation_error(no_sql, name):
+    # given
+    wrapper = aq(fresh_books())
+    # when / then
+    with pytest.raises(SyncEvaluationError):
+        call_named(wrapper, name)
 
 
 def test_sync_evaluation_error_is_a_runtime_error():

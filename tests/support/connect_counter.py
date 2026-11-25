@@ -37,7 +37,8 @@ class AttemptCounter:
 def count_sync_connection_attempts() -> Generator[AttemptCounter]:
     """Count calls to Django's sync connect paths; each attempt also fails loudly.
 
-    TODO(#6): materialization outside the scope is verified when the executor lands.
+    Wrap a whole `alist()` (open, compile, execute and materialize) to prove the pipeline never
+    reaches a sync connection: see `alist_sync_connection_attempts`.
     """
     counter = AttemptCounter()
     with contextlib.ExitStack() as stack:

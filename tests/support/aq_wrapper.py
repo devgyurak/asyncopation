@@ -40,3 +40,39 @@ def book_manager() -> Any:
 
 def fresh_books() -> QuerySet[Book]:
     return Book.objects.all()
+
+
+def sync_evaluator_names() -> list[str]:
+    """Every name the wrapper refuses as a synchronous evaluator (the full `_SYNC_EVALUATORS`)."""
+    from asyncopation.query.queryset import _SYNC_EVALUATORS
+
+    return sorted(_SYNC_EVALUATORS)
+
+
+def related_books_manager() -> Any:
+    """`author.books` of an unsaved author with a primary key (building it needs no database)."""
+    from harness.catalog.models import Author
+    from tests.support.seeded import books_manager_of
+
+    return books_manager_of(Author(pk=1, name="x"))
+
+
+class DuckSource:
+    """Not a Manager or QuerySet: only `get_queryset()` is available."""
+
+    def get_queryset(self) -> QuerySet[Book]:
+        return fresh_books()
+
+
+def has_attribute(wrapper: Any, name: str) -> bool:
+    return hasattr(wrapper, name)
+
+
+def filtered_pair() -> tuple[QuerySet[Book], QuerySet[Book]]:
+    return Book.objects.filter(published=True), Book.objects.filter(pages__gt=100)
+
+
+def sql_of(value: Any) -> str:
+    """SQL of a QuerySet or of a wrapper around one."""
+    queryset = getattr(value, "queryset", value)
+    return str(queryset.query)

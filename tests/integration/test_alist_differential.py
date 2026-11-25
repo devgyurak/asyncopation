@@ -3,15 +3,18 @@
 from functools import partial
 
 import pytest
+from django.db.models import Count
 from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
+from tests.support.alist_cases import manager_differential
 from tests.support.alist_probe import (
     alist_row_count_and_statements,
     alist_statements,
     alist_sync_connection_attempts,
 )
 from tests.support.backends import XFAIL_UNTIL_ASYNCMY
+from tests.support.seeded import books_of, editions_with_keys
 from tests.support.strategies import (
     QuerySetSpec,
     annotated_spec,
@@ -68,10 +71,6 @@ MODEL_BUILDS = [
         id="composite-pk-select-related",
     ),
     pytest.param(
-        lambda: BookEdition.objects.filter(pk__in=[(1, 1), (2, 1), (3, 2)]).order_by("pk"),
-        id="composite-pk-in",
-    ),
-    pytest.param(
         lambda: BookEdition.objects.filter(pk__gt=(0, 0)).order_by("pk"), id="composite-pk-gt"
     ),
 ]
@@ -92,6 +91,18 @@ VALUE_BUILDS = [
     pytest.param(
         lambda: Book.objects.values_list("title", "pages", named=True).order_by("pk"),
         id="values-list-named",
+    ),
+    pytest.param(
+        lambda: Book.objects.values_list(named=True).order_by("pk"),
+        id="values-list-named-no-fields",
+    ),
+    pytest.param(
+        lambda: Book.objects.values("title").extra(select={"x": "1"}).order_by("pk"),
+        id="values-extra-select",
+    ),
+    pytest.param(
+        lambda: Book.objects.values("title").annotate(n=Count("pk")).order_by("title"),
+        id="values-annotate-count",
     ),
     pytest.param(lambda: Book.objects.dates("published_at", "month"), id="dates"),
     pytest.param(lambda: Book.objects.datetimes("published_at", "day"), id="datetimes"),
@@ -141,12 +152,78 @@ async def test_alist_of_values_rows_matches_sync(differential, build):
         pytest.param(BookEdition.objects.all, id="composite-pk"),
     ],
 )
-async def test_alist_returns_rows_in_the_sync_order_and_not_nothing(differential, build):
+async def test_alist_returns_rows_in_the_sync_order(differential, build):
+    # when
+    result = await differential(build)
+    # then
+    assert result.async_outcome.rows == result.sync_outcome.rows
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(Book.objects.all, id="books"),
+        pytest.param(FieldZoo.objects.all, id="field-zoo"),
+        pytest.param(BookEdition.objects.all, id="composite-pk"),
+    ],
+)
+async def test_alist_of_a_seeded_table_returns_rows(differential, build):
     # when
     result = await differential(build)
     # then
     assert len(result.async_outcome.rows) > 0
-    assert result.async_outcome.rows == result.sync_outcome.rows
+
+
+async def test_alist_of_a_composite_pk_in_lookup_matches_sync_and_finds_rows(
+    differential, edition_keys
+):
+    # given
+    build = partial(editions_with_keys, edition_keys)
+    # when
+    result = await differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert len(result.async_outcome.rows) == len(edition_keys)
+    assert result.async_outcome == result.sync_outcome
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda: BookEdition.objects.filter(pk__gt=(0, 0)).order_by("pk"), id="composite-pk-gt"
+        ),
+        pytest.param(
+            lambda: BookEdition.objects.select_related("book").order_by("pk")[:20],
+            id="composite-pk-select-related",
+        ),
+    ],
+)
+async def test_alist_of_composite_pk_queries_finds_rows(differential, build):
+    # when
+    result = await differential(build)
+    # then
+    assert len(result.async_outcome.rows) > 0
+    assert result.async_outcome == result.sync_outcome
+
+
+async def test_alist_of_a_related_manager_queryset_matches_sync(differential, author_with_books):
+    # given
+    build = partial(books_of, author_with_books)
+    # when
+    result = await differential(build)
+    # then
+    assert result.sync_outcome.error is None
+    assert len(result.async_outcome.rows) > 0
+    assert result.async_outcome == result.sync_outcome
+
+
+async def test_alist_of_a_related_manager_matches_sync(async_env, author_with_books):
+    # when
+    result = await manager_differential(author_with_books)
+    # then
+    assert len(result.async_outcome.rows) > 0
+    assert result.async_outcome == result.sync_outcome
 
 
 @given(spec=queryset_specs())

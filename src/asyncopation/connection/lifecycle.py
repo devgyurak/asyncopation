@@ -127,6 +127,11 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         return driver
 
 
+def is_configured_alias(alias: str) -> bool:
+    """Whether ``alias`` is a configured database (whatever its engine); raises when not configured."""
+    return alias in _require_configured()
+
+
 def compile_wrapper(alias: str) -> Any:
     """The compile-only wrapper of ``alias``; its driver must have been opened (``ensure_driver``).
 

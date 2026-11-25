@@ -27,6 +27,9 @@ async def evaluate_list(queryset: Any) -> list[Any]:
     if dq.has_prefetch(queryset):
         raise NotImplementedError("prefetch_related evaluation is not implemented yet (Phase 4)")
     alias = queryset.db
+    if not lifecycle.is_configured_alias(alias):
+        # What `connections[alias]` raises in the sync ORM, so error handling carries over.
+        raise dq.ConnectionDoesNotExist(f"The connection '{alias}' doesn't exist.")
     # Opening first matters: the compile-only wrapper exists only once the alias's server info is
     # known. `pinned` is read right before compiling, after the last await that could change it.
     await lifecycle.ensure_driver(alias)
@@ -34,6 +37,11 @@ async def evaluate_list(queryset: Any) -> list[Any]:
     wrapper = lifecycle.compile_wrapper(alias)
     compiled = compile_query(queryset, wrapper, autocommit=not executor.pinned)
     rows = await execute_multi(compiled, executor)
+    cached = dq.cached_result(queryset)
+    if (
+        cached is not None
+    ):  # a concurrent alist() on this QuerySet finished first: share its objects
+        return list(cached)
     result = materialize(queryset, compiled, rows)
     dq.set_cached_result(queryset, result)
     return list(result)

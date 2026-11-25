@@ -20,8 +20,10 @@ from django.db.models.query import (
     get_related_populators,  # ty: ignore[missing-module-member] - missing from django-types
 )
 from django.db.models.utils import create_namedtuple_class  # ty: ignore[missing-module-member] - missing from django-types
+from django.utils.connection import ConnectionDoesNotExist
 
 __all__ = [
+    "ConnectionDoesNotExist",
     "IterableKind",
     "annotation_col_map",
     "cached_result",

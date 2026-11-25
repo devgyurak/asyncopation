@@ -255,6 +255,13 @@ verified_against = "6.1.3"
 signatures = { _get_from_db = "(model_cls, fetch_mode)", get_related_populators = "(klass_info, select, db, fetch_mode)" }
 
 [[internal]]
+module = "django.utils.connection"
+names = ["ConnectionDoesNotExist"]
+used_by = ["src/asyncopation/_django/query.py", "src/asyncopation/engine/evaluate.py"]
+reason = "Raised by `alist()` for an alias that is not configured, as `connections[alias]` does in the sync ORM, so error handling carries over"
+verified_against = "6.1.3"
+
+[[internal]]
 module = "django.db.models.utils"
 names = ["create_namedtuple_class"]
 used_by = ["src/asyncopation/_django/query.py"]

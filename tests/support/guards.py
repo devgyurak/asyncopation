@@ -51,3 +51,86 @@ def stale_messages(sources: dict[str, str], ledger: Ledger) -> list[str]:
         {path: textwrap.dedent(src) for path, src in sources.items()}, ledger
     )
     return [f"{v.code} {v.message}" for v in violations]
+
+
+PUBLIC_DJANGO_LEDGER = Ledger(
+    public=EMPTY_LEDGER.public
+    | {"django", "django.db.models.query", "django.db.models.base", "django.db.backends"},
+    internal=frozenset(),
+)
+
+
+def distinct_codes(source: str, path: str) -> list[str]:
+    """Distinct guard codes for `source` (a violation may be reported more than once)."""
+    return sorted(set(lint_src_module(source, path=path, ledger=PUBLIC_DJANGO_LEDGER)))
+
+
+MODELS = "from django.db import models\n\n"
+MODEL_CLASS = "from django.db.models import Model\n\n"
+
+_EXEMPT_HEAD = (
+    "from contextlib import contextmanager\n\n"
+    "def _build():\n"
+    "    from django.db import connections\n\n"
+    "    @contextmanager\n"
+    "    def swapped(alias, wrapper):\n"
+)
+_EXEMPT_TAIL = "        yield\n\n    return swapped\n"
+
+
+def in_function(body: str) -> str:
+    """Wrap `body` in the real shape of the exempt module: `_build()` -> `swapped(alias, wrapper)`."""
+    indented = "".join(f"        {line}\n" for line in body.splitlines())
+    return _EXEMPT_HEAD + indented + _EXEMPT_TAIL
+
+
+PEEK = "x = getattr(connections._connections, alias, None)"
+
+
+def with_peek(*lines: str) -> str:
+    """`in_function` body that first peeks into `x`, then runs `lines`."""
+    return in_function("\n".join((PEEK, *lines)))
+
+
+def violations(source: str, path: str, prefix: int = 48) -> list[tuple[str, str]]:
+    """Distinct (code, message prefix) pairs, to tell apart rules that share a code."""
+    found = archlint.check(path, textwrap.dedent(source), PUBLIC_DJANGO_LEDGER)
+    return sorted({(v.code, v.message[:prefix]) for v in found})
+
+
+def has_violation(source: str, path: str, code: str, fragment: str) -> bool:
+    """Whether `source` yields a `code` violation whose message contains `fragment`."""
+    found = archlint.check(path, textwrap.dedent(source), PUBLIC_DJANGO_LEDGER)
+    return any(v.code == code and fragment in v.message for v in found)
+
+
+def rule_outcome(source: str, path: str, code: str, fragment: str) -> tuple[list[str], bool]:
+    """(distinct codes, whether a `code` violation mentions `fragment`): pins code AND rule."""
+    return distinct_codes(source, path), has_violation(source, path, code, fragment)
+
+
+def driver_forms(module: str, name: str) -> dict[str, str]:
+    """The ways to reach ``module.name``: from-import, attribute, constant ``getattr``, and the
+    attribute of a submodule taken from its package with a constant ``getattr``."""
+    parent, _, last = module.rpartition(".")
+    return {
+        "import": f"from {module} import {name}\n",
+        "attribute": f"import {module} as m\n\ndef f():\n    return m.{name}\n",
+        "getattr": f"import {module} as m\n\ndef f():\n    return getattr(m, {name!r})\n",
+        "getattr-chain": (
+            f"import {parent} as m\n\ndef f():\n    return getattr(m, {last!r}).{name}\n"
+        ),
+    }
+
+
+def same_verdict(flagged: bool) -> dict[str, bool]:
+    """The expected ``driver_form_verdicts`` when every form agrees."""
+    return dict.fromkeys(driver_forms("a.b", "c"), flagged)
+
+
+def driver_form_verdicts(module: str, name: str, path: str) -> dict[str, bool]:
+    """Per form, whether an A104 violation is reported for ``module.name`` in ``path``."""
+    return {
+        form: has_violation(source, path, "A104", "")
+        for form, source in driver_forms(module, name).items()
+    }

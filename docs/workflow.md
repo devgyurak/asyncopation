@@ -92,11 +92,11 @@ request and on pushes to `develop` and `main`, so back-merges and bypass merges 
 | Format, lint | ruff | edit hook, `make lint`, pre-commit, CI |
 | Types | ty | `make typecheck`, CI |
 | Layers | import-linter | `make guard`, pre-commit, CI |
-| Architecture rules (A1xx/A2xx, incl. A203: private Django imports only in `asyncopation._django`) | `tools/guards` | edit hook, `make guard`, pre-commit, CI |
+| Architecture rules (A1xx/A2xx, incl. A102: `django.db.connections` only via the `swapped` swap in `_django/connections.py`, imported only by `compile/scope.py`; A103: dynamic imports and introspection attributes; A104: psycopg and the names Django modules re-export from it only in `drivers/` (table in `tools/guards/reexports.py`; adapter helpers via `_django/postgresql_adapters.py`, importable only by `drivers/postgresql`; Django's `mogrify` nowhere); A203: private Django imports only in `asyncopation._django`) | `tools/guards` | edit hook, `make guard`, pre-commit, CI |
 | Test rules: GWT, zero control flow (T1xx-T3xx) | `tools/guards` | same |
 | Language: English + translations (L1xx/L2xx) | `tools/guards` | same |
 | Agent config drift | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
-| Correctness | pytest differential tests on 3 backends | `make test-int`, CI matrix |
+| Correctness | pytest differential tests on 3 backends; `compose_sql` also against the pure-Python psycopg | `make test-int`, `make test-compose-python`, CI matrix |
 | End to end | uvicorn + httpx | `make test-e2e`, CI |
 | Performance | micro + k6 harness | `make bench-micro` / `make bench`, CI (manual / nightly) |
 | Branch flow | GitHub rulesets + `branch-policy.yml` + `CODEOWNERS` | every push / PR to `develop` and `main` |

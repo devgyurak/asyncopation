@@ -31,7 +31,8 @@ _django        sole importer of non-public Django APIs
 - `compile/` never performs I/O: no `async def`, no imports of drivers/connection/transaction.
   Server version/features are injected into it by `connection/` (ADR-0004); how Django's
   compilers reach it is ADR-0008 (Accepted): a synchronous `compile_scope` swap
-  of `connections[alias]` implemented in `_django.connections`, the only A102 exception.
+  of `connections[alias]` implemented in `_django.connections` (single `swapped` context manager, imported only by
+  `compile/scope.py`), the only A102 exception.
 - Upper layers talk to drivers only through the `AsyncDriver` protocol. Core code never reads
   vendor strings: SQL shape comes from the compile-only wrapper's `features`, runtime facts from
   `Capabilities` (ADR-0003).
@@ -43,7 +44,8 @@ _django        sole importer of non-public Django APIs
 
 ## Accepted decisions
 ADR-0001 ownership, 0002 pipeline contracts, 0003 driver contract, 0004 lifecycle, 0005 hooks,
-0006 public API attachment, 0007 sans-I/O ports and `_django` (`docs/adr/`). Code must follow them;
+0006 public API attachment, 0007 sans-I/O ports and `_django`, 0008 compile-only wrapper and
+`compile_scope` (`docs/adr/`). Code must follow them;
 deviating needs a superseding ADR.
 
 ## Forbidden in src/ (tools/guards: A1xx)
@@ -52,6 +54,29 @@ deviating needs a superseding ADR.
 - `django.db.connection(s)`, `django.db.transaction`, `django.db.router` sync machinery.
 - `time.sleep`, `asyncio.run`, `asyncio.get_event_loop`, `run_until_complete`.
 - Sync drivers (`psycopg2`, `MySQLdb`, `pymysql`).
+- Dynamic imports and code evaluation that bypass the import guards: `importlib` (except
+  `from importlib import metadata|resources`), `pkgutil`, `runpy`, `pydoc`, `builtins`,
+  `__import__`, `__builtins__`, `eval` / `exec` / `compile`, and the introspection attributes
+  `__globals__`, `__closure__`, `__wrapped__`, `__self__`, `__import__`, `__builtins__` (A101 / A103).
+- A Django *module* object used as a value (`x = models.base`, `f(models)`, `getattr(models,
+  "base")`): it can re-export `connections`; use attribute access only. Django aliases of the
+  connection machinery are tracked (A102, `tools/guards/connlint.py`).
+- `BaseWrapper` (Django's real PostgreSQL wrapper class) outside `compile/` and `_django/`
+  (Django's `DatabaseWrapper` is imported, as `BaseWrapper`, only by `_django/postgresql.py` /
+  `_django/mysql.py`; gis backends too); `BaseWrapper` is never renamed on import
+  (`BaseWrapper as X`) or rebound (`X = BaseWrapper`), subclassed without `CompileOnlyMixin` first
+  or called; the private swap `_django.connections.swapped` outside `compile/scope.py`;
+  `ConnectionHandler` / `ConnectionRouter` / `load_backend` anywhere (A102).
+- The psycopg names Django modules re-export (`psycopg_any`: `adapt`, `sql`, `ClientCursor`,
+  `errors`, `Jsonb`, ranges; `postgresql.base.Database`, `sql`, `adapters`, ...; the `.Database`
+  attribute) outside `drivers/` (A104, table in `tools/guards/reexports.py`; the same verdict for
+  `from M import n`, `M.n` and `getattr(M, "n")`). Django's own helpers there
+  (`get_adapters_template`, `register_tzloader`) are imported only by
+  `_django/postgresql_adapters.py` (the psycopg driver's `adapters_template`), which only
+  `drivers/postgresql` may import; Django's `mogrify` (it renders through a cursor) is used
+  nowhere, a driver cursor's own `.mogrify` only in `drivers/`.
+- The guards stop code written by accident, not deliberate evasion (introspection, dunders,
+  `sys.modules`, run-time strings): ADR-0008 Decision 6, known limits in `archlint`'s docstring.
 
 ## Django coupling
 Every Django import outside the public modules listed in `docs/django-api-ledger.toml`

@@ -48,6 +48,11 @@ jobs:
             *) make db-up SERVICES=${{ matrix.db }} ;;
           esac
       - run: make test-int
+      - name: compose_sql against the pure-Python psycopg (needs the system libpq)
+        if: matrix.db == 'postgresql'
+        run: |
+          sudo apt-get update && sudo apt-get install -y libpq5
+          make test-compose-python
 
   e2e:
     name: e2e

@@ -18,7 +18,7 @@ import psycopg
 from django.core.exceptions import ImproperlyConfigured
 from psycopg_pool import AsyncConnectionPool
 
-from asyncopation._django.postgresql import adapters_template
+from asyncopation._django.postgresql_adapters import adapters_template
 
 # psycopg_pool defaults are min_size=4 / max_size=min_size; these are provisional until the
 # ADR-0004 implementation issue benchmarks pool sizing.

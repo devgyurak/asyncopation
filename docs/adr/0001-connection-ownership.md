@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
-- Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approved by: maintainer (@devgyurak), to be confirmed in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Django's connections are thread-local (plan §1.3). Asyncopation replaces them with

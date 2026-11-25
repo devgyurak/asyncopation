@@ -4,10 +4,12 @@ import django
 import pytest
 
 from tests.support.django_drift import (
-    PINNED_DJANGO,
     attribute_problem,
     attribute_signature_problem,
+    classifier_problem,
+    django_requirement,
     import_problem,
+    pin_problem,
     ported_problem,
     raw_entry_count,
     signature_problem,
@@ -27,11 +29,22 @@ def test_every_written_ledger_entry_is_loaded():
     assert loaded == written
 
 
-def test_django_is_the_pinned_minor():
+def test_installed_django_satisfies_the_pyproject_pin():
+    # given
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     # when
-    installed = django.VERSION[:2]
+    problem = pin_problem(django_requirement(pyproject), django.__version__)
     # then
-    assert installed == PINNED_DJANGO
+    assert problem is None
+
+
+def test_django_classifiers_match_the_pyproject_pin():
+    # given
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # when
+    problem = classifier_problem(pyproject, django.__version__)
+    # then
+    assert problem is None
 
 
 @pytest.mark.parametrize(("module", "name"), IMPORTED)

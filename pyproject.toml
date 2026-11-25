@@ -12,7 +12,8 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 # We port Django internals (ModelIterable, prefetch_one_level, fetch modes ...), so the
-# minor version is pinned. Widening the range requires re-validating docs/django-api-ledger.toml.
+# minor version is pinned. Widening the range requires re-validating docs/django-api-ledger.toml
+# and updating the `Framework :: Django :: X.Y` classifiers (the drift test checks them).
 dependencies = ["django>=6.1,<6.2"]
 
 [project.optional-dependencies]
@@ -33,6 +34,7 @@ dev = [
     "pyyaml>=6.0",
     "django-types>=0.24.0",
     "pytest-timeout>=2.4.0",
+    "packaging>=26.4",
 ]
 e2e = ["uvicorn[standard]>=0.54", "gunicorn>=27.0", "httpx>=0.28", "psutil>=7.2"]
 # Sync reference driver for MySQL differential tests (the driver Django officially targets).

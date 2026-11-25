@@ -4,6 +4,7 @@ from harness.site import views
 
 urlpatterns = [
     path("health/", views.health),
+    path("diag/pool", views.diag_pool),
     path("sync/book/<int:pk>/", views.sync_book),
     path("sync/dashboard/", views.sync_dashboard),
     path("sync/books-with-authors/", views.sync_books_with_authors),

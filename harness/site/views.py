@@ -15,6 +15,7 @@ Scenarios
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from typing import Any
 
@@ -34,6 +35,20 @@ def _book(b: Book) -> dict[str, Any]:
 # ------------------------------------------------------------------ health (harness self-check)
 async def health(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"db": "ok", "books": await Book.objects.acount()})
+
+
+async def diag_pool(request: HttpRequest) -> JsonResponse:
+    """Registry state of this server process (e2e lifecycle tests, ADR-0004 validation)."""
+    from asyncopation.connection import registry
+
+    aliases = sorted({alias for alias, _ in registry.entries()})
+    return JsonResponse(
+        {
+            "entries": aliases,
+            "server_info": all(registry.server_info(a) is not None for a in aliases),
+            "pool": {a: dataclasses.asdict(registry.pool_stats(a)) for a in aliases},
+        }
+    )
 
 
 # ------------------------------------------------------------------ sync

@@ -33,6 +33,7 @@ dev = [
     "import-linter>=2.17",
     "pyyaml>=6.0",
     "django-types>=0.24.0",
+    "pytest-timeout>=2.4.0",
     "packaging>=26.4",
 ]
 e2e = ["uvicorn[standard]>=0.54", "gunicorn>=27.0", "httpx>=0.28", "psutil>=7.2"]
@@ -98,6 +99,9 @@ addopts = ["--strict-markers", "--strict-config", "-ra", "--reuse-db"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+# A hang (a stuck await, a deadlocked lock) must fail the test, not make the run slow.
+timeout = 120
+timeout_method = "signal"
 markers = [
     "integration: needs a real database (auto-applied under tests/integration)",
     "e2e: boots a real server process (auto-applied under tests/e2e)",
@@ -113,6 +117,7 @@ root_package = "asyncopation"
 name = "asyncopation layers"
 type = "layers"
 layers = [
+    "asyncopation.apps",
     "asyncopation.testing",
     "asyncopation.query",
     "asyncopation.deletion | asyncopation.prefetch",

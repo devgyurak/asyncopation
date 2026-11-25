@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** Only `asyncopation.testing` is usable so far; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -19,6 +19,52 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 ```
 
 Translations: [Korean](README-KO.md)
+
+## Setup (PostgreSQL)
+
+Add the app, so that `AppConfig.ready()` configures the async drivers from `DATABASES`, and wrap
+the ASGI application so that the pools are opened at startup and closed at shutdown
+(`LifespanApp` consumes the `lifespan` scope and does not pass it on; Django's ASGI handler cannot
+handle it):
+
+```python
+# settings.py
+INSTALLED_APPS = ["asyncopation", ...]
+
+# asgi.py
+from asyncopation.connection.asgi import LifespanApp
+from django.core.asgi import get_asgi_application
+
+application = LifespanApp(get_asgi_application())
+```
+
+Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
+themselves. Using a database before `setup()` (the future query path) opens its pool once, lazily, with a logged
+warning that recommends the lifespan wrapper. `setup()` opens every database whose engine is
+supported and skips the others. MySQL/MariaDB are not supported yet.
+
+To combine the pools with other startup/shutdown work, call `setup()` / `close()` from your own
+lifespan handler instead of wrapping the app:
+
+```python
+from contextlib import asynccontextmanager
+
+import asyncopation
+
+
+@asynccontextmanager
+async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
+    await asyncopation.setup()
+    try:
+        yield
+    finally:
+        await asyncopation.close()
+```
+
+**In tests**, a test runner creates the test databases after `ready()` and renames `NAME`. Call
+`asyncopation.configure()` once they exist (for example in a session fixture right after
+`setup_databases`); until then opening a driver fails with `ImproperlyConfigured` instead of
+connecting to the original database.
 
 ## Testing upper layers without a database
 
@@ -64,7 +110,7 @@ make bench                  # k6 load test: WSGI vs ASGI core vs Asyncopation
 make help                   # everything else
 ```
 
-Tooling: uv, pytest (+ pytest-asyncio, pytest-django, Hypothesis), ruff (format + lint),
+Tooling: uv, pytest (+ pytest-asyncio, pytest-django, pytest-timeout, Hypothesis), ruff (format + lint),
 ty (types), import-linter (layers), project guards in `tools/guards`, k6 (load).
 
 ## Working with coding agents

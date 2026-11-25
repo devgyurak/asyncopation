@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=8d0c75749fcf -->
+<!-- i18n: source=README.md source-sha256=22721bfc3192 -->
 # Asyncopation
 
-> **상태: pre-alpha.** 지금 사용할 수 있는 것은 `asyncopation.testing`뿐이다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -20,6 +20,43 @@ await books[0].afetch("author")  # loads authors for all peers in one query
 ```
 
 원문(영어): [README.md](README.md)
+
+## 설정 (PostgreSQL)
+
+앱을 등록하면 `AppConfig.ready()`가 `DATABASES`로부터 async 드라이버를 구성한다. 그리고 ASGI 애플리케이션을 감싸서 시작할 때 풀을 열고 종료할 때 닫는다
+(`LifespanApp`은 `lifespan` 스코프를 직접 처리하며 안쪽 앱으로 전달하지 않는다. Django의 ASGI 핸들러는 이를 처리할 수 없다).
+
+```python
+# settings.py
+INSTALLED_APPS = ["asyncopation", ...]
+
+# asgi.py
+from asyncopation.connection.asgi import LifespanApp
+from django.core.asgi import get_asgi_application
+
+application = LifespanApp(get_asgi_application())
+```
+
+스크립트와 테스트는 `await asyncopation.setup()`과 `await asyncopation.close(timeout=10)`을 직접 호출한다. `setup()` 이전에 데이터베이스를 사용하면(향후의 쿼리 경로) 풀이 지연 방식으로 한 번 열리며, lifespan 래퍼 사용을 권장하는 경고가 로그에 남는다. `setup()`은 엔진이 지원되는 모든 데이터베이스를 열고 나머지는 건너뛴다. MySQL/MariaDB는 아직 지원하지 않는다.
+
+풀을 다른 시작/종료 작업과 함께 사용하려면 앱을 감싸는 대신 직접 작성한 lifespan 핸들러에서 `setup()` / `close()`를 호출한다.
+
+```python
+from contextlib import asynccontextmanager
+
+import asyncopation
+
+
+@asynccontextmanager
+async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
+    await asyncopation.setup()
+    try:
+        yield
+    finally:
+        await asyncopation.close()
+```
+
+**테스트에서는** 테스트 러너가 `ready()` 이후에 테스트 데이터베이스를 만들고 `NAME`을 바꾼다. 테스트 데이터베이스가 만들어진 뒤(예를 들어 세션 픽스처에서 `setup_databases` 직후) `asyncopation.configure()`를 한 번 호출한다. 그 전에 드라이버를 열면 원래 데이터베이스에 연결하는 대신 `ImproperlyConfigured`로 실패한다.
 
 ## 데이터베이스 없이 상위 레이어 테스트하기
 
@@ -65,7 +102,7 @@ make bench                  # k6 부하 테스트: WSGI vs ASGI 코어 vs Asynco
 make help                   # 나머지 전부
 ```
 
-도구: uv, pytest (+ pytest-asyncio, pytest-django, Hypothesis), ruff (포맷 + 린트),
+도구: uv, pytest (+ pytest-asyncio, pytest-django, pytest-timeout, Hypothesis), ruff (포맷 + 린트),
 ty (타입), import-linter (레이어), `tools/guards`의 프로젝트 가드, k6 (부하).
 
 ## 코딩 에이전트와 함께 작업하기

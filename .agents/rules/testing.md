@@ -28,6 +28,9 @@ comprehensions are forbidden anywhere in a test module - no exceptions, no suppr
 - Setup logic -> fixtures in `conftest.py` or helpers in `tests/support/`.
 - Iterating an async iterator -> `await collect(aiter)` from `tests/support`.
 - No `sleep` in tests; await a condition via a support helper.
+- Every test has a 120 s `pytest-timeout` (signal method, `pyproject.toml`): a hang fails the test
+  instead of making the run slow. Give a test its own tighter bound with `@pytest.mark.timeout(n)`;
+  never raise the global one to hide a hang.
 
 ## Layout
 | Dir | Needs | Notes |

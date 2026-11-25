@@ -36,7 +36,7 @@ CONFIGS = {
     "asgi-core": ("/core", ["uvicorn", "harness.site.asgi:application", "--workers", "{workers}",
                             "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "off"]),
     "asyncopation": ("/aopt", ["uvicorn", "harness.site.asgi:application", "--workers", "{workers}",
-                               "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "off"]),
+                               "--host", "{host}", "--port", "{port}", "--no-access-log", "--lifespan", "on"]),
 }  # fmt: skip
 # (method, path) used to probe availability and to warm up each scenario.
 PROBES = {
@@ -172,6 +172,11 @@ async def run_one(
     config: str, scenario: str, args: argparse.Namespace, pk_range: tuple[int, int]
 ) -> dict[str, Any]:
     prefix, template = CONFIGS[config]
+    if config == "asyncopation" and args.vendor != "postgresql":
+        # `--lifespan on` needs LifespanApp, which the harness wires on PostgreSQL only (no async
+        # MySQL/MariaDB driver until #7); starting it would abort uvicorn and the whole run.
+        row = {"config": config, "scenario": scenario}
+        return row | {"status": "unavailable", "reason": f"no async driver for {args.vendor} yet"}
     host = "127.0.0.1" if shutil.which("k6") else "0.0.0.0"  # docker k6 must reach the host
     cmd = [part.format(workers=args.workers, host=host, port=args.port) for part in template]
     base = f"http://127.0.0.1:{args.port}"
@@ -182,7 +187,10 @@ async def run_one(
     )
     row: dict[str, Any] = {"config": config, "scenario": scenario, "server_log": log_path.name}
     try:
-        await wait_healthy(base, proc)
+        try:
+            await wait_healthy(base, proc)
+        except (RuntimeError, TimeoutError) as exc:  # keep the other rows of the run
+            return row | {"status": "error", "reason": f"server did not start: {exc}"}
         method, path = PROBES[scenario]
         url = base + prefix + path.format(pk=pk_range[0])
         payload = {"book": pk_range[0], "quantity": 1}

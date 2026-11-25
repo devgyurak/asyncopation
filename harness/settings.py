@@ -51,6 +51,7 @@ TIME_ZONE = "UTC"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 INSTALLED_APPS = [
+    "asyncopation",
     "django.contrib.contenttypes",
     "harness.catalog",
 ]

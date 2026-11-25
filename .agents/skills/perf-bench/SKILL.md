@@ -49,6 +49,7 @@ make bench BENCH_ARGS="--configs wsgi,asgi-core,asyncopation --scenarios single,
 ```
 `bench/run.py` per config: prepares `bench_asyncopation` DB (create + seed), starts the server
 (gunicorn for `wsgi`, uvicorn for ASGI configs, same worker count), waits for `/health/`,
+uses `--lifespan on` for the `asyncopation` config on PostgreSQL (its pools are opened at startup by `LifespanApp`, ADR-0004, so the first requests do not pay for the open and the probe) and `--lifespan off` for `asgi-core` (it does not use the registry). On MySQL/MariaDB the `asyncopation` config is reported `unavailable` (no async driver until #7), and a server that fails to start is reported as an `error` row instead of aborting the run. The runner
 samples DB connections (`pg_stat_activity` / `information_schema.processlist`) and server RSS
 every 250 ms, runs k6 in docker (`docker compose --profile bench run k6`), and writes
 `bench/results/load-<ts>.json` plus a markdown table to stdout.

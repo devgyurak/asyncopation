@@ -13,6 +13,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+from harness.settings import VENDOR
+from tests.support.e2e_server import ServerProcess, start_server
+from tests.support.lifecycle.postgres import new_application_name
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -74,3 +78,24 @@ def book_pk(readonly_db: None) -> int:
     from harness.catalog.models import Book
 
     return Book.objects.order_by("pk").values_list("pk", flat=True)[0]
+
+
+@pytest.fixture
+def lifespan_server(seeded_db: None, tmp_path) -> Iterator[ServerProcess]:
+    """A fresh uvicorn with `--lifespan on` per test; stopped (gracefully) at teardown."""
+    from django.db import connection
+
+    server = start_server(
+        connection.settings_dict["NAME"],
+        tmp_path,
+        new_application_name(),
+        lifespan="on" if VENDOR == "postgresql" else "off",
+    )
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+async def lifespan_http(lifespan_server: ServerProcess) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(base_url=lifespan_server.url, timeout=10) as client:
+        yield client

@@ -93,7 +93,7 @@ def test_the_boundary_module_exports_only_its_public_names():
     # when
     exported = boundary_module.__all__
     # then
-    assert exported == ["ScopeContextError", "swapped"]
+    assert exported == ["ScopeContextError", "configured_databases", "swapped"]
 
 
 def test_the_bodys_exception_is_not_replaced_by_the_restore(alias):

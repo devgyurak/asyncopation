@@ -15,7 +15,10 @@ Used by ``archlint``; kept apart because the rule set is large. What is rejected
   attribute chain (unpacking, ``for`` targets, containers, arguments, returns, class attributes):
   ``models.base.connections`` could ride along;
 - importing ``asyncopation._django.connections`` anywhere but ``compile/scope.py`` (which may only
-  import ``swapped``), importing the ``asyncopation._django`` package object, using
+  import ``swapped``) and ``connection/lifecycle.py`` (``configured_databases`` only, as one plain from-import: no alias, relative form,
+  re-export, attribute, constant ``getattr`` or string anywhere else; in ``_django/connections.py``
+  ``configured_databases`` and ``_snapshot`` stay one undecorated top-level ``def`` each, the reader
+  parameterless and without nested defs), importing the ``asyncopation._django`` package object, using
   ``asyncopation._django.connections`` or ``swapped`` / ``_swapped`` anywhere else;
 - importing Django's real PostgreSQL wrapper class (``BaseWrapper``, from any module) outside
   ``compile/`` and ``_django/``, renaming it on import (``BaseWrapper as X``) or rebinding it
@@ -35,7 +38,8 @@ Used by ``archlint``; kept apart because the rule set is large. What is rejected
 
 One module is exempt: ``src/asyncopation/_django/connections.py`` may bind ``connections`` inside a
 function and use it only as ``connections[alias] = value``, ``del connections[alias]`` and
-``x = getattr(connections._connections, alias, default)``. The peeked value ``x`` may only be
+``x = getattr(connections._connections, alias, default)``; the reader ``configured_databases`` may
+only ``_snapshot(connections.settings)``, the module's own structure copy (ADR-0008 Decision 6, amended for #5, PR #52). The peeked value ``x`` may only be
 compared with ``is`` / ``is not`` or stored back as ``connections[alias] = x``; no sync connection
 operation (``.cursor()``, ``.connect()``, ...) may appear in the module.
 
@@ -66,11 +70,14 @@ BANNED_NAMES = frozenset(
 )
 CONNECTIONS_MODULE = "src/asyncopation/_django/connections.py"
 CONNECTIONS_IMPORTER = "src/asyncopation/compile/scope.py"
+CONFIGURED_IMPORTER = "src/asyncopation/connection/lifecycle.py"
 PACKAGE = "asyncopation._django"
 CONNECTIONS_TARGET = f"{PACKAGE}.connections"
 POSTGRESQL_TARGET = f"{PACKAGE}.postgresql"
 ADAPTER_TARGET = f"{PACKAGE}.postgresql_adapters"
 SWAP_NAMES = frozenset({"swapped", "_swapped"})
+READER_NAME = "configured_databases"
+SNAPSHOT_NAME = "_snapshot"
 # The only modules that may import a backend's real `DatabaseWrapper`, and only as `BaseWrapper`.
 WRAPPER_BOUNDARIES = frozenset(
     {"src/asyncopation/_django/postgresql.py", "src/asyncopation/_django/mysql.py"}
@@ -124,6 +131,7 @@ class _Checker:
         ] in (("postgresql",), ("postgresql.py",))
         self.out: list[Violation] = []
         self.parents = {id(c): p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+        self.reader_allowed: set[int] = set()
         self.roots = _django_roots(tree)
         self.module_paths = module_paths(tree, is_module)
         self.package_roots = _asyncopation_roots(tree)
@@ -159,7 +167,109 @@ class _Checker:
                 self._module_as_value(node)
         if self.exempt:
             self._exempt_module()
+            self._pinned_bindings()
+        else:
+            self._reader_name_everywhere()
         return self.out
+
+    # the reader name -------------------------------------------------------------------------
+    def _reader_name_everywhere(self) -> None:
+        """`configured_databases` is reachable only by the one plain import in lifecycle.py.
+
+        Everything else naming it is rejected: any other import (also of the lifecycle module's
+        copy), an alias, a relative form, `.configured_databases`, a constant `getattr`, any
+        string equal to the name (`__all__`, subscripts) and a star import of lifecycle.py.
+        """
+        for n in ast.walk(self.tree):
+            if isinstance(n, ast.ImportFrom):
+                plain = (
+                    self.path == CONFIGURED_IMPORTER
+                    and n.level == 0
+                    and n.module == CONNECTIONS_TARGET
+                    and [(a.name, a.asname) for a in n.names] == [(READER_NAME, None)]
+                )
+                star = "*" in {a.name for a in n.names} and _under(
+                    _resolve(self.path, n), "asyncopation.connection.lifecycle"
+                )
+                if (READER_NAME in {a.name for a in n.names} and not plain) or star:
+                    self._reader_flag(n, "import")
+            elif isinstance(n, ast.Attribute) and n.attr == READER_NAME:
+                self._reader_flag(n, "attribute access")
+            elif isinstance(n, ast.Constant) and n.value == READER_NAME:
+                self._reader_flag(n, "string (`getattr`, `__all__`, subscript)")
+            elif isinstance(n, ast.Constant) and n.value in SWAP_NAMES and not self.importer:
+                self.flag(
+                    n, f"the string {n.value!r} names the private swap (ADR-0008, Decision 6)"
+                )
+
+    def _reader_flag(self, node: ast.AST, how: str) -> None:
+        self.flag(
+            node,
+            f"`{READER_NAME}` is private: only connection/lifecycle.py may import it, once, as "
+            f"`from asyncopation._django.connections import {READER_NAME}` ({how}; ADR-0008, "
+            "Decision 6)",
+        )
+
+    def _pinned_bindings(self) -> None:
+        """In the exempt module `_snapshot` and the reader are each one top-level plain `def`."""
+        top = {id(n) for n in self.tree.body}
+        for name in (SNAPSHOT_NAME, READER_NAME):
+            for n in ast.walk(self.tree):
+                if self._binds(n, name) and not (
+                    isinstance(n, ast.FunctionDef)
+                    and id(n) in top
+                    and not n.decorator_list
+                    and self._sole_def(name)
+                ):
+                    self.flag(n, f"`{name}` must stay one undecorated top-level `def` (ADR-0008)")
+                if isinstance(n, ast.Constant) and n.value == name and name == SNAPSHOT_NAME:
+                    self.flag(n, f"the string {name!r} could rebind it by name")
+        for n in self.tree.body:
+            if isinstance(n, ast.FunctionDef) and n.name == READER_NAME:
+                self._reader_shape(n)
+
+    def _sole_def(self, name: str) -> bool:
+        return (
+            sum(
+                1
+                for n in ast.walk(self.tree)
+                if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+                and n.name == name
+            )
+            == 1
+        )
+
+    @staticmethod
+    def _binds(node: ast.AST, name: str) -> bool:
+        """Whether `node` binds, rebinds, deletes or declares `name` (any form)."""
+        match node:
+            case ast.Name(id=i, ctx=ast.Store() | ast.Del()):
+                return i == name
+            case ast.FunctionDef(name=i) | ast.AsyncFunctionDef(name=i) | ast.ClassDef(name=i):
+                return i == name
+            case ast.arg(arg=i):
+                return i == name
+            case ast.Global(names=ns) | ast.Nonlocal(names=ns):
+                return name in ns
+            case ast.Import(names=al) | ast.ImportFrom(names=al):
+                return any((a.asname or a.name).split(".")[0] == name for a in al)
+            case ast.ExceptHandler(name=i) | ast.MatchAs(name=i) | ast.MatchStar(name=i):
+                return i == name
+            case ast.MatchMapping(rest=i):
+                return i == name
+            case ast.TypeVar(name=i) | ast.ParamSpec(name=i) | ast.TypeVarTuple(name=i):
+                return i == name
+        return False
+
+    def _reader_shape(self, func: ast.FunctionDef) -> None:
+        a = func.args
+        if a.posonlyargs or a.args or a.vararg or a.kwonlyargs or a.kwarg or a.defaults:
+            self.flag(func, f"`{READER_NAME}` takes no parameters")
+        for n in ast.walk(func):
+            if n is not func and isinstance(
+                n, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+            ):
+                self.flag(n, f"`{READER_NAME}` must not define nested functions or classes")
 
     def _module_as_value(self, node: ast.Name) -> None:
         """A Django module object (``models``, ``django``) may only be used as an attribute base.
@@ -294,17 +404,19 @@ class _Checker:
     def _connections_importer(self, node: ast.AST, names: set[str]) -> None:
         if self.exempt:
             return
-        ok = (
-            self.importer
-            and isinstance(node, ast.ImportFrom)
-            and _resolve(self.path, node) == CONNECTIONS_TARGET
-            and names <= {"swapped", "ScopeContextError"}
+        direct = (
+            isinstance(node, ast.ImportFrom) and _resolve(self.path, node) == CONNECTIONS_TARGET
+        )
+        ok = direct and (
+            (self.importer and names <= {"swapped", "ScopeContextError"})
+            or (self.path == CONFIGURED_IMPORTER and names <= {READER_NAME})
         )
         if not ok:
             self.flag(
                 node,
                 "`asyncopation._django.connections` may only be imported by compile/scope.py "
-                "and only for `swapped` (ADR-0008, Decision 6)",
+                f"(for `swapped`) and connection/lifecycle.py (for `{READER_NAME}`) "
+                "(ADR-0008, Decision 6)",
             )
 
     # attributes and getattr -----------------------------------------------------------------
@@ -447,11 +559,55 @@ class _Checker:
                 continue
             uses = [n for n in _own_nodes(func) if _is_name(n, "connections")]
             decorated = any(_is_name(d, "contextmanager") for d in func.decorator_list)
-            if uses and not (func.name == "swapped" and decorated):
+            reader = func.name == READER_NAME and not func.decorator_list
+            if uses and not (func.name == "swapped" and decorated) and not reader:
                 self.flag(
                     func,
-                    f"`{func.name}` uses `connections`: only the `swapped` context manager may",
+                    f"`{func.name}` uses `connections`: only the `swapped` context manager and "
+                    f"the `{READER_NAME}` reader may",
                 )
+            if reader:
+                self._reader_use(func)
+
+    def _snapshot_binding(self) -> None:
+        """``_snapshot`` must be the module's own ``def`` (not imported or rebound)."""
+        defs = [
+            n for n in self.tree.body if isinstance(n, ast.FunctionDef) and n.name == SNAPSHOT_NAME
+        ]
+        if not defs:
+            self.flag(self.tree, f"the reader needs the module's own `def {SNAPSHOT_NAME}`")
+        for n in ast.walk(self.tree):
+            imported = isinstance(n, ast.Import | ast.ImportFrom) and any(
+                (a.asname or a.name).split(".")[0] == SNAPSHOT_NAME for a in n.names
+            )
+            rebound = _single_name_target(n) == SNAPSHOT_NAME
+            if imported or rebound:
+                self.flag(n, f"`{SNAPSHOT_NAME}` must stay the module's own function")
+
+    def _reader_use(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        """``configured_databases`` may only ``_snapshot(connections.settings)``."""
+        for n in _own_nodes(func):
+            if not _is_name(n, "connections"):
+                continue
+            attr = self.parents.get(id(n))
+            call = self.parents.get(id(attr)) if attr is not None else None
+            ok = (
+                isinstance(attr, ast.Attribute)
+                and attr.attr == "settings"
+                and isinstance(attr.ctx, ast.Load)
+                and isinstance(call, ast.Call)
+                and call.args
+                and call.args[0] is attr
+                and _is_name(call.func, SNAPSHOT_NAME)
+            )
+            if not ok:
+                self.flag(
+                    n,
+                    f"`{READER_NAME}` may only use `{SNAPSHOT_NAME}(connections.settings)` "
+                    "(ADR-0008, Decision 6, amended for #5, PR #52)",
+                )
+            else:
+                self.reader_allowed.add(id(n))
 
     def _exempt_module(self) -> None:
         tree = self.tree
@@ -465,6 +621,7 @@ class _Checker:
                     n, "the swap module must stay synchronous (the swap never spans an await)"
                 )
         self._swap_functions()
+        self._snapshot_binding()
         for n in ast.walk(tree):
             target = _single_name_target(n)
             value = getattr(n, "value", None)
@@ -484,6 +641,7 @@ class _Checker:
                 and n.slice.id in keys
             ):
                 allowed.add(id(n.value))
+        allowed |= self.reader_allowed
         for n in ast.walk(tree):
             if _is_name(n, "connections") and id(n) not in allowed:
                 self.flag(

@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`_django.transaction` re-exports `TransactionManagementError`, the one name of the banned `django.db.transaction` that guard A101 lets through, only in `_django/transaction.py`); approved by: maintainer (@devgyurak), to be confirmed in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`_django.transaction` re-exports `TransactionManagementError`, the one name of the banned `django.db.transaction` that guard A101 lets through, only in `_django/transaction.py`); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.4 requires rewriting Django code that interleaves I/O and logic as async:

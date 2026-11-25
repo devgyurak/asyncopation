@@ -18,7 +18,7 @@ def test_the_expected_implementation_is_the_lower_cased_variable_or_none(
     monkeypatch, environ, expected
 ):
     # given
-    monkeypatch.setattr("os.environ", environ)
+    monkeypatch.setattr("os.environ", dict(environ))
     # when
     implementation = expected_implementation()
     # then

@@ -96,8 +96,8 @@ A-scoped, concretely:
    like Django on a live connection (checked in the integration tests against psycopg's compiled
    `binary` build and its pure-Python implementation: `make test-compose-python`, run in CI; a
    source-built `c` implementation was not checked). Every other type raises `TypeError` at build
-   time: dates, `bytes`, arrays, ranges and the like, non-finite `Decimal` (the two
-   implementations render the NaN variants differently: the `binary` one `-NaN` as ` -NaN` and
+   time: dates, `bytes`, arrays, ranges and the like, non-finite `Decimal` (the two implementations
+   render the NaN variants differently: the `binary` one `-NaN` as ` -NaN` and
    `NaN123` as `NaN123`, the pure-Python one every such value as `'NaN'::numeric`; `±Infinity`,
    plain NaN and positive sNaN are rendered alike by both, `-sNaN` differs like `-NaN`; all are
    rejected together to keep a single rule), and every *subclass* (`IntEnum`, `TextChoices`,
@@ -109,8 +109,8 @@ A-scoped, concretely:
    `sql` or a value a `UnicodeEncodeError` like live (a string with both reports the surrogate
    first, as the `binary` implementation does; the pure-Python one reports the NUL, so its
    exception class differs from ours), wrong counts and unsupported placeholders are `ValueError`
-   (live: `ProgrammingError`, and `%b` / `%t` render live). Placeholder shapes and the parameter
-   count are checked before any value is rendered.
+   (live: `ProgrammingError`; `TypeError` for `%(name)s` with a list; `%b` / `%t` render live).
+   Placeholder shapes and the parameter count are checked before any value is rendered.
 4. I/O-bearing Django steps are ported as ADR-0007 cores, not reached through the wrapper:
    `Query.get_aggregation` (compile outer query, `Execute`, convert), `QuerySet.exists` /
    `has_results`, and `SQLUpdateCompiler.pre_sql_setup` + `execute_sql` related updates (Phase 5).
@@ -154,11 +154,13 @@ A-scoped, concretely:
    a call argument, `return` / `yield` or a lambda body inside `compile/` / `_django/`, an
    `asyncopation` module object held in a variable (access through it, `m = asyncopation;
    m._django.connections`, is not caught anywhere; inside `_django/` neither is
-   `x = getattr(asyncopation, "_django")`, outside it that is A102; a name bound by an import that
-   reaches `_django` directly is rejected, A102), and a class built with `type(...)`. The guard
-   itself requires a class based on `BaseWrapper` to list `CompileOnlyMixin` before it and rejects
-   calling `BaseWrapper(...)`, and a unit test checks the MRO of every Asyncopation subclass (of
-   any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the scope of that test*). Also known: psycopg objects that an
+   `x = getattr(asyncopation, "_django")`, outside it that is A102; a name an
+   import binds to the `_django` package itself, `from asyncopation import _django` or
+   `import asyncopation._django as d`, is rejected, A102), and a class built with `type(...)`. The
+   guard itself requires a class based on `BaseWrapper` to list `CompileOnlyMixin` before it and
+   rejects calling `BaseWrapper(...)`, and a unit test checks the MRO of every Asyncopation
+   subclass (of any Django backend wrapper) at run time (*Amended 2026-11-24 (#3, PR #45): the
+   scope of that test*). Also known: psycopg objects that an
    `asyncopation.drivers` module re-exports under a public name
    (`from asyncopation.drivers.postgresql import sql`): ADR-0003 forbids that as a convention
    that review enforces, not the guards.

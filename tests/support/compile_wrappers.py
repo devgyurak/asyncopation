@@ -88,8 +88,9 @@ def import_every_wrapper_module(packages: list[str] | None = None) -> list[str]:
     `no_from` fixture pins that); a typo in a module of an installed driver (`psycopg.typos`) is
     read as a missing driver and skipped (a non-empty `skipped_in_this_environment()` shows it).
     A sub-package skipped for a missing driver is not entered, so its children are not scanned;
-    and when `walk_packages` imports a sub-package again, any other error of that second import is
-    swallowed by `onerror` (a sub-package whose import fails only the second time is not reported).
+    and when `walk_packages` imports a sub-package again, any other exception (an `Exception`
+    subclass) of that second import is swallowed by `onerror` (a sub-package whose import fails
+    only the second time is not reported).
     """
     import importlib
     import pkgutil

@@ -63,12 +63,13 @@ class CompileOperations(DatabaseOperations):
     checked before any value is rendered, as psycopg does. Other placeholders and wrong parameter
     counts raise ``ValueError``; ``Mapping`` params raise ``TypeError`` (``%(name)s`` with a list is
     an unsupported placeholder, ``ValueError``). A live connection raises psycopg's
-    ``ProgrammingError`` for wrong counts and renders ``%b`` and ``%t``: the exception classes
-    differ, and these two placeholders are not supported. A NUL character in a string raises
-    ``ValueError`` (a live connection raises psycopg's ``DataError``; matching it would need
-    psycopg), a lone surrogate ``UnicodeEncodeError`` like a live connection. A string with both
-    raises ``UnicodeEncodeError`` (the ``binary`` implementation's order; the pure-Python one
-    reports the NUL first).
+    ``ProgrammingError`` for wrong counts, a ``TypeError`` for ``%(name)s`` with a list, and
+    renders ``%b`` and ``%t``: the exception classes differ, and ``%b`` and ``%t`` are not
+    supported. A NUL character in a string raises ``ValueError`` (a live connection raises
+    psycopg's ``DataError``; matching it would need psycopg), a lone surrogate
+    ``UnicodeEncodeError`` like a live connection. A string with both raises
+    ``UnicodeEncodeError`` (the ``binary`` implementation's order; the pure-Python one reports the
+    NUL first).
     """
 
     def compose_sql(self, sql: str, params: Sequence[Any] | Mapping[str, Any] | None) -> str:

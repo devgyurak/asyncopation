@@ -4,6 +4,7 @@ import pytest
 
 from tests.support.pin_marker import (
     ASGIREF_VERSION_TEST,
+    DRIFT_DIR,
     PIN_TESTS,
     canary_drift_command,
     collected_test_names,
@@ -52,5 +53,14 @@ def test_the_canary_lookup_rejects_a_workflow_without_exactly_one_drift_step(tmp
     # given
     workflow = write_workflow(tmp_path / "ci.yml", drift_steps)
     # when / then
-    with pytest.raises(RuntimeError, match=f"found {drift_steps}"):
+    with pytest.raises(RuntimeError, match=f"found {drift_steps}$"):
         canary_drift_command(workflow)
+
+
+def test_the_canary_lookup_returns_the_single_drift_step_and_ignores_comments(tmp_path):
+    # given
+    comment = f"      # run: uv run pytest {DRIFT_DIR}\n      - run: make lint\n"
+    # when
+    command = canary_drift_command(write_workflow(tmp_path / "ci.yml", 1, comment))
+    # then
+    assert command == f'- run: uv run --no-sync pytest {DRIFT_DIR} -m "not django_pin"'

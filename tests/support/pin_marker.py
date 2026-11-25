@@ -6,6 +6,7 @@ Also reads the canary's drift step out of ``.github/workflows/ci.yml``.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from functools import cache
@@ -24,6 +25,7 @@ PIN_TESTS = frozenset(
 ASGIREF_VERSION_TEST = (
     f"{LEDGER_MODULE}::test_installed_dependency_is_the_version_the_ledger_was_verified_against"
 )
+_RUN_LINE = re.compile(r"^\s*(-\s+)?run:\s")
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 
@@ -43,19 +45,21 @@ def collected_test_names(marker_expression: str) -> frozenset[str]:
 
 
 def canary_drift_command(workflow: Path = CI_WORKFLOW) -> str:
-    """The ``run:`` command of the canary step that runs the drift tests (exactly one)."""
+    """The single-line ``run:`` command of the canary drift step (exactly one; comments ignored)."""
     lines = workflow.read_text(encoding="utf-8").splitlines()
-    matches = [line.strip() for line in lines if "run:" in line and f"pytest {DRIFT_DIR}" in line]
+    matches = [
+        line.strip() for line in lines if _RUN_LINE.match(line) and f"pytest {DRIFT_DIR}" in line
+    ]
     if len(matches) != 1:
         message = f"expected exactly one drift step in {workflow.name}, found {len(matches)}"
         raise RuntimeError(message)
     return matches[0]
 
 
-def write_workflow(path: Path, drift_steps: int) -> Path:
-    """A minimal workflow file with ``drift_steps`` drift ``run:`` lines."""
+def write_workflow(path: Path, drift_steps: int, extra_lines: str = "") -> Path:
+    """A minimal workflow file with ``drift_steps`` drift ``run:`` lines plus ``extra_lines``."""
     step = f'      - run: uv run --no-sync pytest {DRIFT_DIR} -m "not django_pin"\n'
-    path.write_text("steps:\n" + step * drift_steps, encoding="utf-8")
+    path.write_text("steps:\n" + step * drift_steps + extra_lines, encoding="utf-8")
     return path
 
 

@@ -127,6 +127,19 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         return driver
 
 
+def compile_wrapper(alias: str) -> Any:
+    """The compile-only wrapper of ``alias``; its driver must have been opened (``ensure_driver``).
+
+    The server info exists only after the first successful open of the alias (ADR-0004 Decision 2),
+    so asking earlier is a programming error, not a runtime condition.
+    """
+    config = _config(alias)
+    info = registry.server_info(alias)
+    if info is None or config.engine is None:
+        raise RuntimeError(f"asyncopation: {alias!r} is not open; await ensure_driver() first")
+    return config.engine.inject(alias, config.settings_dict, info)
+
+
 async def _discard(driver: AsyncDriver) -> None:
     """Close a driver that must not be kept, to completion even when this task is cancelled again.
 

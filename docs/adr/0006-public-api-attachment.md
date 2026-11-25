@@ -6,6 +6,8 @@
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
+- Amended: 2026-11-25 (#6, PR A) - Decisions 2 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods Django defines on `QuerySet`; `aq()` keeps a pre-filled result cache by not cloning); approved by: maintainer (@devgyurak), to be confirmed in the PR #6 PR A review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
 does not decide how they attach to user models. Real projects use custom managers and QuerySet
@@ -64,6 +66,16 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
 6. `asyncopation.ConcurrentQueryError(RuntimeError)` is public API (ADR-0001 Decision 3); it lives
    in the import-free `asyncopation.errors` and is re-exported at the package root (*added
    2026-11-25 (#5, PR #61)*).
+
+*Amended 2026-11-25 (#6, PR A): `asyncopation.SyncEvaluationError(RuntimeError)` is public API;
+like `ConcurrentQueryError` it lives in the import-free `asyncopation.errors` and is re-exported at
+the root, while `aq` and `AsyncQuerySet` are exported lazily (PEP 562) so `import asyncopation`
+loads neither Django nor a driver. The names that raise `NotImplementedError` are the coroutine
+methods Django defines on `QuerySet` (found by scanning the class, so a Django upgrade that adds
+one is blocked too) minus those implemented. `aq()` wraps a QuerySet that already has a result
+cache without cloning it, because `fetch_mode()` clones and the clone drops the cache; evaluation
+methods fill the wrapped QuerySet's result cache as Django's `alist` does, and a chain re-wraps
+through `aq()`.*
 
 ## Consequences
 + Custom QuerySets, related managers and third-party QuerySet methods work.

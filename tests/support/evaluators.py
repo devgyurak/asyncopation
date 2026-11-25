@@ -24,7 +24,7 @@ class Evaluator:
 
 
 def _aq(qs: QuerySet[Any]) -> Any:
-    from asyncopation import aq  # ty: ignore[missing-module-member] - exists from Phase 1
+    from asyncopation import aq
 
     return aq(qs)
 

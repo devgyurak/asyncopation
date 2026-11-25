@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=6fa5b74e912f -->
+<!-- i18n: source=docs/design/plan.md source-sha256=04e09ed5a889 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -271,8 +271,8 @@ books = await aq(author.book_set.filter(published=True)).alist()
 
 ### Phase 1 체크리스트 (첫 스파이크)
 
-- [ ] `as_sql()` + psycopg `AsyncClientCursor`로 `alist` 동작 확인
-- [ ] `ModelIterable` 로직 이식 (converters → `Model.from_db`)
+- [x] `as_sql()` + async 드라이버로 `alist` 동작 확인: PostgreSQL의 `aq(qs).alist()` (#6 PR A; MySQL/MariaDB 차등 테스트는 MySQL wrapper와 함께, #6 PR C / #7)
+- [x] `ModelIterable` 로직 이식 (converters → `Model.from_db`)과 values / values_list / flat / named 이터러블 (`engine.materialize`, #6 PR A)
 - [x] `as_sql()` 도중 sync 커넥션이 열리는 경로 탐지 (`SynchronousOnlyOperation` 발생 지점 기록) - 스파이크 결과는 ADR-0008에 있음 (#29, ADR-0008 Accepted)
 - [x] 컴파일 전용 `DatabaseWrapper`(PostgreSQL) + 동기 `compile_scope` 교체 (#3, ADR-0008); MySQL/MariaDB 합성 wrapper → #6
 - [x] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입 (PostgreSQL; #5, ADR-0004; MySQL/MariaDB 프로브 → #7)

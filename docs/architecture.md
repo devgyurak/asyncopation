@@ -2,8 +2,9 @@
 
 Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
-the recording driver, and so are the executors (borrowed/pinned connection ownership, #5);
-the MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
+the recording driver, and so are the executors (borrowed/pinned connection ownership, #5) and the first read path
+(`aq(qs).alist()`: compile, execute, materialize; #6 PR A); `aget` / `afirst` / `acount` /
+`aexists` / `aobjects`, the MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0003, 0004, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
@@ -30,7 +31,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 
 | Layer | Package | Responsibility | May not |
 |---|---|---|---|
-| - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`); imports nothing (an import-linter contract keeps it free of `asyncopation` layers, a subprocess import test of Django and the drivers), so `import asyncopation` stays light; re-exported at the package root | import anything |
+| - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`, `SyncEvaluationError`); imports nothing (an import-linter contract keeps it free of `asyncopation` layers, a subprocess import test of Django and the drivers), so `import asyncopation` stays light; re-exported at the package root | import anything |
 | 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
 | 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
@@ -49,6 +50,16 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 QuerySet -> compile (sync) CompiledQuery -> execute (async) rows -> materialize (sync)
             engine + compile               connection + drivers      compiler.results_iter(results=...)
 ```
+
+Implemented for `alist` (#6 PR A): `engine.compiled.compile_query` (inside `compile_scope`,
+`as_sql()` once, `ResultKind.MULTI` / `EMPTY`), `engine.execute.execute_multi` (one `fetch_all` on the
+current executor, trimmed to `col_count` for `extra(select=...)`; EMPTY does no I/O),
+`engine.materialize.materialize` (the ported post-execute iterable code over
+`results_iter(results=[rows])`) and `engine.evaluate.evaluate_list`, which opens the alias first
+(the compile-only wrapper needs its server info) and reads `pinned` just before compiling.
+Materialization runs outside `compile_scope`: converters, `from_db_value` and `Model.from_db` must
+not see the compile-only wrapper (ADR-0008 Decision 2), which the integration tests check by
+counting sync connection attempts.
 
 Stage contracts: [ADR-0002](adr/0002-pipeline-contracts.md). Ported orchestration (prefetch,
 `Collector`, `get_or_create`) is written as generators that yield requests and is driven by one

@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=df46c38fb09f -->
+<!-- i18n: source=README.md source-sha256=fff73bfe7a47 -->
 # Asyncopation
 
-> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있다. 아래 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs).alist()`로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -57,6 +57,24 @@ async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
 ```
 
 **테스트에서는** 테스트 러너가 `ready()` 이후에 테스트 데이터베이스를 만들고 `NAME`을 바꾼다. 테스트 데이터베이스가 만들어진 뒤(예를 들어 세션 픽스처에서 `setup_databases` 직후) `asyncopation.configure()`를 한 번 호출한다. 그 전에 드라이버를 열면 원래 데이터베이스에 연결하는 대신 `ImproperlyConfigured`로 실패한다.
+
+## 데이터 읽기 (PostgreSQL)
+
+`aq()`는 모든 QuerySet 또는 Manager를 감싼다. 평소처럼 체이닝한 뒤 평가를 `await`한다. 평가는
+처음부터 끝까지 비동기다. SQL은 Django가 만들고 네이티브 async 드라이버가 실행한다.
+
+```python
+from asyncopation import aq
+
+books = await aq(Book.objects.filter(published=True).order_by("title")).alist()
+titles = await aq(Book.objects.values_list("title", flat=True)).alist()
+```
+
+`aq()`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
+실행하는 대신 `FieldFetchBlocked`가 발생한다. 동기 평가(`list(aq(qs))`, `aq(qs).get()`,
+`len(...)`)는 `asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`aget`,
+`afirst`, `acount`, `aexists`, `async for` 등)는 `NotImplementedError`를 낸다. 지금은 PostgreSQL의
+`alist()`만 있고 `prefetch_related`는 지원하지 않는다. 나머지 읽기 API와 MySQL/MariaDB는 뒤따른다.
 
 ## 동시성과 트랜잭션
 

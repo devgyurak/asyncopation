@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable; the query API shown below is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs).alist()` reads data on PostgreSQL; the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -65,6 +65,25 @@ async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
 `asyncopation.configure()` once they exist (for example in a session fixture right after
 `setup_databases`); until then opening a driver fails with `ImproperlyConfigured` instead of
 connecting to the original database.
+
+## Reading data (PostgreSQL)
+
+`aq()` wraps any QuerySet or Manager; chain it as usual and await the evaluation. Evaluation is
+asynchronous end to end: Django builds the SQL, a native async driver runs it.
+
+```python
+from asyncopation import aq
+
+books = await aq(Book.objects.filter(published=True).order_by("title")).alist()
+titles = await aq(Book.objects.values_list("title", flat=True)).alist()
+```
+
+`aq()` applies `FETCH_RAISE`: touching an unloaded relation or a deferred field raises
+`FieldFetchBlocked` instead of querying synchronously. Synchronous evaluators (`list(aq(qs))`,
+`aq(qs).get()`, `len(...)`) raise `asyncopation.SyncEvaluationError`, and `a*` methods that are not
+implemented yet (`aget`, `afirst`, `acount`, `aexists`, `async for`, ...) raise `NotImplementedError`.
+Only `alist()` exists so far, on PostgreSQL, without `prefetch_related`; the rest of the read API and
+MySQL/MariaDB follow.
 
 ## Concurrency and transactions
 

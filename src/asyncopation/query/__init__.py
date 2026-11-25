@@ -4,3 +4,7 @@ QuerySet building stays Django's (lazy, no I/O). ``aq()`` wraps any QuerySet or 
 composition and only adds async evaluation (ADR-0006); execution is delegated to
 ``asyncopation.engine``.
 """
+
+from asyncopation.query.queryset import AsyncQuerySet, aq
+
+__all__ = ["AsyncQuerySet", "aq"]

@@ -23,7 +23,7 @@ transaction    async_atomic, savepoints, async on_commit
 connection     executors (borrowed/pinned, `executor.py`), registry (alias, loop), lifecycle, hooks
 drivers | compile
 _django        sole importer of non-public Django APIs (and the one reader of the app registry, `_django.apps`)
-errors         (outside the stack) public exceptions such as ConcurrentQueryError; imports nothing
+errors         (outside the stack) public exceptions such as ConcurrentQueryError, SyncEvaluationError; imports nothing
 ```
 - `drivers/` is the **only** place that imports `psycopg`, `psycopg_pool`, `asyncmy`.
   Postgres and MySQL drivers never import each other.
@@ -90,8 +90,8 @@ the drift test. See the `port-django-internals` skill.
 
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `configure()` / `setup()` /
-`close()`, the ASGI lifespan wrapper, `ConcurrentQueryError` (`asyncopation.errors`, re-exported at the
-root; imports nothing), `observe()` / `intercept()`, fetch-mode constants and
+`close()`, the ASGI lifespan wrapper, `ConcurrentQueryError` and `SyncEvaluationError` (`asyncopation.errors`,
+re-exported at the root; imports nothing; `aq` / `AsyncQuerySet` load lazily so `import asyncopation` stays light), `observe()` / `intercept()`, fetch-mode constants and
 `asyncopation.testing` (`__all__`: `RecordingDriver`, `RecordingConnection`, `Statement`,
 `NoQueuedResult`, `Capabilities`, `ExecResult`). `asyncopation.drivers` is internal and
 experimental, not public API.

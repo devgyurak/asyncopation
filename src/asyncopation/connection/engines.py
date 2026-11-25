@@ -28,8 +28,10 @@ class Engine:
     """Pure and synchronous: derive the alias-level server info from an *open* driver's
     ``capabilities`` (ADR-0004 Decision 2); it runs no query."""
 
-    inject: Callable[[str, dict[str, Any], ServerInfo], None]
-    """``inject(alias, settings_dict, info)``: hand the info to the compile-only wrapper."""
+    inject: Callable[[str, dict[str, Any], ServerInfo], Any]
+    """``inject(alias, settings_dict, info)``: hand the info to the compile-only wrapper and return
+    that wrapper (the registered one is reused while ``settings_dict`` and ``info`` are unchanged,
+    so calling it again is how the engine layer fetches the wrapper to compile with)."""
 
 
 def _postgresql() -> Engine:
@@ -57,10 +59,10 @@ def _postgresql() -> Engine:
         major, minor = driver.capabilities.server_version[:2]
         return PostgreSQLServerInfo(pg_version=major * 10000 + minor)
 
-    def inject(alias: str, settings_dict: dict[str, Any], info: ServerInfo) -> None:
+    def inject(alias: str, settings_dict: dict[str, Any], info: ServerInfo) -> Any:
         if not isinstance(info, PostgreSQLServerInfo):
             raise TypeError(f"expected PostgreSQLServerInfo, got {type(info).__name__}")
-        wrapper_for(alias, settings_dict, info)
+        return wrapper_for(alias, settings_dict, info)
 
     return Engine(prepare, probe, inject)
 

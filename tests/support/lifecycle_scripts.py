@@ -102,3 +102,8 @@ def light_import_script(statement: str) -> str:
 def asyncopation_modules_script(statement: str) -> str:
     """Run `statement`; report the `asyncopation` modules it loaded."""
     return _HEAD + statement + "\n" + _ASYNCOPATION_REPORT
+
+
+def module_loaded_script(statement: str, module: str) -> str:
+    """Run `statement`; report whether `module` ended up in `sys.modules`."""
+    return _HEAD + statement + "\n" + f"print({module!r} in sys.modules)"

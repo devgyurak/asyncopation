@@ -148,7 +148,8 @@ connection from another task raises `ConcurrentQueryError`:
 
 Configure in `AppConfig.ready()` (`asyncopation.apps.AsyncopationConfig`, an entry module above
 every layer; no I/O) -> open drivers per `(alias, loop)` in the ASGI lifespan
-(`asyncopation.connection.asgi.LifespanApp`) -> probe server info once per alias (open -> probe:
+(`asyncopation.connection.asgi.LifespanApp(app)`, which consumes the `lifespan` scope; an app with
+its own lifespan calls `setup()` / `close()` itself) -> probe server info once per alias (open -> probe:
 PostgreSQL reads `driver.capabilities`, MySQL/MariaDB run the full `mysql_server_data` query) ->
 close on shutdown, with a lock-guarded lazy fallback:
 [ADR-0004](adr/0004-lifecycle-and-registry.md).

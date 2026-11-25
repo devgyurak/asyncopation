@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
-- Amended: 2026-11-25 (#5, PR #52) - Decision 1 (`configure()` is re-callable until a driver is open or opening and reads the configured settings through `_django`; `asyncopation.apps` is a top-level entry module; a per-alias preparation failure or unsupported ENGINE is recorded and raised at that alias's first open, never in `ready()`; an open fails closed when `DATABASES` changed since `configure()`), Decision 2 (the probe is a pure synchronous function published with `setdefault`; server info survives `close()`), Decision 3 (`setup()` opens only aliases with a supported engine by default; explicit aliases must be usable; all or nothing for the drivers it opened), Decision 5 (`close(timeout)` semantics, bounded wait for an open in progress, overlapping closes), Decision 7 (`LifespanApp(app, aliases=None)`, the `lifespan` scope is also forwarded to the wrapped app), Consequences (loops that end without `close()`), new Implementation note (pool sizing -> #8, see ADR-0001 D8) and Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#5, PR #52) - Decision 1 (`configure()` is re-callable until a driver is open or opening and reads the configured settings through `_django`; `asyncopation.apps` is a top-level entry module; a per-alias preparation failure or unsupported ENGINE is recorded and raised at that alias's first open, never in `ready()`; an open fails closed when `DATABASES` changed since `configure()`), Decision 2 (the probe is a pure synchronous function published with `setdefault`; server info survives `close()`), Decision 3 (`setup()` opens only aliases with a supported engine by default; explicit aliases must be usable; all or nothing for the drivers it opened), Decision 5 (`close(timeout)` semantics, bounded wait for an open in progress, overlapping closes), Decision 7 (`LifespanApp(app)` consumes the `lifespan` scope and does not forward it; no `aliases` argument), Consequences (loops that end without `close()`), new Implementation note (pool sizing -> #8, see ADR-0001 D8) and Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, re-review after the maintainer's LifespanApp scope decision, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first
@@ -111,12 +111,15 @@ Prior art:
    It exposes read-only pool stats per entry (in use / idle / waiting) for tests and metrics.
 7. **ASGI lifespan wrapper:** `asyncopation.connection.asgi.LifespanApp(django_asgi_app)` handles
    the `lifespan` scope (setup on startup, close on shutdown) and delegates `http` to Django.
-   *Amended 2026-11-25 (#5, PR #52): `LifespanApp(app, aliases=None)` passes `aliases` to
-   `setup()`. The `lifespan` scope is also forwarded to the wrapped app: startup runs `setup()`
-   first and then the app's startup (if that fails, the drivers are closed again and the failure is
-   reported); shutdown runs the app's shutdown first and then `close()`; a `*.failed` reply of the
-   app wins over ours; an app that cannot handle `lifespan` (Django's `ASGIHandler` raises for any
-   scope but `http`) is ignored.*
+   *Amended 2026-11-25 (#5, PR #52): the public surface is `LifespanApp(app)` only. It consumes
+   the `lifespan` scope (startup calls `setup()` and reports `lifespan.startup.failed` on error;
+   shutdown calls `close()` and reports `lifespan.shutdown.failed`, logging the exception) and
+   never forwards it to the wrapped app, because Django's `ASGIHandler` cannot handle `lifespan`
+   (it raises for any scope but `http`) so forwarding has no effect for the default use, and the
+   default scope of `setup()` (aliases with a supported engine; Decision 3) removes the need for
+   an `aliases` argument. Both can be added later without breaking callers. To combine the
+   wrapper with other startup/shutdown work, call `asyncopation.setup()` / `asyncopation.close()`
+   from your own lifespan handler.*
 
 ## Consequences
 + No sync I/O on the SQL generation path, by construction. + One place owns pools.

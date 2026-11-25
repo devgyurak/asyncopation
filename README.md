@@ -23,7 +23,9 @@ Translations: [Korean](README-KO.md)
 ## Setup (PostgreSQL)
 
 Add the app, so that `AppConfig.ready()` configures the async drivers from `DATABASES`, and wrap
-the ASGI application so that the pools are opened at startup and closed at shutdown:
+the ASGI application so that the pools are opened at startup and closed at shutdown
+(`LifespanApp` consumes the `lifespan` scope and does not pass it on; Django's ASGI handler cannot
+handle it):
 
 ```python
 # settings.py
@@ -39,8 +41,25 @@ application = LifespanApp(get_asgi_application())
 Scripts and tests call `await asyncopation.setup()` and `await asyncopation.close(timeout=10)`
 themselves. Using a database before `setup()` (the future query path) opens its pool once, lazily, with a logged
 warning that recommends the lifespan wrapper. `setup()` opens every database whose engine is
-supported and skips the others; pass `LifespanApp(app, aliases=[...])` or `setup(aliases=[...])` to
-choose. MySQL/MariaDB are not supported yet.
+supported and skips the others. MySQL/MariaDB are not supported yet.
+
+To combine the pools with other startup/shutdown work, call `setup()` / `close()` from your own
+lifespan handler instead of wrapping the app:
+
+```python
+from contextlib import asynccontextmanager
+
+import asyncopation
+
+
+@asynccontextmanager
+async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
+    await asyncopation.setup()
+    try:
+        yield
+    finally:
+        await asyncopation.close()
+```
 
 **In tests**, a test runner creates the test databases after `ready()` and renames `NAME`. Call
 `asyncopation.configure()` once they exist (for example in a session fixture right after

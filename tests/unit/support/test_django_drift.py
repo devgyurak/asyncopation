@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from tests.support.django_drift import (
@@ -15,6 +17,7 @@ from tests.support.django_drift import (
     pyproject_text,
     raw_entry_count,
     signature_problem,
+    used_by_problem,
 )
 
 SAMPLE = "tests.support.drift_samples"
@@ -764,3 +767,18 @@ def test_dependency_name_check_reports_a_name_that_is_gone(package, name, fragme
     # then
     assert problem is not None
     assert fragment in problem
+
+
+def test_used_by_check_accepts_an_existing_file():
+    # when
+    problem = used_by_problem(Path(__file__).parent, "test_django_drift.py")
+    # then
+    assert problem is None
+
+
+def test_used_by_check_reports_a_missing_file():
+    # when
+    problem = used_by_problem(Path(__file__).parent, "no_such_file.py")
+    # then
+    assert problem is not None
+    assert "no_such_file.py: file not found" in problem

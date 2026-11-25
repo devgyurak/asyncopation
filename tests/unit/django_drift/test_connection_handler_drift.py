@@ -15,6 +15,7 @@ from tests.support.connection_drift import (
 from tests.support.scope_asyncio import (
     Marker,
     child_install_visibility,
+    child_overwrite_visibility,
     later_task_sees_parent_swap,
     plain_thread_sees_parent_swap,
     sibling_install_visibility,
@@ -27,6 +28,13 @@ async def test_install_in_a_child_task_is_invisible_to_the_parent(alias):
     parent_view, child_view = await child_install_visibility(alias)
     # then
     assert (parent_view, type(child_view)) == (None, Marker)
+
+
+async def test_replacing_an_entry_in_a_child_task_leaves_parent_and_sibling_alone(alias):
+    # when
+    parent_kept, sibling_kept = await child_overwrite_visibility(alias)
+    # then
+    assert (parent_kept, sibling_kept) == (True, True)
 
 
 async def test_install_in_a_task_is_invisible_to_a_sibling_task(alias):

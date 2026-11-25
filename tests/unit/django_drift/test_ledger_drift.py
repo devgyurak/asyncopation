@@ -19,6 +19,7 @@ from tests.support.django_drift import (
     ported_problem,
     raw_entry_count,
     signature_problem,
+    used_by_problem,
 )
 from tools.guards.archlint import LEDGER_PATH, ROOT, Ledger
 
@@ -53,31 +54,40 @@ def test_django_classifiers_match_the_pyproject_pin():
     assert problem is None
 
 
-def test_installed_asgiref_is_the_version_the_ledger_was_verified_against():
+@pytest.mark.parametrize(("package", "verified"), sorted(LEDGER.dependency_versions))
+def test_installed_dependency_is_the_version_the_ledger_was_verified_against(package, verified):
     # when
-    problem = ledger_version_problem(
-        LEDGER.dependency_versions, "asgiref", metadata.version("asgiref")
-    )
+    problem = ledger_version_problem(LEDGER.dependency_versions, package, metadata.version(package))
     # then
     assert problem is None
 
 
-def test_installed_asgiref_satisfies_the_pyproject_requirement():
+@pytest.mark.parametrize(("package", "verified"), sorted(LEDGER.dependency_versions))
+def test_installed_dependency_satisfies_the_pyproject_requirement(package, verified):
     # given
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     # when
     problem = pin_problem(
-        package_requirement(pyproject, "asgiref"), metadata.version("asgiref"), "asgiref"
+        package_requirement(pyproject, package), metadata.version(package), package
     )
     # then
     assert problem is None
 
 
-def test_asgiref_version_in_the_ledger_satisfies_the_pyproject_requirement():
+@pytest.mark.parametrize(("package", "verified"), sorted(LEDGER.dependency_versions))
+def test_verified_dependency_version_satisfies_the_pyproject_requirement(package, verified):
     # given
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     # when
-    problem = ledger_pin_problem(pyproject, LEDGER.dependency_versions, "asgiref")
+    problem = ledger_pin_problem(pyproject, LEDGER.dependency_versions, package)
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(("package", "path"), sorted(LEDGER.dependency_used_by))
+def test_dependency_used_by_file_exists(package, path):
+    # when
+    problem = used_by_problem(ROOT, path)
     # then
     assert problem is None
 

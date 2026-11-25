@@ -101,8 +101,10 @@ def ledger_version_problem(
         return f"{installed!r} / {verified!r}: {exc}"
     if not same:
         return (
-            f"installed {package} {installed} differs from the ledger's {verified}: re-run the "
-            "behaviour pins, then update verified_against"
+            f"installed {package} {installed} differs from the ledger's {verified}: re-read the "
+            "pins in tests/unit/django_drift (test_asgiref_local_drift.py and "
+            "test_connection_handler_drift.py), then update verified_against in the "
+            f"[[dependency]] row of docs/django-api-ledger.toml for {package}"
         )
     return None
 
@@ -120,6 +122,13 @@ def ledger_pin_problem(
         package,
         subject=f"the ledger's {package} {verified}",
     )
+
+
+def used_by_problem(root: Path, path: str) -> str | None:
+    """Why a ``used_by`` path of a ``[[dependency]]`` row does not exist under ``root``."""
+    if (root / path).is_file():
+        return None
+    return f"{path}: file not found (update used_by in the [[dependency]] row)"
 
 
 def dependency_name_problem(package: str, name: str) -> str | None:

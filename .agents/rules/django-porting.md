@@ -32,7 +32,7 @@ paths:
    `Local`, ADR-0008) is a `[[dependency]]` row (`package`, `names` below the package, `used_by`,
    `reason`, `verified_against` = an exact `X.Y.Z`, one row per package). A202 does not apply
    (nothing is imported); the drift test requires the installed version to **equal**
-   `verified_against` and pyproject to carry a floor that admits it: when the lock moves, re-read
+   `verified_against` and pyproject to carry a requirement for the package that admits it: when the lock moves, re-read
    the pinned behaviour tests, then update `verified_against`.
 6. **Differential test every port** against the sync implementation on all backends.
 7. When the `django-main` CI canary breaks, update ports and bump `verified_against`.

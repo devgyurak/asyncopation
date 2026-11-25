@@ -23,7 +23,7 @@
 # `used_by`, `reason` and `verified_against` are required on every entry. Unknown keys, duplicate
 # entries, missing fields and wrong types make the guard fail with a message.
 # A202 flags an [[internal]] item (not `ported`) not imported under _django (any absolute import,
-# asgiref included), a `ported` entry whose `used_by` file is missing or lacks the `# Ported from`
+# including third-party ones), a `ported` entry whose `used_by` file is missing or lacks the `# Ported from`
 # header, and an [[attribute]] name never accessed in src. tests/unit/django_drift checks every entry against Django.
 #
 #   [[dependency]] a third-party package whose runtime behaviour src/ depends on without importing
@@ -32,8 +32,10 @@
 #                 `reason`, `verified_against` (an exact release X.Y.Z; one row per package).
 #                 Not an A201/A202 subject (nothing is imported, so nothing can go stale);
 #                 tests/unit/django_drift checks that every name still resolves, that the
-#                 installed version EQUALS `verified_against` (bump the lock -> re-read the
-#                 behaviour pins, then update it) and that pyproject's floor admits it.
+#                 `used_by` files exist, that the installed version EQUALS `verified_against`
+#                 (bump the lock -> re-read the behaviour pins, then update it) and that
+#                 pyproject's requirement for the package admits both versions. If src starts
+#                 importing the package, move the row to [[internal]].
 #
 # Entry template:
 #   [[internal]]
@@ -50,6 +52,13 @@
 #   used_by = ["src/asyncopation/query/queryset.py"]
 #   reason = "Read to decide fetch-mode behaviour"
 #   verified_against = "6.1.3"
+#
+#   [[dependency]]
+#   package = "asgiref"
+#   names = ["local.Local"]
+#   used_by = ["src/asyncopation/_django/connections.py"]
+#   reason = "Run-time behaviour compile_scope relies on"
+#   verified_against = "3.13.0"
 
 [public]
 modules = [
@@ -231,9 +240,9 @@ running loop it is backed by a contextvar, so the swap is visible to awaited cod
 created afterwards but not to the parent, siblings or any other thread (`asyncio.to_thread`, \
 `sync_to_async` either way, plain threads). src never imports asgiref; the dependency is runtime \
 behaviour, pinned by tests/unit/django_drift/test_asgiref_local_drift.py and \
-test_connection_handler_drift.py. The installed version must EQUAL `verified_against`. Not \
-reproducible on the Python 3.13 test environment and therefore not pinned: with Python 3.14's \
-`thread_inherit_context` (default on free-threaded builds) a new thread inherits the spawning \
-thread's context, and asgiref tags `_Storage` with the owning thread id to keep that data \
-invisible; re-check this case when the matrix gains 3.14."""
+test_connection_handler_drift.py. The installed version must EQUAL `verified_against`. \
+Threads: a thread-critical `Local` keeps one contextvar per thread, so a context a thread \
+inherited (`copy_context().run`, or Python 3.14's `thread_inherit_context`) is not read; \
+the pins cover that case on 3.13 too (the thread-id tagging of `_Storage` belongs to the \
+non-critical `Local`)"""
 verified_against = "3.13.0"

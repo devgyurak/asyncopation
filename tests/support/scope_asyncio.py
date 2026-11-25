@@ -57,6 +57,34 @@ async def sibling_install_visibility(alias: str) -> Any:
     return seen
 
 
+async def child_overwrite_visibility(alias: str) -> tuple[Any, Any]:
+    """(parent's peek, sibling's peek) after a child replaced an entry the parent had installed.
+
+    ``compile_scope`` swaps over an existing wrapper, so the replace must stay in the child.
+    """
+    outer, inner = Marker(), Marker()
+    boundary.install(alias, outer)
+    stored, release = asyncio.Event(), asyncio.Event()
+
+    async def child() -> None:
+        boundary.install(alias, inner)
+        stored.set()
+        await release.wait()
+
+    async def sibling() -> Any:
+        try:
+            await stored.wait()
+            return boundary.peek(alias)
+        finally:
+            release.set()
+
+    try:
+        _, sibling_view = await asyncio.gather(child(), sibling())
+        return boundary.peek(alias) is outer, sibling_view is outer
+    finally:
+        boundary.remove(alias)
+
+
 async def later_task_sees_parent_swap(alias: str) -> tuple[Any, Any]:
     """(installed marker, what a task created afterwards sees)."""
     marker = Marker()

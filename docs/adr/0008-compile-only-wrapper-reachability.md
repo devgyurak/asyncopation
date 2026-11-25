@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak) - accepted 2026-11-24 after the Phase 1 spike (#29)
 - Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-25 (#5, PR #52) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
-- Amended: 2026-11-25 (#49, PR #62) - the `asgiref.local` row of the internal API table and the Validation drift item (asgiref semantics now pinned directly on `Local`, version recorded in a ledger `[[dependency]]` row, `asgiref>=3.13` floor); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #62 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#49, PR #62) - the table introduction and the ledger sentence of the "Django internals" section, the `asgiref.local` row of the internal API table and the Validation drift item (asgiref semantics now pinned directly on `Local`, version recorded in a ledger `[[dependency]]` row, `asgiref>=3.13` floor); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #62 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -304,10 +304,11 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
   `Local(thread_critical=True)` is checked directly: thread-local without a loop, visible to awaited
   code and later tasks inside one, invisible to the parent, siblings, `asyncio.to_thread`,
   `sync_to_async` (both modes) and plain threads, against a `thread_critical=False` control that
-  is visible through `sync_to_async`. Not reproducible on Python 3.13 and so not pinned: Python
-  3.14's `thread_inherit_context` (default on free-threaded builds) lets a new thread inherit the
-  spawning thread's context, which asgiref's thread-id tagging of `_Storage` hides; re-check when
-  3.14 is tested.*
+  is visible through `sync_to_async`. A thread that inherited a copy of the context (`copy_context().run`, or
+  Python 3.14's `thread_inherit_context`) with its own loop does not see the value, because a
+  thread-critical `Local` keeps one contextvar per thread; a write in a child task over a value
+  the parent set (copy-on-write) and a delete in a child stay in that child, deleting an unset
+  name raises `AttributeError`; the `[[dependency]]` `used_by` files exist.*
 - unit (`compile_scope`): restores when the previous wrapper was present, absent, on exception and
   nested (*Amended 2026-11-24 (#3, PR #45): except a scope exited from another Context inside a
   running loop, Decision 1*); no sync connect inside; wrapper `connect` / `ensure_connection` / `_cursor` raise (*Amended 2026-11-24 (#3, PR #45): and `cursor`, `chunked_cursor`, `create_cursor`, `get_new_connection`*);

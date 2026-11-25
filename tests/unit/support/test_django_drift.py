@@ -3,8 +3,12 @@ import pytest
 from tests.support.django_drift import (
     attribute_problem,
     attribute_signature_problem,
+    classifier_problem,
+    django_requirement,
     import_problem,
+    pin_problem,
     ported_problem,
+    pyproject_text,
     raw_entry_count,
     signature_problem,
 )
@@ -214,3 +218,372 @@ def test_raw_entry_count_counts_every_written_name():
     count = raw_entry_count(text)
     # then
     assert count == 3
+
+
+PIN = "django>=6.1,<6.2"
+C61 = ["Framework :: Django", "Framework :: Django :: 6.1"]
+C62 = [*C61, "Framework :: Django :: 6.2"]
+NO_REQUIREMENT = 'name = "demo"'
+BARE = "[project]\ndependencies = [{}]\n"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (pyproject_text(PIN, C61), PIN),
+        (pyproject_text("Django >=6.1, <6.2", C61), "Django >=6.1, <6.2"),
+        (pyproject_text("django[argon2]>=6.1,<6.2", C61), "django[argon2]>=6.1,<6.2"),
+        (pyproject_text("django_stubs>=1", C61), None),
+        (pyproject_text("djangorestframework>=3.15", C61), None),
+        (pyproject_text("django>=6.1,<6.2; python_version<'3.12'", C61), None),
+        (BARE.format('"django<5; python_version<\'3\'", "django>=6.1,<6.2"'), "django>=6.1,<6.2"),
+        (BARE.format('1, "django>=6.1,<6.2"'), "django>=6.1,<6.2"),
+        (BARE.format('"django>=5", "django>=6.1,<6.2"'), "django<6.2,>=5,>=6.1"),
+        (f"[project]\n{NO_REQUIREMENT}\n", None),
+        ("[project]\ndependencies = 1\n", None),
+        ("[project]\ndependencies = [1]\n", None),
+        ('project = "x"\n', None),
+        ("[project\n", None),
+        ("x = " + "[" * 100000, None),
+        ('[project]\nname = "demo"\n[dependency-groups]\ndev = ["django>=6.1,<6.2"]\n', None),
+        (
+            '[project]\nname = "demo"\n[project.optional-dependencies]\nx = ["django>=6.1,<6.2"]\n',
+            None,
+        ),
+    ],
+    ids=[
+        "plain",
+        "normalized-name",
+        "extras",
+        "similar-name",
+        "unrelated-package",
+        "marker-guarded-only",
+        "marker-entry-then-plain",
+        "non-string-entry-then-plain",
+        "duplicate-entries-are-combined",
+        "no-dependencies",
+        "dependencies-not-a-list",
+        "dependencies-without-strings",
+        "project-not-a-table",
+        "malformed-toml",
+        "deeply-nested-toml",
+        "dependency-group-ignored",
+        "optional-dependency-ignored",
+    ],
+)
+def test_django_requirement_is_read_from_the_project_dependencies(text, expected):
+    # when
+    requirement = django_requirement(text)
+    # then
+    assert requirement == expected
+
+
+@pytest.mark.parametrize(
+    ("requirement", "installed"),
+    [
+        (PIN, "6.1.0"),
+        (PIN, "6.1.3"),
+        (PIN, "6.1.1rc1"),
+        ("django>=6.1.2,<6.2", "6.1.3"),
+    ],
+    ids=["lower-bound", "patch", "prerelease-inside-range", "patch-floor"],
+)
+def test_pin_check_accepts_an_installed_version_inside_the_range(requirement, installed):
+    # when
+    problem = pin_problem(requirement, installed)
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    ("requirement", "installed", "fragment"),
+    [
+        (PIN, "6.2.0", "outside the pyproject pin"),
+        (PIN, "6.2.0a1", "outside the pyproject pin"),
+        (PIN, "6.0.9", "outside the pyproject pin"),
+        (PIN, "6.1.0rc1", "outside the pyproject pin"),
+        (None, "6.1.3", "no unconditional django requirement"),
+        ("django", "6.1.3", "does not constrain"),
+        ("django @ https://example.org/django.zip", "6.1.3", "does not constrain"),
+        ("not a requirement!!", "6.1.3", "'not a requirement!!' / '6.1.3'"),
+        (PIN, "abc", "'django>=6.1,<6.2' / 'abc'"),
+    ],
+    ids=[
+        "above-upper-bound",
+        "prerelease-of-next-minor",
+        "below-lower-bound",
+        "prerelease-below-lower-bound",
+        "no-requirement",
+        "unconstrained",
+        "url-requirement",
+        "invalid-requirement",
+        "invalid-version",
+    ],
+)
+def test_pin_check_reports_why_the_installed_version_does_not_satisfy_the_pin(
+    requirement, installed, fragment
+):
+    # when
+    problem = pin_problem(requirement, installed)
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+@pytest.mark.parametrize(
+    ("text", "installed"),
+    [
+        (pyproject_text(PIN, C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.3", C62), "6.2.0"),
+        (pyproject_text(PIN, [*C61, "Programming Language :: Python :: 3"]), "6.1.3"),
+        (pyproject_text(PIN, [*C61, "Framework :: Django :: 6"]), "6.1.3"),
+        (pyproject_text("django>=6.1.2,<6.2", C61), "6.1.3"),
+        (pyproject_text("django>6.1,<6.2", C61), "6.1.3"),
+        (pyproject_text("django~=6.1.2", C61), "6.1.3"),
+        (pyproject_text("django==6.1.3", C61), "6.1.3"),
+        (pyproject_text("django==6.1.*", C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.3,!=6.2.*", C61), "6.1.3"),
+        (pyproject_text("django>=6.1.7,<6.3", C62), "6.2.0"),
+        (pyproject_text("django>=6.1,<=6.2.5", C62), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.3,!=6.2.0.*,!=6.2.1.*,!=6.2.2.*", C62), "6.1.3"),
+        (pyproject_text("django>=6.1,<=6.2", C62), "6.2.0"),
+        (pyproject_text("django>=6.1,<6.2.5", C62), "6.2.0"),
+        (pyproject_text(PIN, [*C61, "Framework :: Django :: 6.1.2"]), "6.1.3"),
+        (
+            BARE.format('"django>=6.1", "django<6.2"')
+            + 'classifiers = ["Framework :: Django :: 6.1"]\n',
+            "6.1.3",
+        ),
+        (pyproject_text("django>=6.1,<6.2,!=7.0.*", C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.2,!=6.99999999", C61), "6.1.3"),
+        (pyproject_text(["django>=5", "django>=6.1,<6.2"], C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<=6.2rc1", C61), "6.1.3"),
+        (pyproject_text(["django>=6.1,<7", "django<6.2"], C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.2,!=6.1.0,!=6.1.1", C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.2,!=1!6.1.5", C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.2,!=6.1.0.*,!=6.1.1.*", C61), "6.1.3"),
+        (pyproject_text("django>=6.1,<6.2,!=6.1.0.*,!=6.1.1.*,!=6.1.2.*", C61), "6.1.3"),
+        (pyproject_text("django>6.1.3,<6.2", C61), "6.1.4"),
+        (pyproject_text("django>=6.1.7,<6.2", C61), "6.1.7"),
+        (pyproject_text("django==6.1.7", C61), "6.1.7"),
+        (pyproject_text("django>6.1.3,<=6.1.9,!=6.1.3.1", C61), "6.1.9"),
+        (pyproject_text("django>=6.1.4,!=6.1.4.*,<6.2", C61), "6.1.5"),
+        (pyproject_text("django~=6.1.4rc1,<=6.1.4", C61), "6.1.4"),
+        (pyproject_text(PIN, [*C61, "Framework :: Django :: \u0666.\u0661"]), "6.1.3"),
+        (
+            pyproject_text(
+                "django>=6.9,<6.11", ["Framework :: Django :: 6.9", "Framework :: Django :: 6.10"]
+            ),
+            "6.9.1",
+        ),
+    ],
+    ids=[
+        "single",
+        "widened-range",
+        "unrelated-classifiers",
+        "major-only-classifier-ignored",
+        "patch-floor",
+        "exclusive-lower-bound",
+        "compatible-release",
+        "exact-version",
+        "wildcard-minor",
+        "excluded-minor",
+        "lower-bound-only-reaches-its-minor",
+        "upper-bound-only-reaches-its-minor",
+        "patch-three-candidate",
+        "inclusive-upper-bound",
+        "patch-upper-bound",
+        "three-part-classifier-ignored",
+        "split-entries-are-combined",
+        "exclusion-outside-range",
+        "huge-exclusion",
+        "redundant-lower-bound",
+        "prerelease-upper-bound-does-not-admit-its-minor",
+        "redundant-upper-bound",
+        "two-patches-excluded",
+        "epoch-only-in-an-exclusion",
+        "wildcard-patches-excluded",
+        "three-wildcard-patches-excluded",
+        "exclusive-lower-patch-bound",
+        "lower-bound-candidate",
+        "exact-patch-candidate",
+        "upper-bound-candidate",
+        "installed-version-candidate",
+        "base-version-candidate",
+        "non-ascii-digit-classifier-ignored",
+        "two-digit-minor",
+    ],
+)
+def test_classifier_check_accepts_classifiers_matching_the_pin(text, installed):
+    # when
+    problem = classifier_problem(text, installed)
+    # then
+    assert problem is None
+
+
+@pytest.mark.parametrize(
+    ("text", "installed", "fragment"),
+    [
+        (pyproject_text(PIN, [*C61, "Framework :: Django :: 6.0"]), "6.1.3", "['6.0'] is outside"),
+        (pyproject_text(PIN, ["Framework :: Django :: 6.0"]), "6.1.3", "['6.0'] is outside"),
+        (
+            pyproject_text("django>=6.1,<6.3", C61),
+            "6.2.0",
+            "no classifier 'Framework :: Django :: 6.2'",
+        ),
+        (
+            pyproject_text("django>=6.1,<6.3", C61),
+            "6.1.3",
+            "no classifier 'Framework :: Django :: 6.2'",
+        ),
+        (
+            pyproject_text("django>=6.8,<6.11", ["Framework :: Django :: 6.8"]),
+            "6.8.1",
+            "'Framework :: Django :: 6.9', 'Framework :: Django :: 6.10'",
+        ),
+        (
+            pyproject_text(
+                PIN, [*C61, "Framework :: Django :: 6.9", "Framework :: Django :: 6.10"]
+            ),
+            "6.1.3",
+            "['6.9', '6.10'] are outside",
+        ),
+        (
+            pyproject_text("django>=6.0,<6.50", ["Framework :: Django :: 6.0"]),
+            "6.1.3",
+            "no classifiers",
+        ),
+        (
+            pyproject_text(PIN, [*C61, "Framework :: Django :: " + "9" * 5000 + ".1"]),
+            "6.1.3",
+            "is outside",
+        ),
+        (
+            pyproject_text("django>=6.1,<6.4", C61),
+            "6.1.3",
+            "no classifiers 'Framework :: Django :: 6.2', 'Framework :: Django :: 6.3'",
+        ),
+        (
+            pyproject_text(PIN, [*C61[:1], "Framework :: Django :: 6.1 "]),
+            "6.1.3",
+            "no classifier 'Framework :: Django :: 6.1'",
+        ),
+        (
+            pyproject_text(PIN, ["Framework :: Django"]),
+            "6.1.3",
+            "no classifier 'Framework :: Django :: 6.1'",
+        ),
+        (
+            BARE.format('"django>=6.1,<6.2"') + "classifiers = [1]\n",
+            "6.1.3",
+            "no classifier 'Framework :: Django :: 6.1'",
+        ),
+        (BARE.format('"django>=6.1,<6.2"'), "6.1.3", "no classifier 'Framework :: Django :: 6.1'"),
+    ],
+    ids=[
+        "classifier-outside-range",
+        "stale-and-missing-reports-stale",
+        "installed-minor-missing",
+        "new-minor-missing-while-older-installed",
+        "numeric-minor-order",
+        "numeric-stale-order",
+        "span-of-50-is-enumerated",
+        "huge-integer-classifier",
+        "several-minors-missing",
+        "trailing-space-classifier-does-not-count",
+        "bare-classifier-only",
+        "non-string-classifier",
+        "no-classifiers-key",
+    ],
+)
+def test_classifier_check_reports_stale_or_missing_classifiers(text, installed, fragment):
+    # when
+    problem = classifier_problem(text, installed)
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+@pytest.mark.parametrize(
+    ("requirement", "fragment"),
+    [
+        ("django>=6.1", "needs both a lower and an upper bound"),
+        ("django<6.2", "needs both a lower and an upper bound"),
+        ("django>=5.2,<6.2", "spans several major versions"),
+        ("django>=6.1,<7", "spans several major versions"),
+        ("django>=6.1,<6.99999999", "spans more than"),
+        ("django~=6.1", "two-part ~="),
+        ("django===6.1.3", "'django===6.1.3': arbitrary equality"),
+        ("django>=6.0,<6.51", "spans more than 50"),
+        ("django==6.*", "major-only == wildcard"),
+    ],
+    ids=[
+        "no-upper-bound",
+        "no-lower-bound",
+        "several-majors",
+        "next-major-bound",
+        "huge-upper-bound",
+        "span-of-51",
+        "two-part-compatible-release",
+        "arbitrary-equality",
+        "major-only-wildcard",
+    ],
+)
+def test_classifier_check_reports_a_pin_whose_minors_cannot_be_enumerated(requirement, fragment):
+    # given
+    text = pyproject_text(requirement, C61)
+    # when
+    problem = classifier_problem(text, "6.1.3")
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+@pytest.mark.parametrize(
+    ("text", "installed", "fragment"),
+    [
+        (pyproject_text(PIN, C61), "6.2.0", "outside the pyproject pin"),
+        (f"[project]\n{NO_REQUIREMENT}\n", "6.1.3", "no unconditional django requirement"),
+        ("[project\n", "6.1.3", "no unconditional django requirement"),
+        (
+            pyproject_text("django>=6.1,<=6.1.*", C61),
+            "6.1.3",
+            "no unconditional django requirement",
+        ),
+        (pyproject_text(PIN, C61), "abc", "'django>=6.1,<6.2' / 'abc'"),
+        (BARE.format('"django>=6.1,<6.2"') + "classifiers = 1\n", "6.1.3", "is not a list"),
+    ],
+    ids=[
+        "installed-outside-pin",
+        "no-requirement",
+        "malformed-toml",
+        "invalid-requirement-entry",
+        "invalid-installed-version",
+        "classifiers-not-a-list",
+    ],
+)
+def test_classifier_check_reports_an_invalid_pyproject_or_pin(text, installed, fragment):
+    # when
+    problem = classifier_problem(text, installed)
+    # then
+    assert problem is not None
+    assert fragment in problem
+
+
+def test_classifier_check_reports_a_pin_with_a_non_zero_epoch():
+    # given
+    text = pyproject_text("django>=1!6.1,<1!6.2", C61)
+    # when
+    problem = classifier_problem(text, "1!6.1.3")
+    # then
+    assert problem is not None
+    assert "non-zero epoch" in problem
+
+
+def test_classifier_check_does_not_find_a_minor_reachable_only_through_unlisted_patches():
+    # given: documented limit of _admitted_minors, pinned so changing it is deliberate
+    text = pyproject_text("django>=6.1,<6.3,!=6.2.0.*,!=6.2.1.*,!=6.2.2.*,!=6.2.3.*", C61)
+    # when
+    problem = classifier_problem(text, "6.1.3")
+    # then
+    assert problem is None

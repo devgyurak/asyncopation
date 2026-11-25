@@ -3,6 +3,7 @@
 from tests.support.alist_cases import (
     alist_cache_placement,
     alist_cache_placement_of_fetch_raise,
+    alist_of_all_after_alist,
     cancelled_alist_then_next,
     concurrent_alists_on_one_wrapper,
     failing_statement,
@@ -12,7 +13,6 @@ from tests.support.alist_cases import (
 )
 from tests.support.backends import (
     POSTGRESQL_ONLY,
-    POSTGRESQL_SQL_ONLY,
     TRIVIAL_BEFORE_ASYNCMY,
     XFAIL_UNTIL_ASYNCMY,
 )
@@ -59,7 +59,7 @@ async def test_gathered_alists_leave_no_connection_in_use(async_env):
     assert outcome.in_use_after == 0
 
 
-@POSTGRESQL_SQL_ONLY
+@XFAIL_UNTIL_ASYNCMY
 async def test_a_cancelled_alist_is_cancelled(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -67,7 +67,7 @@ async def test_a_cancelled_alist_is_cancelled(async_env):
     assert outcome.cancelled is True
 
 
-@POSTGRESQL_SQL_ONLY
+@XFAIL_UNTIL_ASYNCMY
 async def test_a_cancelled_alist_leaves_the_connection_usable_for_the_next_call(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -75,7 +75,7 @@ async def test_a_cancelled_alist_leaves_the_connection_usable_for_the_next_call(
     assert outcome.next_rows == 5
 
 
-@POSTGRESQL_SQL_ONLY
+@XFAIL_UNTIL_ASYNCMY
 async def test_a_cancelled_alist_releases_its_connection(async_env):
     # when
     outcome = await cancelled_alist_then_next()
@@ -167,3 +167,19 @@ async def test_gathered_alists_of_a_union_values_wrapper_leave_its_selected_colu
     outcome = await gathered_union_values_on_one_wrapper()
     # then
     assert outcome.selected_after == outcome.selected_before
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_all_after_alist_on_a_manager_wrapper_issues_a_statement(async_env):
+    # when
+    outcome = await alist_of_all_after_alist()
+    # then
+    assert len(outcome.statements) == 1
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_all_after_alist_on_a_manager_wrapper_returns_the_fresh_rows(async_env):
+    # when
+    outcome = await alist_of_all_after_alist()
+    # then
+    assert outcome.rows == outcome.expected

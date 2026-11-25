@@ -237,3 +237,20 @@ async def alist_after_mutating_the_result(wrapper: Any) -> list[Any]:
     first = await wrapper.alist()
     first.append("mutated")
     return await wrapper.alist()
+
+
+def fill_cache(wrapper: Any) -> Any:
+    """Fill the wrapped QuerySet's cache the way `alist()` does, without a statement."""
+    wrapper.queryset._result_cache = []
+    return wrapper
+
+
+class NotAQuerySetDuckSource:
+    """Not a Manager or QuerySet: `get_queryset()` returns something that is no QuerySet."""
+
+    def get_queryset(self) -> Any:
+        return 42
+
+
+def all_then_filter(wrapper: Any) -> Any:
+    return wrapper.all().filter(published=True)

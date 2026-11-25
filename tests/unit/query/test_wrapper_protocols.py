@@ -16,6 +16,7 @@ from tests.support.aq_wrapper import (
     filtered_pair,
     fresh_books,
     has_attribute,
+    prefilled_manager,
     read_attribute,
     related_books_manager,
     sql_of,
@@ -176,3 +177,27 @@ def test_copying_a_wrapper_over_a_cached_queryset_keeps_the_raise_fetch_mode(no_
     # then
     assert isinstance(duplicated, AsyncQuerySet)
     assert duplicated.queryset._fetch_mode is FETCH_RAISE
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_copy_of_a_prefetched_manager_wrapper_is_a_clone_without_the_cache(no_sql, duplicate):
+    # given
+    manager = prefilled_manager()
+    # when
+    duplicated = duplicate(aq(manager))
+    # then
+    assert duplicated.queryset is not manager.shared
+    assert duplicated.queryset._result_cache is None
+
+
+@pytest.mark.parametrize("duplicate", [copy.copy, copy.deepcopy])
+def test_all_of_a_copy_of_a_prefetched_manager_wrapper_is_a_new_unevaluated_queryset(
+    no_sql, duplicate
+):
+    # given
+    duplicated = duplicate(aq(prefilled_manager()))
+    # when
+    again = duplicated.all()
+    # then
+    assert again.queryset is not duplicated.queryset
+    assert again.queryset._result_cache is None

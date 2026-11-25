@@ -8,11 +8,14 @@ from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
     SHARED_OTHER_MODE,
+    NotAQuerySetDuckSource,
     NotAQuerySetManager,
     SharedDuckSource,
     SharedQuerysetManager,
+    all_then_filter,
     book_manager,
     class_attribute_of,
+    fill_cache,
     foreign_mode_queryset,
     fresh_books,
     prefilled_duck_source,
@@ -182,6 +185,12 @@ def test_aq_of_a_manager_returning_a_non_queryset_raises_type_error():
         aq(NotAQuerySetManager())
 
 
+def test_aq_of_a_duck_typed_source_returning_a_non_queryset_raises_type_error():
+    # when / then
+    with pytest.raises(TypeError, match="QuerySet or a Manager"):
+        aq(NotAQuerySetDuckSource())
+
+
 def test_aq_of_a_plain_queryset_does_not_invent_a_sticky_filter():
     # when
     wrapper = aq(fresh_books())
@@ -205,6 +214,37 @@ def test_all_of_a_manager_wrapper_with_a_prefetch_cache_stays_a_manager_wrapper(
     again = aq(manager).all().all()
     # then
     assert again.queryset is manager.shared
+
+
+def test_all_of_a_manager_wrapper_whose_cache_alist_filled_gives_a_new_queryset():
+    # given
+    manager = SharedQuerysetManager()
+    wrapper = fill_cache(aq(manager))
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset is not wrapper.queryset
+    assert again.queryset._result_cache is None
+
+
+def test_filter_after_all_of_a_prefetched_manager_wrapper_queries_a_clone():
+    # given
+    manager = prefilled_manager()
+    # when
+    filtered = all_then_filter(aq(manager))
+    # then
+    assert filtered.queryset is not manager.shared
+    assert filtered.queryset._result_cache is None
+
+
+def test_filter_after_all_of_a_prefetched_manager_wrapper_leaves_the_cached_queryset_alone():
+    # given
+    manager = prefilled_manager()
+    # when
+    all_then_filter(aq(manager))
+    # then
+    assert manager.shared._result_cache == []
+    assert manager.shared.query.where.children == []
 
 
 def test_all_of_a_filled_queryset_wrapper_gives_a_clone_without_the_cache():

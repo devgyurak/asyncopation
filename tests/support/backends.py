@@ -11,10 +11,6 @@ POSTGRESQL_ONLY = pytest.mark.skipif(
     VENDOR != "postgresql", reason="the asyncmy driver arrives with issue #7"
 )
 
-# PostgreSQL-only for a reason other than the missing driver.
-POSTGRESQL_SQL_ONLY = pytest.mark.skipif(
-    VENDOR != "postgresql", reason="the statement uses pg_sleep, which is PostgreSQL-specific SQL"
-)
 # Before #7 nothing opens a connection or compiles on MySQL/MariaDB, so these would pass trivially
 # there (and strict xfail cannot be used: they do not fail).
 TRIVIAL_BEFORE_ASYNCMY = pytest.mark.skipif(

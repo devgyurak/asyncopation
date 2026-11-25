@@ -73,11 +73,14 @@ class AsyncQuerySet:
     """Wraps a Django QuerySet; created by :func:`aq`, never by hand."""
 
     # `_fresh`: the QuerySet came straight from a manager, so `all()` behaves as `Manager.all()`.
-    __slots__ = ("_fresh", "_queryset")
+    # `_prefetched`: the cache was already filled when `aq()` wrapped it (a prefetched related
+    # manager), so `all()` may share it; a cache `alist()` filled later is never shared.
+    __slots__ = ("_fresh", "_prefetched", "_queryset")
 
-    def __init__(self, queryset: Any, *, fresh: bool = False) -> None:
+    def __init__(self, queryset: Any, *, fresh: bool = False, prefetched: bool = False) -> None:
         self._queryset = queryset
         self._fresh = fresh
+        self._prefetched = prefetched
 
     @property
     def queryset(self) -> Any:
@@ -122,9 +125,10 @@ class AsyncQuerySet:
     def all(self) -> AsyncQuerySet:
         """A new wrapper over a clone. Straight from a manager it behaves as ``Manager.all()``,
         which returns ``get_queryset()`` unchained: the pending sticky filter is kept, and a
-        prefetched cache is returned as it is (``aq(t.books).all().alist()`` makes no statement)."""
-        if self._fresh and dq.cached_result(self._queryset) is not None:
-            return AsyncQuerySet(self._queryset, fresh=True)
+        prefetched cache is returned as it is (``aq(t.books).all().alist()`` makes no statement). A
+        cache that ``alist()`` filled is not shared: ``all()`` is always a new unevaluated QuerySet."""
+        if self._prefetched:
+            return AsyncQuerySet(self._queryset, fresh=True, prefetched=True)
         wrapped = _wrap(self._queryset.all())
         if self._fresh:
             dq.copy_filter_sticky(wrapped.queryset, self._queryset)
@@ -230,7 +234,7 @@ def aq(obj: Any) -> AsyncQuerySet:
         queryset = obj.get_queryset()
         _require_queryset(queryset)
         if dq.cached_result(queryset) is not None:
-            return AsyncQuerySet(queryset, fresh=True)
+            return AsyncQuerySet(queryset, fresh=True, prefetched=True)
         if dq.queryset_fetch_mode(queryset) is FETCH_RAISE:
             return AsyncQuerySet(_raise_clone(queryset), fresh=True)
         dq.set_fetch_mode(queryset, FETCH_RAISE)

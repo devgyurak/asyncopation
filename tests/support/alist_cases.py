@@ -10,6 +10,7 @@ from typing import Any
 from django.db.models import QuerySet
 
 from harness.catalog.models import Author, Book
+from harness.settings import VENDOR
 from tests.support.aio import wait_until
 from tests.support.alist_probe import recorded_statements
 from tests.support.differential import (
@@ -23,7 +24,13 @@ from tests.support.seeded import books_manager_of, in_sync
 from tests.support.snapshot import snapshot_result
 
 ALIAS = "default"
-SLOW_SQL = "(SELECT pg_sleep(30)) IS NOT NULL"
+# A WHERE clause that sleeps 30 seconds, per vendor (pg_sleep is PostgreSQL-only SQL).
+_SLEEP_SQL = {
+    "postgresql": "(SELECT pg_sleep(30)) IS NOT NULL",
+    "mysql": "(SELECT SLEEP(30)) IS NOT NULL",
+    "mariadb": "(SELECT SLEEP(30)) IS NOT NULL",
+}
+SLOW_SQL = _SLEEP_SQL[VENDOR]
 
 
 def failing_statement() -> QuerySet[Book]:
@@ -185,7 +192,7 @@ async def cancelled_alist_then_next() -> CancelOutcome:
     task = asyncio.ensure_future(aq(slow_statement()).alist())
 
     async def statement_running() -> bool:
-        return registry.in_flight(ALIAS) > 0
+        return registry.in_flight(ALIAS) > 0 or task.done()  # done: it failed before running
 
     await wait_until(statement_running)
     task.cancel()
@@ -316,4 +323,25 @@ async def alist_of_all_of_a_prefetched_manager() -> PrefetchedAllOutcome:
         list(log),
         [row is cached for row, cached in zip(rows, expected, strict=True)],
         len(expected),
+    )
+
+
+@dataclass(frozen=True)
+class AllAfterAlistOutcome:
+    statements: list[str]
+    rows: int
+    expected: int
+
+
+async def alist_of_all_after_alist() -> AllAfterAlistOutcome:
+    """`w = aq(Author.objects); await w.alist(); await w.all().alist()`: sync `Author.objects.all()` is a new,
+    unevaluated QuerySet each call, so the second `alist()` must run a statement of its own."""
+    from asyncopation import aq
+
+    wrapper = aq(Author.objects)
+    await wrapper.alist()
+    with recorded_statements() as log:
+        rows = await wrapper.all().alist()
+    return AllAfterAlistOutcome(
+        list(log), len(rows), len(await in_sync(lambda: list(Author.objects.all())))
     )

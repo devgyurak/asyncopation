@@ -15,6 +15,12 @@ from typing import Any, Literal
 from django.core.exceptions import FieldError
 from django.db.models import Avg, Case, Count, Expression, F, Q, QuerySet, Sum, Value, When
 from django.db.models.functions import Coalesce
+from django.db.models.query import (
+    FlatValuesListIterable,
+    NamedValuesListIterable,
+    ValuesIterable,
+    ValuesListIterable,
+)
 from hypothesis import strategies as st
 
 from harness.catalog.models import Book
@@ -156,7 +162,10 @@ def projected_specs(draw: st.DrawFn) -> QuerySetSpec:
     fields = tuple(
         draw(st.lists(st.sampled_from(candidates), min_size=size, max_size=size, unique=True))
     )
-    return replace(spec, deferred=None, projection=(kind, fields))
+    # `tags__name` multiplies a book's row by its tags, and `pk` alone cannot order those rows: a
+    # tie-break on the projected tag name makes the order total (equal rows are then identical).
+    order_by = (*spec.order_by, "tags__name") if "tags__name" in fields else spec.order_by
+    return replace(spec, deferred=None, projection=(kind, fields), order_by=order_by)
 
 
 def annotated_spec(annotations: tuple[str, ...], order_by: tuple[str, ...]) -> QuerySetSpec:
@@ -236,6 +245,24 @@ def valid_deferred_specs() -> st.SearchStrategy[QuerySetSpec]:
     return queryset_specs().filter(
         lambda spec: spec.deferred is not None and is_valid_deferral(spec)
     )
+
+
+def expected_iterable_class(spec: QuerySetSpec) -> type:
+    """The result iterable `build_queryset(spec)` must select (`values()` rows without a projection
+    are model instances: ModelIterable is not asked for here, only projections)."""
+    kind = (spec.projection or ("values",))[0]
+    return {
+        "values": ValuesIterable,
+        "values_list": ValuesListIterable,
+        "flat": FlatValuesListIterable,
+        "named": NamedValuesListIterable,
+    }[kind]
+
+
+def tie_break_is_present(spec: QuerySetSpec) -> bool:
+    """A projected `tags__name` is the last ordering key (its rows repeat a book's pk)."""
+    fields = spec.projection[1] if spec.projection else ()
+    return "tags__name" not in fields or spec.order_by[-1] == "tags__name"
 
 
 def expected_deferred_loading(spec: QuerySetSpec) -> tuple[frozenset[str], bool]:

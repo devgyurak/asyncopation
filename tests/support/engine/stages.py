@@ -24,6 +24,36 @@ def compile_case(name: str, alias: str, *, autocommit: bool = True) -> CompiledQ
     )
 
 
+@dataclass(frozen=True)
+class Recompiled:
+    first: CompiledQuery
+    second: CompiledQuery
+    selected_before: Any
+    selected_after: Any
+    annotations_before: list[str]
+    annotations_after: list[str]
+
+
+def compile_case_twice(name: str, alias: str) -> Recompiled:
+    """Compile ONE QuerySet twice (what two overlapping `alist()` calls on a wrapper do) and note
+    whether the QuerySet's own Query changed."""
+    queryset = QUERYSETS[name](alias)
+    query = queryset.query
+    selected_before = dict(getattr(query, "selected", None) or {})
+    annotations_before = list(query.annotations)
+    wrapper = make_wrapper(alias)
+    first = compile_query(queryset, wrapper, alias=alias, autocommit=True)
+    second = compile_query(queryset, wrapper, alias=alias, autocommit=True)
+    return Recompiled(
+        first,
+        second,
+        selected_before,
+        dict(getattr(query, "selected", None) or {}),
+        annotations_before,
+        list(query.annotations),
+    )
+
+
 def materialized(name: str, alias: str) -> list[Any]:
     """What `materialize` builds from the case's fixed rows."""
     queryset = QUERYSETS[name](alias)

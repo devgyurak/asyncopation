@@ -4,10 +4,12 @@ import pytest
 
 from tests.support.alist_cases import (
     alist_cache_placement,
+    alist_cache_placement_of_fetch_raise,
     cancelled_alist_then_next,
     concurrent_alists_on_one_wrapper,
     failing_statement,
     gathered_alists,
+    gathered_union_values_on_one_wrapper,
     unknown_alias,
 )
 from tests.support.backends import POSTGRESQL_ONLY, XFAIL_UNTIL_ASYNCMY
@@ -94,3 +96,38 @@ async def test_alist_fills_the_wrapper_clone_cache_and_not_the_original(async_en
     # then
     assert outcome.original_cache is None
     assert outcome.wrapper_cache is not None
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_alist_of_a_fetch_raise_queryset_fills_the_wrapper_clone_and_not_the_users(async_env):
+    # when
+    outcome = await alist_cache_placement_of_fetch_raise()
+    # then
+    assert outcome.original_cache is None
+    assert outcome.wrapper_cache is not None
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize("caller", [0, 1])
+async def test_concurrent_alists_on_one_wrapper_return_a_copy_of_the_cache(async_env, caller):
+    # when
+    outcome = await concurrent_alists_on_one_wrapper()
+    # then
+    assert outcome.result_is_the_cache_list[caller] is False
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize("caller", [0, 1])
+async def test_gathered_alists_of_a_union_values_wrapper_match_sync(async_env, caller):
+    # when
+    outcome = await gathered_union_values_on_one_wrapper()
+    # then
+    assert outcome.asynchronous[caller] == outcome.sync
+
+
+@POSTGRESQL_ONLY  # before #7 nothing compiles on MySQL/MariaDB, so "untouched" would pass trivially
+async def test_gathered_alists_of_a_union_values_wrapper_leave_its_query_untouched(async_env):
+    # when
+    outcome = await gathered_union_values_on_one_wrapper()
+    # then
+    assert outcome.annotations_after == outcome.annotations_before

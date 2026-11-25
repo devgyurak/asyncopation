@@ -66,6 +66,35 @@ async def manager_chain_differential(
     return await run_differential(manager_of, _chain_evaluator(chain))
 
 
+def books_of_manager(tag: Any) -> Any:
+    return tag.books
+
+
+def books_all_of(tag: Any) -> Any:
+    return tag.books.all()
+
+
+def all_then_filter_by_peer(peer: str, source: Any) -> Any:
+    return source.all().filter(tags__name=peer).order_by("pk")
+
+
+def filter_by_peer(peer: str, source: Any) -> Any:
+    return source.filter(tags__name=peer).order_by("pk")
+
+
+async def tag_as_loaded_by_sync(tag: Any) -> Any:
+    return tag
+
+
+async def tag_as_loaded_by_aq(tag: Any) -> Any:
+    """The same tag read through `aq()`: its instance carries FETCH_RAISE, and so does its manager."""
+    from asyncopation import aq
+    from harness.catalog.models import Tag
+
+    (loaded,) = await aq(Tag.objects.filter(pk=tag.pk)).alist()
+    return loaded
+
+
 async def manager_differential(author: Author) -> DifferentialResult:
     """Sync `list(author.books.all())` against `await aq(author.books).alist()`."""
 
@@ -172,6 +201,10 @@ class SharedWrapperOutcome:
     results: tuple[list[Any], list[Any]]
     cached: list[Any]
 
+    @property
+    def result_is_the_cache_list(self) -> tuple[bool, bool]:
+        return (self.results[0] is self.cached, self.results[1] is self.cached)
+
 
 async def concurrent_alists_on_one_wrapper() -> SharedWrapperOutcome:
     """Two concurrent `alist()` calls on the SAME wrapper, and the cache they leave behind."""
@@ -180,6 +213,33 @@ async def concurrent_alists_on_one_wrapper() -> SharedWrapperOutcome:
     wrapper = aq(_books_ascending())
     first, second = await asyncio.gather(wrapper.alist(), wrapper.alist())
     return SharedWrapperOutcome((first, second), wrapper.queryset._result_cache)
+
+
+def _union_values() -> QuerySet[Book]:
+    union = Book.objects.filter(pk__lt=5).union(Book.objects.filter(pk__gt=40))
+    return union.values("title").order_by("pages", "pk")
+
+
+@dataclass(frozen=True)
+class GatheredUnionOutcome:
+    sync: Outcome
+    asynchronous: tuple[Outcome, Outcome]
+    annotations_before: list[str]
+    annotations_after: list[str]
+
+
+async def gathered_union_values_on_one_wrapper() -> GatheredUnionOutcome:
+    """Two overlapping `alist()` calls on ONE union+values wrapper (compiling it adds
+    `__orderbycol<N>` annotations to a Query they share), and whether the Query was touched."""
+    from asyncopation import aq
+
+    sync = await run_sync(_union_values, ASYNCOPATION["list"])
+    wrapper = aq(_union_values())
+    before = list(wrapper.queryset.query.annotations)
+    first, second = await asyncio.gather(wrapper.alist(), wrapper.alist(), return_exceptions=True)
+    return GatheredUnionOutcome(
+        sync, (_outcome(first), _outcome(second)), before, list(wrapper.queryset.query.annotations)
+    )
 
 
 @dataclass(frozen=True)
@@ -191,9 +251,20 @@ class CacheOutcome:
 
 async def alist_cache_placement() -> CacheOutcome:
     """Where `aq(qs).alist()` leaves its result cache: on the wrapper's clone, not on `qs`."""
+
+    return await _cache_outcome(Book.objects.order_by("pk")[:3])
+
+
+async def alist_cache_placement_of_fetch_raise() -> CacheOutcome:
+    """The same for a QuerySet the user already switched to FETCH_RAISE: still a clone gets filled."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    return await _cache_outcome(Book.objects.order_by("pk")[:3].fetch_mode(FETCH_RAISE))
+
+
+async def _cache_outcome(original: QuerySet[Book]) -> CacheOutcome:
     from asyncopation import aq
 
-    original = Book.objects.order_by("pk")[:3]
     wrapper = aq(original)
     rows = await wrapper.alist()
     return CacheOutcome(original._result_cache, wrapper.queryset._result_cache, rows)

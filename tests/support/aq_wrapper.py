@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
-from django.db.models import QuerySet
+from django.db.models import Manager, QuerySet
 
 from harness.catalog.models import Book
 
@@ -89,6 +89,57 @@ def related_books_manager() -> Any:
     from tests.support.seeded import books_manager_of
 
     return books_manager_of(Author(pk=1, name="x"))
+
+
+class SharedDuckSource:
+    """Not a Manager or QuerySet: `get_queryset()` hands out ONE shared QuerySet every time."""
+
+    def __init__(self, *, sticky: bool = False) -> None:
+        self.shared = Book.objects.all()
+        self.shared.query.filter_is_sticky = sticky
+
+    def get_queryset(self) -> QuerySet[Book]:
+        return self.shared
+
+
+class SharedQuerysetManager(Manager):
+    """A real Manager (a descriptor-free instance) whose `get_queryset()` is this one QuerySet."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.shared = Book.objects.all()
+
+    def get_queryset(self) -> QuerySet[Book]:
+        return self.shared
+
+
+def prefilled_manager() -> SharedQuerysetManager:
+    """A real Manager whose QuerySet already has its result cache (a related manager after
+    `prefetch_related`)."""
+    manager = SharedQuerysetManager()
+    manager.shared._result_cache = []
+    return manager
+
+
+SHARED_OTHER_MODE = Book.objects.all()
+
+
+class ForeignModeQuerySet(QuerySet):
+    """A QuerySet with a user method that returns a shared QuerySet in another fetch mode."""
+
+    def shared_other_mode(self) -> QuerySet[Book]:
+        return SHARED_OTHER_MODE
+
+
+def foreign_mode_queryset() -> QuerySet[Book]:
+    return ForeignModeQuerySet(model=Book)
+
+
+def sticky_tag_books() -> QuerySet[Any]:
+    """`tag.books.all()` of an unsaved tag: a QuerySet with a pending sticky filter."""
+    from harness.catalog.models import Tag
+
+    return read_attribute(Tag(pk=1, name="x"), "books").all()
 
 
 class DuckSource:

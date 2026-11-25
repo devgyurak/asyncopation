@@ -101,10 +101,11 @@ def test_the_query_facade_is_not_loaded_until_aq_is_accessed(statement):
     assert (ran.returncode, ran.stdout) == (0, "False")
 
 
-def test_accessing_aq_loads_the_query_facade():
+@pytest.mark.parametrize("name", ["aq", "AsyncQuerySet"])
+def test_accessing_a_lazy_export_loads_the_query_facade(name):
     # when
     ran = run_isolated(
-        module_loaded_script("import asyncopation; asyncopation.aq", "asyncopation.query")
+        module_loaded_script(f"import asyncopation; asyncopation.{name}", "asyncopation.query")
     )
     # then
     assert (ran.returncode, ran.stdout) == (0, "True")

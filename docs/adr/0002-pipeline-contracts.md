@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`; the compile stage compiles a copy of the QuerySet's Query, so overlapping evaluations of one QuerySet do not see each other's `as_sql()` mutations), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 Plan §4.1 fixes *what* is reused (Django's `as_sql()`) and *what* is replaced (execution), but
@@ -75,7 +75,10 @@ QuerySet (Django, lazy)
    `values_list(named=True)` rows are read from the Query before `as_sql()` (Django reads them
    before `execute_sql`): compiling a combined query ordered by an unselected column adds
    `__orderbycol<N>` annotations that are not row keys. The compile stage stores them in
-   `CompiledQuery.values_names`.*
+   `CompiledQuery.values_names`. The compile stage also works on `Query.clone()` of the
+   QuerySet's Query, with the shared `selected` dict copied: `as_sql()` mutates the Query it runs
+   on, so two overlapping `alist()` calls on one wrapper (or any later clone of an already
+   evaluated one) would otherwise compile a half-polluted Query and fail with `IndexError`.*
 5. Rows handed to `results_iter` are already normalized by the driver (ADR-0003). `CompiledQuery`
    is not cached across evaluations in v1; caching is a later, benchmarked change.
 
@@ -107,3 +110,6 @@ QuerySet (Django, lazy)
 - *Amended 2026-11-25 (#6, PR #65):* differential: `values()` / `values_list()` / `flat` / `named` of
   a `union()` ordered by an unselected column, and of `distinct()` ordered by an unselected column,
   return the same rows and keys as the sync ORM (no `__orderbycol<N>` keys, extra columns trimmed).
+- *Amended 2026-11-25 (#6, PR #65):* unit and integration: compiling one union+`values()` QuerySet
+  twice, and `gather(w.alist(), w.alist())` on one wrapper, give the sync ORM's rows and leave the
+  QuerySet's Query (`selected`, annotations) untouched.

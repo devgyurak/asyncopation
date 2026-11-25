@@ -28,6 +28,8 @@ __all__ = [
     "annotation_col_map",
     "cached_result",
     "col_count",
+    "compile_copy",
+    "copy_filter_sticky",
     "from_db_callable",
     "has_extra_select",
     "has_prefetch",
@@ -95,6 +97,23 @@ def queryset_fetch_mode(queryset: Any) -> Any:
 def set_fetch_mode(queryset: Any, mode: Any) -> None:
     """Set the fetch mode in place (``QuerySet.fetch_mode`` would clone and consume a sticky filter)."""
     queryset._fetch_mode = mode
+
+
+def copy_filter_sticky(target: Any, source: Any) -> None:
+    """Give ``target``'s Query the pending sticky-filter flag of ``source``'s (``QuerySet._chain``)."""
+    target.query.filter_is_sticky = source.query.filter_is_sticky
+
+
+def compile_copy(queryset: Any) -> Any:
+    """A private copy of the QuerySet's Query to compile: ``as_sql()`` mutates the Query it runs on
+    (combined queries gain ``__orderbycol<N>`` annotations), and concurrent evaluations of one
+    QuerySet must not see each other's. ``Query.clone()`` shares the ``selected`` dict between the
+    copies, and compiling adds the ``__orderbycol<N>`` entries to it: it is copied here, or the
+    clone's combined queries (which lack those annotations) would no longer match it."""
+    query = queryset.query.clone()
+    if query.selected:
+        query.selected = dict(query.selected)
+    return query
 
 
 def queryset_fields(queryset: Any) -> Any:

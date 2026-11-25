@@ -5,7 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
-- Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place on a Manager's own QuerySet, and a QuerySet that already has it is wrapped without cloning), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25 of the PR #65 amendment, changes applied)
+- Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place only on a real `Manager`'s own fresh QuerySet, every other QuerySet or duck-typed `get_queryset()` result is cloned even if it already is `FETCH_RAISE`, and the clone and `all()` of a manager wrapper keep the pending sticky filter), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25 of the PR #65 amendment, changes applied)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -66,8 +66,17 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    do sync I/O on attribute access). *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
    the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter
    of a many-to-many related manager, so `aq(tag.books).filter(tags__name=x)` would differ from
-   Django's); a QuerySet that already is `FETCH_RAISE` or carries a result cache is wrapped as it
-   is; any other QuerySet is cloned with `fetch_mode(FETCH_RAISE)`, so the caller's is untouched.*
+   Django's), and only for a real `Manager` instance: what a duck-typed `get_queryset()` returns
+   may be shared. A QuerySet with a filled result cache is wrapped as it is (`alist()` only reads
+   it); every other QuerySet, `FETCH_RAISE` ones included, is cloned with
+   `fetch_mode(FETCH_RAISE)`, so the caller's is never touched and `alist()` never fills its
+   cache (a class-attribute QuerySet would otherwise return stale rows to later requests). Only
+   the QuerySets Django creates while the wrapper re-wraps its own chaining (`filter()`, `all()`,
+   a slice, copies) skip the clone. The clone is a chain, which consumes the pending sticky
+   filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
+   clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
+   `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
+   (which returns `get_queryset()` unchained) does.*
    Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK
    / M2M managers are evaluated through `aq()`. `afetch()` is explicit and non-recursive; batched
    peer loading returns results aligned with the parents.
@@ -105,7 +114,11 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   a model with a custom default manager exposes its QuerySet methods.
 - *Amended 2026-11-25 (#6, PR #65):* differential: `aq(tag.books).filter(tags__name=x)` (many-to-many
   related manager, pending sticky filter) and chains on a reverse foreign-key manager return the
-  same rows as the sync ORM.
+  same rows as the sync ORM; so do `aq(tag.books).all().filter(...)` and
+  `aq(tag.books.all()).filter(...)`, whether `tag` was loaded by the sync ORM or by `aq()`.
+- *Amended 2026-11-25 (#6, PR #65):* unit and integration: `aq()` of a `FETCH_RAISE` QuerySet or of
+  a duck-typed source's shared QuerySet clones it, and `alist()` leaves the caller's cache and
+  fetch mode alone; only a real `Manager`'s QuerySet is switched in place.
 - *Amended 2026-11-25 (#6, PR #65):* unit: `aq(qs).aiterator()` raises `NotImplementedError` without
   a thread hop (it is an async generator, so a coroutine-only scan would miss it); `aq(qs)[::2]`
   raises `SyncEvaluationError`; `aq(qs).raw(...)` raises `NotImplementedError`; copies keep

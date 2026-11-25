@@ -51,8 +51,10 @@ def compile_query(queryset: Any, wrapper: Any, *, alias: str, autocommit: bool) 
     ``EmptyResultSet`` or empty SQL gives ``ResultKind.EMPTY``: nothing is executed (Django's
     ``execute_sql`` returns an empty iterator for it). ``autocommit`` is ``not executor.pinned``.
     """
-    query = queryset.query
-    # Read before as_sql(): compiling a combined query adds `__orderbycol<N>` annotations (ADR-0002).
+    query = dq.compile_copy(queryset)
+    # Compiled on a copy: as_sql() mutates its Query and two evaluations of one QuerySet may overlap.
+    # Names are read before as_sql(): compiling a combined query adds `__orderbycol<N>` annotations
+    # (ADR-0002).
     names = tuple(dq.values_names(query)) if dq.iterable_kind(queryset) in _NAMED_KINDS else ()
     with compile_scope(alias, wrapper, autocommit=autocommit):
         compiler = query.get_compiler(using=alias)

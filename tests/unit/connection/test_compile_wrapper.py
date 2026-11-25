@@ -4,6 +4,7 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from asyncopation.connection.lifecycle import compile_wrapper
+from tests.support.lifecycle.fakes import INJECTED_WRAPPER
 
 
 def test_compile_wrapper_of_a_configured_alias_that_is_not_open_raises_runtime_error(configured):
@@ -24,4 +25,4 @@ def test_compile_wrapper_of_an_open_alias_returns_what_the_engine_injected(opene
     # when
     wrapper = compile_wrapper("default")
     # then
-    assert wrapper is None  # the fake engine injects nothing; the real one returns the wrapper
+    assert wrapper is INJECTED_WRAPPER

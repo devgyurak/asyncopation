@@ -4,7 +4,7 @@ import pytest
 from django.db.transaction import TransactionManagementError
 
 from asyncopation.engine.compiled import ResultKind
-from tests.support.engine.stages import as_sql_calls, compile_case, param_values
+from tests.support.engine.stages import as_sql_calls, compile_case, compile_case_twice, param_values
 
 
 def test_compile_query_of_an_unsatisfiable_filter_is_empty(alias):
@@ -84,3 +84,27 @@ def test_compile_query_reads_the_values_names_before_compiling(alias, name, name
     compiled = compile_case(name, alias)
     # then
     assert compiled.values_names == names
+
+
+@pytest.mark.parametrize(
+    "name", ["book_union_values_unselected_order", "book_union_named_unselected_order"]
+)
+def test_compile_query_leaves_the_query_of_the_queryset_untouched(alias, name):
+    # when
+    result = compile_case_twice(name, alias)
+    # then
+    assert result.selected_after == result.selected_before
+    assert result.annotations_after == result.annotations_before
+
+
+@pytest.mark.parametrize(
+    "name", ["book_union_values_unselected_order", "book_union_named_unselected_order"]
+)
+def test_compile_query_twice_gives_the_same_sql_and_names(alias, name):
+    # when
+    result = compile_case_twice(name, alias)
+    # then
+    assert (result.second.sql, result.second.values_names) == (
+        result.first.sql,
+        result.first.values_names,
+    )

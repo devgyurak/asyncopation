@@ -6,11 +6,17 @@ from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
+    SHARED_OTHER_MODE,
+    SharedDuckSource,
+    SharedQuerysetManager,
     book_manager,
     class_attribute_of,
+    foreign_mode_queryset,
     fresh_books,
+    prefilled_manager,
     prefilled_queryset,
     raise_mode_books,
+    sticky_tag_books,
     tag_books_manager,
 )
 
@@ -74,13 +80,148 @@ def test_aq_of_an_unevaluated_queryset_clones_it():
     assert wrapper.queryset is not original
 
 
-def test_aq_of_a_queryset_that_is_already_fetch_raise_wraps_it_without_cloning():
+def test_aq_of_a_queryset_that_is_already_fetch_raise_still_clones_it():
     # given
     original = raise_mode_books()
     # when
     wrapper = aq(original)
     # then
-    assert wrapper.queryset is original
+    assert wrapper.queryset is not original
+
+
+def test_aq_of_a_fetch_raise_queryset_leaves_the_mode_and_cache_of_the_original_alone():
+    # given
+    original = raise_mode_books()
+    # when
+    aq(original)
+    # then
+    assert (original._fetch_mode, original._result_cache) == (FETCH_RAISE, None)
+
+
+def test_aq_of_a_duck_typed_source_clones_what_its_get_queryset_returns():
+    # given
+    source = SharedDuckSource()
+    # when
+    wrapper = aq(source)
+    # then
+    assert wrapper.queryset is not source.shared
+
+
+def test_aq_of_a_duck_typed_source_leaves_the_shared_queryset_alone():
+    # given
+    source = SharedDuckSource()
+    # when
+    aq(source)
+    # then
+    assert source.shared._fetch_mode is FETCH_ONE
+
+
+def test_aq_of_a_duck_typed_source_keeps_the_sticky_filter_of_what_it_returned():
+    # given
+    source = SharedDuckSource(sticky=True)
+    # when
+    wrapper = aq(source)
+    # then
+    assert wrapper.queryset.query.filter_is_sticky is True
+
+
+def test_aq_of_a_real_manager_switches_its_fresh_queryset_in_place():
+    # given
+    manager = SharedQuerysetManager()
+    # when
+    wrapper = aq(manager)
+    # then
+    assert wrapper.queryset is manager.shared
+    assert wrapper.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_aq_of_a_manager_with_a_filled_cache_leaves_the_fetch_mode_of_that_queryset_alone():
+    # given
+    manager = prefilled_manager()
+    # when
+    wrapper = aq(manager)
+    # then
+    assert wrapper.queryset is manager.shared
+    assert wrapper.queryset._fetch_mode is FETCH_ONE
+
+
+def test_all_of_a_duck_typed_source_wrapper_keeps_the_pending_sticky_filter():
+    # given
+    wrapper = aq(SharedDuckSource(sticky=True))
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset.query.filter_is_sticky is True
+
+
+def test_aq_of_a_queryset_keeps_the_sticky_filter_of_the_original_on_the_clone():
+    # given
+    original = sticky_tag_books()
+    # when
+    wrapper = aq(original)
+    # then
+    assert wrapper.queryset.query.filter_is_sticky is True
+
+
+def test_aq_of_a_queryset_leaves_the_sticky_filter_of_the_original_pending():
+    # given
+    original = sticky_tag_books()
+    # when
+    aq(original)
+    # then
+    assert original.query.filter_is_sticky is True
+
+
+def test_all_of_a_manager_wrapper_keeps_the_pending_sticky_filter():
+    # given
+    wrapper = aq(tag_books_manager())
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset.query.filter_is_sticky is True
+
+
+def test_all_of_a_manager_wrapper_gives_a_new_queryset():
+    # given
+    wrapper = aq(tag_books_manager())
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset is not wrapper.queryset
+
+
+def test_all_of_an_all_consumes_the_sticky_filter_as_a_queryset_does():
+    # given
+    wrapper = aq(tag_books_manager()).all()
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset.query.filter_is_sticky is False
+
+
+def test_all_of_a_queryset_wrapper_does_not_invent_a_sticky_filter():
+    # when
+    again = aq(fresh_books()).all()
+    # then
+    assert again.queryset.query.filter_is_sticky is False
+
+
+def test_a_queryset_of_another_fetch_mode_returned_by_a_proxied_method_is_cloned_into_fetch_raise():
+    # given
+    wrapper = aq(foreign_mode_queryset())
+    # when
+    returned = wrapper.shared_other_mode()
+    # then
+    assert returned.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_queryset_returned_by_a_proxied_method_is_not_mutated_when_it_is_wrapped():
+    # given
+    wrapper = aq(foreign_mode_queryset())
+    # when
+    wrapper.shared_other_mode()
+    # then
+    assert SHARED_OTHER_MODE._fetch_mode is FETCH_ONE
 
 
 def test_aq_of_a_many_to_many_manager_keeps_the_pending_sticky_filter():

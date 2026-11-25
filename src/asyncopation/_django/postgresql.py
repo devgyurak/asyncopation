@@ -27,7 +27,7 @@ _PERCENT = re.compile(r"%(.?)", re.DOTALL)
 
 
 def inject_pg_version(wrapper: BaseDatabaseWrapper, version: int) -> None:
-    """Pre-fill ``pg_version`` (a ``cached_property`` that would otherwise connect)."""
+    """Pre-fill ``pg_version`` (a cached property that would otherwise connect)."""
     wrapper.__dict__["pg_version"] = version
 
 

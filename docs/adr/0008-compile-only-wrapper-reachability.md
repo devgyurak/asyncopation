@@ -253,7 +253,7 @@ reused unchanged.
   `_django.postgresql` pulls psycopg in through Django (drivers remain the only direct importers).
 
 ### Django internals this decision rests on
-*Amended 2026-11-24 (#3, PR #45): the table below is updated: the `asgiref.local` row (recorded in the `_connections` reason; *Amended 2026-11-25 (#49, PR #62): now its own ledger `[[dependency]]` row*), the `sql.compiler` row (planned consumer `_django/*`), the `base.base` row (more methods pinned, `ensure_connection` not pinned) and the new `postgresql.operations` (`compose_sql`) row.*
+*Amended 2026-11-24 (#3, PR #45): the table below is updated: the `asgiref.local` row (recorded in the `_connections` reason), the `sql.compiler` row (planned consumer `_django/*`), the `base.base` row (more methods pinned, `ensure_connection` not pinned) and the new `postgresql.operations` (`compose_sql`) row.* *Amended 2026-11-25 (#49, PR #62): the `asgiref.local` row is now its own ledger `[[dependency]]` row, no longer recorded in the `_connections` reason.*
 
 Guard A202 rejects `[[internal]]` entries that are not imported under `src/asyncopation/_django/`
 (unless marked `ported = true`; those are checked for a `# Ported from` header in their `used_by` files instead, ADR-0007 Decision 6) and `[[attribute]]` entries never accessed in `src/`, so these enter

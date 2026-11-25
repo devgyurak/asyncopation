@@ -244,7 +244,8 @@ def _dependencies(data: dict) -> tuple[set[tuple[str, str]], set[tuple[str, str]
     resolve, installed version equals ``verified_against``, pyproject floor admits it). Hence
     ``verified_against`` is an exact ``X.Y.Z`` release (compared for equality), ``package`` is the
     lower-case distribution name that is also the import name (so rows cannot disagree with the
-    metadata lookup or the name check), the package has one row, and ``signatures`` / ``ported`` do not exist for this table.
+    metadata lookup or the name check), the package has one row, and ``signatures`` / ``ported``
+    do not exist for this table.
     """
     names_found: set[tuple[str, str]] = set()
     versions: dict[str, str] = {}

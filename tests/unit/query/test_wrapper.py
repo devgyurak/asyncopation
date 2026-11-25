@@ -12,6 +12,7 @@ from tests.support.aq_wrapper import (
     NotAQuerySetManager,
     SharedDuckSource,
     SharedQuerysetManager,
+    all_then_alist,
     all_then_filter,
     book_manager,
     class_attribute_of,
@@ -225,6 +226,30 @@ def test_all_of_a_manager_wrapper_whose_cache_alist_filled_gives_a_new_queryset(
     # then
     assert again.queryset is not wrapper.queryset
     assert again.queryset._result_cache is None
+
+
+def test_all_of_a_manager_wrapper_over_a_fetch_raise_queryset_gives_a_new_queryset():
+    # given
+    manager = raise_mode_manager()
+    wrapper = aq(manager)
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset is not wrapper.queryset
+    assert again.queryset._result_cache is None
+
+
+async def test_all_of_a_prefetched_manager_wrapper_after_alist_still_reads_the_cache(no_sql):
+    # given
+    manager = prefilled_manager()
+    sentinel = object()
+    manager.shared._result_cache = [sentinel]
+    wrapper = aq(manager)
+    # when
+    rows = await all_then_alist(wrapper)
+    # then
+    assert rows == [sentinel]
+    assert wrapper.all().queryset is manager.shared
 
 
 def test_filter_after_all_of_a_prefetched_manager_wrapper_queries_a_clone():

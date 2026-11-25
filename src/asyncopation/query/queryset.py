@@ -75,6 +75,7 @@ class AsyncQuerySet:
     # `_fresh`: the QuerySet came straight from a manager, so `all()` behaves as `Manager.all()`.
     # `_prefetched`: the cache was already filled when `aq()` wrapped it (a prefetched related
     # manager), so `all()` may share it; a cache `alist()` filled later is never shared.
+    # Invariant: `_prefetched` implies `_fresh` (only `aq()` sets it, always with `fresh=True`).
     __slots__ = ("_fresh", "_prefetched", "_queryset")
 
     def __init__(self, queryset: Any, *, fresh: bool = False, prefetched: bool = False) -> None:

@@ -232,6 +232,11 @@ def raise_mode_books() -> QuerySet[Book]:
     return Book.objects.all().fetch_mode(FETCH_RAISE)
 
 
+async def all_then_alist(wrapper: Any) -> list[Any]:
+    """`all()` then `alist()` on a wrapper: the rows."""
+    return await wrapper.all().alist()
+
+
 async def alist_after_mutating_the_result(wrapper: Any) -> list[Any]:
     """`alist()`, mutate the returned list, `alist()` again: the second result."""
     first = await wrapper.alist()

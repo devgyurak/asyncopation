@@ -46,7 +46,7 @@ async def test_gathered_alists_on_one_alias_each_return_their_own_result(async_e
     assert outcome.asynchronous == outcome.sync
 
 
-@XFAIL_UNTIL_ASYNCMY
+@POSTGRESQL_ONLY  # nothing is opened before #7 on MySQL/MariaDB, so "no connection in use" would pass trivially
 async def test_gathered_alists_leave_no_connection_in_use(async_env):
     # when
     outcome = await gathered_alists()

@@ -57,9 +57,10 @@ For every read API compare against the sync ORM with the `differential` fixture
 (see the `differential-testing` skill). Snapshots compare model, pk, every concrete field,
 every annotation (any public non-field instance attribute), related objects cached in
 `_state.fields_cache` (`select_related`, single-valued prefetch; recursively; "not loaded"
-differs from "loaded as None"), value **and type**, and order. Deferred fields (`only()`/`defer()`)
-are never loaded by the snapshot; they are compared as a `"<deferred>"` marker. `_prefetched_objects_cache`
-(multi-valued prefetch: reverse FK, M2M, GenericRelation) is out of scope until #17.
+differs from "loaded as None"), value **and type**, and order. Deferred fields
+(`only()`/`defer()`) are never loaded by the snapshot (in any fetch mode); they are compared as a
+`"<deferred>"` marker. `_prefetched_objects_cache` (multi-valued prefetch: reverse FK, M2M,
+GenericRelation) is out of scope until #17.
 Add Hypothesis strategies when adding QuerySet features.
 
 Driver-level tests (no QuerySet) use the same idea one layer lower: run the same SQL through the

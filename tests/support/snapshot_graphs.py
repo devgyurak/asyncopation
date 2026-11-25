@@ -6,9 +6,8 @@ from decimal import Decimal
 from enum import Enum
 from typing import Any, cast
 
-from django.db.models import DEFERRED, Model  # ty: ignore[missing-module-member]
-
-from harness.catalog.models import Author, AuthorProfile, Book, Publisher
+from harness.catalog.models import Author, AuthorProfile, Book, BookEdition, Publisher
+from tests.support.fetch_modes import FETCH_ONE
 
 
 class Unloaded(Enum):
@@ -70,27 +69,31 @@ def cached_related(obj: Any, name: str) -> Any:
     return cast("dict[str, Any]", obj._state.fields_cache)[name]
 
 
-def forbid_refresh_from_db(monkeypatch: Any) -> None:
-    """Make any ``Model.refresh_from_db`` call (a lazy load of a deferred field) fail the test."""
-
-    def refuse(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("refresh_from_db was called")
-
-    monkeypatch.setattr(Model, "refresh_from_db", refuse)
-
-
 def make_book_with_deferred_publisher_name() -> Book:
     """book -> author -> publisher, where the publisher's ``name`` is deferred."""
     publisher = Publisher.from_db(None, ["id"], [1])
     return make_book(make_author(publisher=publisher))
 
 
-def make_deferred_author(*deferred: str) -> Author:
-    """An author as ``only()``/``defer()`` leave it: ``deferred`` attnames are not loaded."""
+def make_deferred_author(*deferred: str, fetch_mode: Any = FETCH_ONE) -> Author:
+    """An author as ``only()``/``defer()`` leave it: ``deferred`` attnames are not loaded.
+
+    ``from_db`` is given only the loaded fields and marks the rest deferred, like a real query.
+    A name that is not a concrete field raises ``ValueError`` (a typo must not silently defer
+    nothing).
+    """
     author = make_author()
     names = [f.attname for f in Author._meta.concrete_fields]
-    return Author.from_db(
-        None,
-        names,
-        [DEFERRED if name in deferred else getattr(author, name) for name in names],
+    unknown = set(deferred) - set(names)
+    if unknown:
+        raise ValueError(f"not concrete fields of Author: {sorted(unknown)}")
+    loaded = [name for name in names if name not in deferred]
+    # cast: the installed stubs predate the 6.1 ``fetch_mode`` argument
+    return cast("Any", Author).from_db(
+        None, loaded, [getattr(author, name) for name in loaded], fetch_mode=fetch_mode
     )
+
+
+def make_deferred_edition() -> BookEdition:
+    """A composite-pk edition whose ``isbn`` is deferred (the pk fields are loaded)."""
+    return BookEdition.from_db(None, ["book_id", "number", "released"], [1, 1, None])

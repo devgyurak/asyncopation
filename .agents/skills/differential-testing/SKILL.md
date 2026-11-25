@@ -21,7 +21,8 @@ Asyncopation must give identical snapshots on every backend.
   `_prefetched_objects_cache` (multi-valued prefetch: reverse FK, M2M, GenericRelation) is not
   covered yet (#17).
   `snapshot_result(rows)` keeps order; `field_snapshot(snap, attname, *relation_path)` returns
-  `(type_name, value)` of one field.
+  `(type_name, value)` of one field (`LookupError` when the relation was loaded as None or the path
+  ends on a `<ref>` marker, `KeyError` for a relation that was not loaded or an unknown field).
   Types are part of the snapshot on purpose: drivers differ (Decimal vs float, naive vs aware
   datetime, `memoryview` vs `bytes`, JSON decoding).
 - `differential.py` - `Outcome(snapshot, error)` (`.rows` for list results) and `run_differential(build, evaluator)`.

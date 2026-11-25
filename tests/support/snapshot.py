@@ -41,7 +41,9 @@ def snapshot(obj: Model) -> Snapshot:
     ``((name, type name, value)...)`` and ``related`` is ``((cache_name, snapshot | None)...)``.
 
     A field deferred by ``only()``/``defer()`` is never read (reading would run a hidden query on
-    the sync side and raise ``SynchronousOnlyOperation`` on the async side): it is recorded as
+    the sync side - FETCH_PEERS also fills peer instances - and raise
+    ``SynchronousOnlyOperation`` (core async) or ``FieldFetchBlocked`` (FETCH_RAISE, ADR-0006) on
+    the async side): it is recorded as
     ``(attname, "<deferred>", None)``, so "deferred" differs from any loaded value. The rule
     applies to related objects too.
 
@@ -105,11 +107,15 @@ def field_snapshot(
     """``(type name, value)`` recorded for concrete field ``attname`` in a ``snapshot()``.
 
     ``related_path`` first walks cached relations as ``related_snapshot`` does; the relation
-    must be a loaded object (``LookupError`` otherwise); ``KeyError`` for an unknown field.
+    must be a loaded object: ``LookupError`` if it was loaded as None or the path ends on a
+    ``("<ref>", ...)`` back-reference; ``KeyError`` for a relation that was not loaded (from
+    ``related_snapshot``) or an unknown field.
     """
     target = related_snapshot(instance_snapshot, *related_path)
     if target is None:
         raise LookupError(f"relation {related_path} was loaded as None")
+    if target[0] == "<ref>":
+        raise LookupError(f"relation {related_path} is a back-reference marker")
     for name, type_name, value in target[1]:
         if name == attname:
             return type_name, value
@@ -135,11 +141,14 @@ def related_snapshot(instance_snapshot: Snapshot, *path: str) -> Snapshot | None
     """The snapshot cached under relation ``path`` (``("author", "publisher")`` walks two levels).
 
     ``None`` when a relation on the path was loaded as None; ``KeyError`` when one was not loaded.
-    A ``("<ref>", ...)`` back-reference marker cannot be walked into.
+    A ``("<ref>", ...)`` back-reference marker can be returned but not walked into
+    (``LookupError``).
     """
     current: Snapshot | None = instance_snapshot
     for name in path:
         if current is None:
             return None
+        if current[0] == "<ref>":
+            raise LookupError(f"cannot walk into the back-reference at {name!r}")
         current = dict(current[3])[name]
     return current

@@ -24,9 +24,11 @@ async def kinds_seen_by_run(monkeypatch: Any, op: str, *, pinned: bool) -> list[
     seen: list[str] = []
     real = module._run
 
-    def spy(connection: Any, subs: Any, alias: str, queued_at: float, kind: str, *args: Any) -> Any:
+    def spy(
+        connection: Any, subs: Any, alias: str, queued_at: float, kind: str, *args: Any, **kw: Any
+    ) -> Any:
         seen.append(kind)
-        return real(connection, subs, alias, queued_at, kind, *args)
+        return real(connection, subs, alias, queued_at, kind, *args, **kw)
 
     monkeypatch.setattr(module, "_run", spy)
     async with executor_of(pinned) as executor:

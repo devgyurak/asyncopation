@@ -117,7 +117,9 @@ driver call and a `query_finished` event when it returns, fails or is cancelled 
 closes), with `alias`, `kind` (`query`, or `transaction` for BEGIN/COMMIT/ROLLBACK), `sql`,
 `params`, `many`, `rowcount`, `error`, `queue_time`, `query_time` and `total_time` (seconds).
 Parameters are only included for an observer registered with `params=True`, or for all while
-`settings.DEBUG` is true. An observer that raises is logged and never fails the query. Observers
+`settings.DEBUG` is true. An observer that raises an `Exception` is logged and never fails the
+query; a `BaseException` (a cancellation, `KeyboardInterrupt`, `pytest.fail`) propagates once the
+other observers got the event. Observers
 run inline on the event loop for every query, so they must not block (no file or network I/O);
 async consumers must not be observers (a bounded-queue observer follows). Process-wide observers use
 `asyncopation.connection.add_observer(fn)` / `remove_observer(fn)`.

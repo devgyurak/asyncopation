@@ -226,8 +226,11 @@ when it returns, fails or is cancelled, to the same snapshot - for a stream when
 rows read as `rowcount` (a plain counting iterator, not an async generator), also when a finalizer
 closes it in another task. `EVENT_KINDS` maps each connection call to `query` (statements, streams,
 savepoints) or `transaction` (BEGIN / COMMIT / ROLLBACK); transaction control carries a descriptive
-`sql`. Observers add no `await` and schedule nothing; one that raises is logged on
-`asyncopation.connection` and the query goes on. `params` is in an event only for observers
+`sql`. Observers add no `await` and schedule nothing; one that raises an `Exception` is logged on
+`asyncopation.connection` and the query goes on, while a `BaseException` propagates once every
+observer got the event. The pinned executor passes a per-call `hooks.Outcome` (whether the call
+reached the driver, what the driver raised), so only a failure of the driver itself breaks a
+transaction, and a control call an observer stopped before the driver changes no transaction state. `params` is in an event only for observers
 registered with `params=True`, or for all while `settings.DEBUG` is true. `bench/hooks_micro.py`
 (the `hooks.*` cases of `make bench-micro`) times the executors on a `RecordingDriver` with 0 and 1
 observers.

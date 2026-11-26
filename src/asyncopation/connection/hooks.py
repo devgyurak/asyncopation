@@ -7,7 +7,10 @@ connection is already acquired; a call that never reaches the driver emits nothi
 ``query_finished`` event when it returns, fails or is cancelled (a stream: when it closes).
 
 Observers are synchronous callables (async-correctness rule 6): they add no ``await`` and schedule
-nothing; an observer that raises is logged, never propagated. Subscribers live in two immutable
+nothing; an observer that raises an ``Exception`` is logged and the query goes on (a
+``BaseException`` propagates once every observer got the event, and never counts as a failure of
+the connection: the pinned executor learns what the driver itself did from an ``Outcome``).
+Subscribers live in two immutable
 tuples - one process-global (``add_observer`` / ``remove_observer``), one in a contextvar
 (``with observe(fn):``, so a ``gather`` child sees its parent's observers and nothing leaks to a
 sibling). An executor snapshots both when a call starts (``active()``) and the finished event goes
@@ -38,12 +41,12 @@ logger = logging.getLogger("asyncopation.connection")
 
 __all__ = [
     "EVENT_KINDS",
+    "Outcome",
     "QueryEvent",
     "active",
     "add_observer",
     "observe",
     "observed_call",
-    "raised_by_observer",
     "remove_observer",
 ]
 
@@ -238,9 +241,10 @@ def _emit(subscribers: Subscribers, full: QueryEvent, bare: QueryEvent) -> None:
             logger.exception("asyncopation: observer %r failed on %s", subscription.fn, full.name)
             continue
         except BaseException as exc:
-            _mark(exc)
             if abort is None:
                 abort = exc
+            elif exc is not abort:  # never lost: attached to the one that is raised
+                abort.add_note(f"asyncopation: another observer of {full.name} also raised {exc!r}")
             continue
         if result is not None and inspect.isawaitable(result):
             _discard_awaitable(subscription.fn, result, full.name)
@@ -248,27 +252,31 @@ def _emit(subscribers: Subscribers, full: QueryEvent, bare: QueryEvent) -> None:
         raise abort
 
 
-_OBSERVER_MARK = "_asyncopation_raised_by_observer"
+class Outcome:
+    """What the driver call of one observed call did, for the pinned executor (ADR-0001 6c).
 
+    With observers, an exception leaving ``_run`` may come from an observer instead of the
+    connection; only what the driver itself raised may break a transaction, and a call an observer
+    stopped before the driver changed no transaction state. ``reached`` is set right before the
+    driver call, ``failure`` to the exception the driver call (or a stream's open, chunk read or
+    close) raised."""
 
-def _mark(exc: BaseException) -> None:
-    setattr(exc, _OBSERVER_MARK, True)
+    __slots__ = ("failure", "reached")
 
-
-def raised_by_observer(exc: BaseException) -> bool:
-    """Whether ``exc`` came out of an observer rather than the driver call: an executor must not
-    treat it as an interrupted statement (a ``CancelledError`` an observer raises does not break
-    the transaction - the connection never saw it)."""
-    return getattr(exc, _OBSERVER_MARK, False) is True
+    def __init__(self) -> None:
+        self.reached = False
+        self.failure: BaseException | None = None
 
 
 def _finish_after(call: _Call, original: BaseException, error: BaseException | None) -> None:
     """``call.finish`` on a failure path: an observer that raises there never replaces the
-    original exception (async-correctness rule 4); it is attached as a note."""
+    original exception (async-correctness rule 4); it is attached as a note (unless it re-raised
+    the original itself)."""
     try:
         call.finish(None, error)
     except BaseException as late:
-        original.add_note(f"asyncopation: a query_finished observer also raised {late!r}")
+        if late is not original:
+            original.add_note(f"asyncopation: a query_finished observer also raised {late!r}")
 
 
 def _discard_awaitable(fn: Observer, result: Any, name: str) -> None:
@@ -390,11 +398,16 @@ async def _observed_statement(
     queued_at: float | None,
     kind: str,
     args: tuple[Any, ...],
+    outcome: Outcome | None,
 ) -> Any:
-    call = _Call(subscribers, alias, queued_at, kind, args)
+    call = _Call(subscribers, alias, queued_at, kind, args)  # may stop the call (BaseException)
+    if outcome is not None:
+        outcome.reached = True
     try:
         result = await getattr(connection, kind)(*args)
     except BaseException as exc:
+        if outcome is not None:
+            outcome.failure = exc
         _finish_after(call, exc, exc)
         raise
     call.finish(_rowcount(kind, result), None)
@@ -440,6 +453,7 @@ class _ObservedStream:
         "_chunks",
         "_connection",
         "_manager",
+        "_outcome",
         "_queued_at",
         "_subscribers",
     )
@@ -451,8 +465,10 @@ class _ObservedStream:
         alias: str,
         queued_at: float | None,
         args: tuple[Any, ...],
+        outcome: Outcome | None,
     ) -> None:
         self._connection = connection
+        self._outcome = outcome
         self._subscribers = subscribers
         self._alias = alias
         self._queued_at = queued_at
@@ -465,10 +481,15 @@ class _ObservedStream:
         call = self._call = _Call(
             self._subscribers, self._alias, self._queued_at, "stream", self._args
         )
+        outcome = self._outcome
+        if outcome is not None:
+            outcome.reached = True
         try:
             manager = self._manager = self._connection.stream(*self._args)
             chunks = self._chunks = _CountingChunks(await manager.__aenter__())
         except BaseException as exc:
+            if outcome is not None:
+                outcome.failure = exc
             _finish_after(call, exc, exc)
             raise
         return chunks
@@ -485,6 +506,8 @@ class _ObservedStream:
         try:
             suppress = await self._manager.__aexit__(exc_type, exc, tb)
         except BaseException as failure:
+            if self._outcome is not None:
+                self._outcome.failure = failure
             _finish_after(call, failure, _stream_error(chunks, exc, failure))
             raise
         try:
@@ -492,7 +515,8 @@ class _ObservedStream:
         except BaseException as late:
             if exc is None or suppress:
                 raise
-            exc.add_note(f"asyncopation: a query_finished observer also raised {late!r}")
+            if late is not exc:
+                exc.add_note(f"asyncopation: a query_finished observer also raised {late!r}")
         return suppress  # the block's own exception, if any, propagates unchanged
 
 
@@ -517,10 +541,14 @@ def observed_call(
     queued_at: float | None,
     kind: str,
     args: Sequence[Any],
+    outcome: Outcome | None = None,
 ) -> Any:
     """The observed form of ``getattr(connection, kind)(*args)``: an awaitable, or the async
     context manager of a stream. ``queued_at`` is when the executor asked for a pooled connection
-    (``None`` on a pinned connection)."""
+    (``None`` on a pinned connection); ``outcome``, when given, records whether the call reached
+    the driver and what the driver raised."""
     if kind == "stream":
-        return _ObservedStream(connection, subscribers, alias, queued_at, tuple(args))
-    return _observed_statement(connection, subscribers, alias, queued_at, kind, tuple(args))
+        return _ObservedStream(connection, subscribers, alias, queued_at, tuple(args), outcome)
+    return _observed_statement(
+        connection, subscribers, alias, queued_at, kind, tuple(args), outcome
+    )

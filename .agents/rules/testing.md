@@ -57,8 +57,8 @@ update `PIN_TESTS` in `tests/support/pin_marker.py` when a test gains or loses t
 test module pins the two CI drift steps (ids `django-drift` in `django-main` and `integration-drift`
 in `integration` of `.github/workflows/ci.yml`): each whole step (except `name`), the job keys that
 can skip or neuter it (`if`, `defaults`, `continue-on-error`, `needs`, `strategy.fail-fast`, matrix
-`include` / `exclude`, `postgresql` still in `matrix.db`, `PYTEST_ADDOPTS` in the job or workflow
-`env`) and that the canary's drift step directly follows the Django main install step are compared
+`include` / `exclude`, `PYTEST_ADDOPTS` in the job or workflow `env`), a workflow-level `defaults`,
+and that the canary's drift step directly follows the Django main install step are compared
 exactly with `DRIFT_STEPS` in `tests/support/pin_marker.py`, so a change to either step is made together
 with that constant.
 

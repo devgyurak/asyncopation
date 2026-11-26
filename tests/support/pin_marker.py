@@ -3,6 +3,14 @@
 Also checks the two CI drift steps in ``.github/workflows/ci.yml``. The canary's drift step must
 follow the ``uv pip install`` of Django main directly (intended: the canary only means something
 when nothing runs between the install and the drift tests).
+
+Accepted gaps, on purpose (the check is a deny-list of what can skip or neuter the steps, not a
+proof): other job or workflow ``env`` variables besides ``PYTEST_ADDOPTS`` (``PYTEST_PLUGINS``,
+``PYTHONPATH``, ``UV_*``), an earlier step writing to ``$GITHUB_ENV``, changes in the repository
+itself (``conftest.py``, the pytest configuration in ``pyproject.toml``, ``-p`` in ``addopts``, the
+drift tests), job keys such as ``timeout-minutes``, ``permissions``, ``services``, ``runs-on`` and
+the matrix values, workflow triggers, later steps, and that ``tests/unit/compile`` collects at
+least one test.
 """
 
 from __future__ import annotations
@@ -41,15 +49,17 @@ INTEGRATION_STEP: dict[str, Any] = {
     "run": f"uv run pytest {DRIFT_DIR} tests/unit/compile",
 }
 CANARY_INSTALL_RUN = 'uv pip install "django @ git+https://github.com/django/django@main"'
+CANARY_INSTALL_STEP: dict[str, Any] = {"run": CANARY_INSTALL_RUN}
 CANARY_STEP: dict[str, Any] = {
     "id": "django-drift",
     "env": _REQUIRE_MYSQLDB,
     "run": f'uv run --no-sync pytest {DRIFT_DIR} tests/unit/compile -m "not django_pin"',
 }
-# (job, expected step, the `run:` of the step right before it or None, expected job keys (only those
-# in `_guarded_job_keys` are compared)). The canary's premise is that the drift step runs right after Django main is
-# installed; its job is allowed to fail (`continue-on-error`), the integration job is not.
-DRIFT_STEPS: tuple[tuple[str, dict[str, Any], str | None, dict[str, Any]], ...] = (
+# (job, expected step, the whole expected step right before it or None, expected job keys (only
+# those in `_guarded_job_keys` are compared)). The canary's premise is that the drift step runs
+# right after Django main is installed; its job is allowed to fail (`continue-on-error`), the
+# integration job is not.
+DRIFT_STEPS: tuple[tuple[str, dict[str, Any], dict[str, Any] | None, dict[str, Any]], ...] = (
     (
         "integration",
         INTEGRATION_STEP,
@@ -67,7 +77,7 @@ DRIFT_STEPS: tuple[tuple[str, dict[str, Any], str | None, dict[str, Any]], ...] 
     (
         "django-main",
         CANARY_STEP,
-        CANARY_INSTALL_RUN,
+        CANARY_INSTALL_STEP,
         {"runs-on": "ubuntu-latest", "needs": "check", "continue-on-error": True},
     ),
 )
@@ -107,7 +117,10 @@ def find_step(workflow: Path, job: str, step_id: str) -> dict[str, object]:
         if isinstance(step, dict) and step.get("id") == step_id
     ]
     if len(matches) != 1:
-        message = f"expected exactly one step with id {step_id!r} in jobs.{job} of {workflow.name}, found {len(matches)}"
+        message = (
+            f"expected exactly one step with id {step_id!r} in jobs.{job} of {workflow.name}, "
+            f"found {len(matches)}"
+        )
         raise RuntimeError(message)
     return matches[0]
 
@@ -128,9 +141,9 @@ _GUARDED_JOB_KEYS = ("if", "defaults", "continue-on-error", "needs")
 def _guarded_job_keys(job: dict[str, Any]) -> dict[str, Any]:
     """The job keys that can skip or neuter the drift step: ``if``, ``defaults``,
     ``continue-on-error``, ``needs``, ``strategy.fail-fast``, ``strategy.matrix.include`` /
-    ``exclude``, a derived ``strategy.matrix.db has postgresql`` (the integration drift step runs
-    only for ``matrix.db == 'postgresql'``) and ``env.PYTEST_ADDOPTS`` (pytest merges it). The rest
-    of the job, such as the other matrix values and ``env`` variables, is not looked at."""
+    ``exclude`` (an ``exclude`` could remove a combination that runs the step) and
+    ``env.PYTEST_ADDOPTS`` (pytest merges it). The rest of the job, such as the matrix values and
+    the other ``env`` variables, is not looked at."""
     strategy = job.get("strategy")
     strategy = strategy if isinstance(strategy, dict) else {}
     matrix = strategy.get("matrix")
@@ -140,11 +153,6 @@ def _guarded_job_keys(job: dict[str, Any]) -> dict[str, Any]:
     guarded |= {
         f"strategy.matrix.{key}": matrix[key] for key in ("include", "exclude") if key in matrix
     }
-    if "db" in matrix:
-        databases = matrix["db"]
-        guarded["strategy.matrix.db has postgresql"] = (
-            isinstance(databases, list) and "postgresql" in databases
-        )
     env = job.get("env")
     if isinstance(env, dict) and "PYTEST_ADDOPTS" in env:
         guarded["env.PYTEST_ADDOPTS"] = env["PYTEST_ADDOPTS"]
@@ -156,12 +164,13 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
 
     Each step is found by id and compared as a whole mapping except ``name``: ``run``, ``env`` and
     any other key (``if``, ``continue-on-error``, ``working-directory``, ``shell``, ``with``, ...)
-    must be exactly as expected, so no shell parsing is needed. Of the job only the keys that can skip
-    or neuter the step are compared (see ``_guarded_job_keys``; adding a matrix value or a job
-    ``env`` variable is benign), a workflow-level ``defaults`` or ``env.PYTEST_ADDOPTS`` is a problem, and the canary's drift
-    step must follow the Django main install step directly (intended: the canary's premise is that
-    Django main is installed right before). Steps after the drift step and other top-level keys are
-    free. Empty when nothing differs.
+    must be exactly as expected, so no shell parsing is needed. Of the job only the keys that can
+    skip or neuter the step are compared (see ``_guarded_job_keys``; adding a matrix value or a job
+    ``env`` variable is benign), a workflow-level ``defaults`` or ``env.PYTEST_ADDOPTS`` is a
+    problem, and the canary's drift step must follow the Django main install step directly (the
+    whole install step is compared except ``name``; intended: the canary's premise is that Django
+    main is installed right before). Steps after the drift step and other top-level keys are free.
+    Empty when nothing differs.
     """
     document = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
     problems: list[str] = []
@@ -172,7 +181,7 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
         problems.append(
             f"workflow env.PYTEST_ADDOPTS is {top_env['PYTEST_ADDOPTS']!r}, expected {_MISSING!r}"
         )
-    for job, expected_step, previous_run, expected_job in DRIFT_STEPS:
+    for job, expected_step, previous, expected_job in DRIFT_STEPS:
         step = find_step(workflow, job, expected_step["id"])
         steps = document["jobs"][job]["steps"]
         problems += _differences(f"jobs.{job}.{expected_step['id']}", step, expected_step)
@@ -181,11 +190,12 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
             _guarded_job_keys(document["jobs"][job]),
             _guarded_job_keys(expected_job),
         )
-        before = steps[steps.index(step) - 1] if steps.index(step) else {}
-        if previous_run is not None and before.get("run") != previous_run:
-            problems.append(
-                f"jobs.{job}: the step before the drift step is {before.get('run')!r}, expected {previous_run!r}"
-            )
+        position = steps.index(step)
+        if previous is not None and position == 0:
+            problems.append(f"jobs.{job}: the step before the drift step is None")
+        elif previous is not None:
+            label = f"jobs.{job}: the step before the drift step"
+            problems += _differences(label, steps[position - 1], previous)
     return problems
 
 
@@ -219,9 +229,9 @@ def write_workflow(
     keys, ``drop_job_keys`` removes job keys and ``top`` adds workflow-level keys.
     """
     document: dict[str, Any] = {"jobs": {}} | dict(top or {})
-    for job, step, previous_run, job_keys in DRIFT_STEPS:
+    for job, step, previous, job_keys in DRIFT_STEPS:
         default = [
-            {"run": previous_run or "uv sync"},
+            copy.deepcopy(previous or {"run": "uv sync"}),
             (drift or {}).get(job, drift_step(job, step["id"])),
         ]
         built = (

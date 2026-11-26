@@ -201,20 +201,6 @@ _PG = ["postgresql"]
         ),
         pytest.param(
             "integration",
-            "strategy",
-            {"fail-fast": False, "matrix": {"db": ["mysql", "mariadb"]}},
-            "strategy.matrix.db has postgresql",
-            id="integration-matrix-without-postgresql",
-        ),
-        pytest.param(
-            "integration",
-            "strategy",
-            {"fail-fast": False, "matrix": {"python": ["3.12"]}},
-            "strategy.matrix.db has postgresql",
-            id="integration-matrix-without-db",
-        ),
-        pytest.param(
-            "integration",
             "env",
             {"PYTEST_ADDOPTS": "-k nothing"},
             "env.PYTEST_ADDOPTS",
@@ -261,16 +247,14 @@ def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value, label):
     assert is_single_problem(problems, f"jobs.{job}: {label} is ")
 
 
-def test_a_matrix_without_postgresql_is_a_problem(tmp_path):
+def test_a_matrix_without_postgresql_is_not_a_problem(tmp_path):
     # given
     matrix = {"fail-fast": False, "matrix": {"db": ["mysql"], "python": ["3.12"]}}
     workflow = write_workflow(tmp_path / "ci.yml", jobs={"integration": {"strategy": matrix}})
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert is_single_problem(
-        problems, "jobs.integration: strategy.matrix.db has postgresql is False"
-    )
+    assert problems == []
 
 
 def test_pytest_addopts_in_the_workflow_env_is_a_problem(tmp_path):
@@ -366,7 +350,7 @@ def test_a_canary_drift_step_not_right_after_the_django_main_install_is_a_proble
     # when
     problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
     # then
-    assert is_single_problem(problems, "jobs.django-main: the step before the drift step is")
+    assert is_single_problem(problems, "jobs.django-main: the step before the drift step: run is ")
 
 
 def test_an_inserted_step_between_install_and_canary_drift_is_a_problem(tmp_path):
@@ -376,8 +360,38 @@ def test_an_inserted_step_between_install_and_canary_drift_is_a_problem(tmp_path
     problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
     # then
     assert is_single_problem(
-        problems, "jobs.django-main: the step before the drift step is 'uv sync'"
+        problems, "jobs.django-main: the step before the drift step: run is 'uv sync'"
     )
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("if", "${{ false }}"),
+        ("continue-on-error", True),
+        ("working-directory", "docs"),
+        ("shell", "bash -c 'true'"),
+        ("env", {"UV_NO_SYNC": "0"}),
+    ],
+)
+def test_an_install_step_with_an_extra_key_is_a_problem(tmp_path, key, value):
+    # given
+    steps = {"django-main": [{"run": CANARY_INSTALL_RUN, key: value}, drift_step(*CANARY)]}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
+    # then
+    assert is_single_problem(
+        problems, f"jobs.django-main: the step before the drift step: {key} is "
+    )
+
+
+def test_a_changed_install_step_name_is_not_a_problem(tmp_path):
+    # given
+    steps = {"django-main": [{"name": "install", "run": CANARY_INSTALL_RUN}, drift_step(*CANARY)]}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
+    # then
+    assert problems == []
 
 
 def test_a_canary_drift_step_as_the_first_step_is_a_problem(tmp_path):

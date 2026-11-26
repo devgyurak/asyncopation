@@ -10,12 +10,14 @@ from asyncopation.query import AsyncQuerySet
 from tests.support.aq_wrapper import (
     CACHED_ROW,
     COMBINATIONS,
+    OVERRIDE_CASES,
     PREFETCHED_COMBINATIONS,
     combination_operands,
     filled_by_alist_wrapper,
     foreign_mode_identity_wrapper,
     fresh_books,
     identity_queryset,
+    overriding_queryset,
     prefetched_identity_manager,
     prefetched_operands,
     shared_with,
@@ -108,7 +110,20 @@ def test_a_combination_is_wrapped_in_fetch_raise(build):
     assert combined.queryset._fetch_mode is FETCH_RAISE
 
 
-def test_a_user_method_that_returns_its_receiver_is_wrapped_as_a_clone():
+@pytest.mark.parametrize(("method", "reach"), OVERRIDE_CASES)
+def test_an_overriding_method_that_returns_a_stored_queryset_is_cloned_into_fetch_raise(
+    method, reach
+):
+    # given
+    queryset, stored = overriding_queryset(method)
+    # when
+    returned = reach(aq(queryset))
+    # then
+    assert returned.queryset is not stored
+    assert returned.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_user_defined_method_that_returns_its_receiver_gets_a_clone():
     # given
     wrapper = aq(identity_queryset())
     # when
@@ -117,7 +132,7 @@ def test_a_user_method_that_returns_its_receiver_is_wrapped_as_a_clone():
     assert returned.queryset is not wrapper.queryset
 
 
-def test_a_user_method_that_returns_an_argument_is_wrapped_as_a_clone():
+def test_a_user_defined_method_that_returns_an_argument_gets_a_clone():
     # given
     argument = identity_queryset()
     wrapper = aq(identity_queryset())
@@ -148,7 +163,7 @@ def test_a_user_method_that_returns_a_foreign_mode_argument_is_wrapped_in_fetch_
     assert returned.queryset._fetch_mode is FETCH_RAISE
 
 
-def test_a_user_method_that_returns_a_keyword_argument_is_wrapped_as_a_clone():
+def test_a_user_defined_method_that_returns_a_keyword_argument_gets_a_clone():
     # given
     argument = identity_queryset()
     wrapper = aq(identity_queryset())
@@ -325,7 +340,7 @@ async def test_a_stored_queryset_with_a_filled_cache_that_a_user_method_returns_
     assert rows == [CACHED_ROW]
 
 
-def test_a_user_method_that_returns_its_second_argument_is_wrapped_as_a_clone():
+def test_a_user_defined_method_that_returns_its_second_argument_gets_a_clone():
     # given
     second = identity_queryset()
     wrapper = aq(identity_queryset())

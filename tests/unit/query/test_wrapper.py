@@ -8,7 +8,6 @@ from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
     CACHED_ROW,
-    SHARED_OTHER_MODE,
     NotAQuerySetDuckSource,
     NotAQuerySetManager,
     SharedDuckSource,
@@ -363,10 +362,11 @@ def test_a_queryset_of_another_fetch_mode_returned_by_a_proxied_method_is_cloned
 def test_a_queryset_returned_by_a_proxied_method_is_not_mutated_when_it_is_wrapped():
     # given
     wrapper = aq(foreign_mode_queryset())
+    stored = wrapper.queryset.shared_other_mode()
     # when
     wrapper.shared_other_mode()
     # then
-    assert SHARED_OTHER_MODE._fetch_mode is FETCH_ONE
+    assert stored._fetch_mode is FETCH_ONE
 
 
 def test_aq_of_a_many_to_many_manager_keeps_the_pending_sticky_filter():

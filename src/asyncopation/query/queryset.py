@@ -116,7 +116,10 @@ class AsyncQuerySet:
         if isinstance(key, slice):
             if key.step:  # Django evaluates the QuerySet to apply a step
                 raise _evaluation_error("slicing an aq() QuerySet with a step", "alist")
-            return _wrap(self._queryset[key])
+            return _wrap(
+                self._queryset[key],
+                own_method=type(self._queryset).__getitem__ in _DJANGO_FUNCTIONS,
+            )
         raise _evaluation_error("indexing an aq() QuerySet", "aget")
 
     def __reduce__(self) -> Any:
@@ -135,7 +138,9 @@ class AsyncQuerySet:
         so a copy of a prefetched wrapper queries where its ``all()`` reads the cache."""
         if self._prefetched:
             return AsyncQuerySet(self._queryset)
-        wrapped = _wrap(self._queryset.all())
+        wrapped = _wrap(
+            self._queryset.all(), own_method=type(self._queryset).all in _DJANGO_FUNCTIONS
+        )
         if self._fresh:
             dq.copy_filter_sticky(wrapped.queryset, self._queryset)
         return wrapped
@@ -150,13 +155,28 @@ class AsyncQuerySet:
 
     # -- combining ----------------------------------------------------------------------------
     def __or__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset | _unwrap(other), self, other)
+        return _wrap(
+            self._queryset | _unwrap(other),
+            self,
+            other,
+            own_method=type(self._queryset).__or__ in _DJANGO_FUNCTIONS,
+        )
 
     def __and__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset & _unwrap(other), self, other)
+        return _wrap(
+            self._queryset & _unwrap(other),
+            self,
+            other,
+            own_method=type(self._queryset).__and__ in _DJANGO_FUNCTIONS,
+        )
 
     def __xor__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset ^ _unwrap(other), self, other)
+        return _wrap(
+            self._queryset ^ _unwrap(other),
+            self,
+            other,
+            own_method=type(self._queryset).__xor__ in _DJANGO_FUNCTIONS,
+        )
 
     def __repr__(self) -> str:
         # QuerySet.__repr__ evaluates self[:21]; this one never touches the database.
@@ -187,9 +207,10 @@ class AsyncQuerySet:
         return attribute
 
 
-# The functions Django defines on QuerySet: a bound method whose function is one of them is not an
-# override or a user-defined method.
-_DJANGO_FUNCTIONS = frozenset(vars(QuerySet).values())
+# The functions Django defines on QuerySet: a method (a bound method's function, or the class
+# attribute for an operator, all() or slicing) that is one of them is not an override or a
+# user-defined method.
+_DJANGO_FUNCTIONS = frozenset(v for v in vars(QuerySet).values() if inspect.isfunction(v))
 
 
 def _proxy(method: Any, owner: AsyncQuerySet) -> Any:

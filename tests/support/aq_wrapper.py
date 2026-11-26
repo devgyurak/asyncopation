@@ -156,38 +156,37 @@ def raise_mode_books() -> QuerySet[Book]:
     return Book.objects.all().fetch_mode(FETCH_RAISE)
 
 
-SHARED_OTHER_MODE = Book.objects.all()
-SHARED_RAISE_MODE = raise_mode_books()
-SHARED_CACHED = raise_mode_books()
-SHARED_CACHED._result_cache = [CACHED_ROW]
-SHARED_CACHED_OTHER_MODE = Book.objects.all()
-SHARED_CACHED_OTHER_MODE._result_cache = [CACHED_ROW]
+def foreign_mode_queryset() -> QuerySet[Book]:
+    """A QuerySet whose user methods return QuerySets it stores (one in another fetch mode, one in
+    FETCH_RAISE, two with a filled cache): a user method is not a Django chaining method, so its
+    result is not a fresh clone. The stored QuerySets belong to this call's class, so a clone of
+    the QuerySet still reaches them and no test shares them with another."""
+    other_mode = Book.objects.all()
+    raise_mode = raise_mode_books()
+    cached = raise_mode_books()
+    cached._result_cache = [CACHED_ROW]
+    cached_other_mode = Book.objects.all()
+    cached_other_mode._result_cache = [CACHED_ROW]
 
+    class ForeignModeQuerySet(QuerySet):
+        def shared_other_mode(self) -> QuerySet[Book]:
+            return other_mode
 
-class ForeignModeQuerySet(QuerySet):
-    """A QuerySet with user methods that return a shared QuerySet (one in another fetch mode, one in
-    FETCH_RAISE): a user method is not a Django chaining method, so neither is a fresh clone."""
+        def shared_raise_mode(self) -> QuerySet[Book]:
+            return raise_mode
 
-    def shared_other_mode(self) -> QuerySet[Book]:
-        return SHARED_OTHER_MODE
+        def shared_cached(self) -> QuerySet[Book]:
+            return cached
 
-    def shared_raise_mode(self) -> QuerySet[Book]:
-        return SHARED_RAISE_MODE
+        def shared_cached_other_mode(self) -> QuerySet[Book]:
+            return cached_other_mode
 
-    def shared_cached(self) -> QuerySet[Book]:
-        return SHARED_CACHED
-
-    def shared_cached_other_mode(self) -> QuerySet[Book]:
-        return SHARED_CACHED_OTHER_MODE
+    return ForeignModeQuerySet(model=Book)
 
 
 def stored_raise_mode_wrapper() -> Any:
     """A wrapper whose user method returns a stored FETCH_RAISE QuerySet."""
-    return aq_of(ForeignModeQuerySet(model=Book))
-
-
-def foreign_mode_queryset() -> QuerySet[Book]:
-    return ForeignModeQuerySet(model=Book)
+    return aq_of(foreign_mode_queryset())
 
 
 class StickyForeignQuerySet(QuerySet):
@@ -421,3 +420,35 @@ def prefetched_identity_manager() -> SharedQuerysetManager:
     manager.shared = IdentityQuerySet(model=Book)
     manager.shared._result_cache = [CACHED_ROW]
     return manager
+
+
+def overriding_queryset(method: str) -> tuple[Any, QuerySet[Book]]:
+    """A FETCH_RAISE QuerySet of a subclass that overrides `method` (`all`, `__or__`, `__and__`,
+    `__xor__`, `__getitem__` or `filter`) to return a stored unevaluated FETCH_RAISE QuerySet, and that
+    stored QuerySet."""
+    stored = raise_mode_books()
+    overrides = {
+        "all": lambda self: stored,
+        "__or__": lambda self, other: stored,
+        "__and__": lambda self, other: stored,
+        "__xor__": lambda self, other: stored,
+        "__getitem__": lambda self, key: stored,
+        "filter": lambda self, *args, **kwargs: stored,
+    }
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    override = overrides[method]
+    override.__name__ = method  # a method is known by its name, as a def would give it
+    subclass = type("OverridingQuerySet", (QuerySet,), {method: override})
+    return subclass(model=Book).fetch_mode(FETCH_RAISE), stored
+
+
+# (overridden method, how a wrapper of that QuerySet reaches it)
+OVERRIDE_CASES = [
+    pytest.param("all", lambda wrapper: wrapper.all(), id="all"),
+    pytest.param("__or__", lambda wrapper: wrapper | wrapper, id="or"),
+    pytest.param("__and__", lambda wrapper: wrapper & wrapper, id="and"),
+    pytest.param("__xor__", lambda wrapper: wrapper ^ wrapper, id="xor"),
+    pytest.param("__getitem__", lambda wrapper: wrapper[:1], id="slice"),
+    pytest.param("filter", lambda wrapper: wrapper.filter(pk=1), id="filter"),
+]

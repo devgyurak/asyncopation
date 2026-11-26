@@ -28,7 +28,13 @@ from typing import Any, NoReturn, Self, overload
 from django.db.models import QuerySet
 
 from asyncopation._django import managers as dm
-from asyncopation.query.queryset import aq, manager_queryset, refuse_blocked, wrap_result
+from asyncopation.query.queryset import (
+    aq,
+    call_on_manager_queryset,
+    manager_queryset,
+    refuse_blocked,
+    wrap_result,
+)
 
 __all__ = ["AsyncObjects"]
 
@@ -60,12 +66,15 @@ class AsyncObjects:
     """
 
     name: str = "aobjects"
+    # The slot names of the class and its bases, as stored (computed once per class).
+    _asyncopation_slots: tuple[str, ...] = ()
     # The binding: None on the declared (unbound) object.
     _asyncopation_model: Any = None
     _asyncopation_manager: Any = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        cls._asyncopation_slots = _slots(cls)
         for attr in _PROTECTED:
             owner = next(klass for klass in cls.__mro__ if attr in vars(klass))
             if owner is not AsyncObjects:
@@ -103,7 +112,7 @@ class AsyncObjects:
         # Not copy.copy: binding must not run a `__copy__` a subclass defines.
         bound = object.__new__(type(self))
         bound.__dict__.update(self.__dict__)
-        for slot in _slots(type(self)):
+        for slot in type(self)._asyncopation_slots:
             try:
                 value = object.__getattribute__(self, slot)
             except AttributeError:
@@ -173,7 +182,7 @@ class AsyncObjects:
             # `manager_method` is `getattr(self.get_queryset(), name)(...)` at call time: the
             # QuerySet comes from `aq(manager)` on each call, one clone fewer than the manager.
             def copied(*args: Any, **kwargs: Any) -> Any:
-                return getattr(aq(manager), name)(*args, **kwargs)
+                return call_on_manager_queryset(manager, name, args, kwargs)
 
             copied.__name__ = name
             return copied
@@ -228,14 +237,14 @@ class AsyncObjects:
         return value
 
 
-def _slots(cls: type) -> list[str]:
+def _slots(cls: type) -> tuple[str, ...]:
     """The slot names (as stored, so private ones are mangled) every class of the MRO declares."""
-    return [
+    return tuple(
         name
         for klass in cls.__mro__
         for name, value in vars(klass).items()
         if isinstance(value, MemberDescriptorType)
-    ]
+    )
 
 
 def _is_class_data_descriptor(cls: type, name: str) -> bool:

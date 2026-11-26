@@ -26,6 +26,7 @@ __all__ = [
     "AQ_MANAGER_HOOK",
     "AsyncQuerySet",
     "aq",
+    "call_on_manager_queryset",
     "manager_queryset",
     "refuse_blocked",
     "wrap_result",
@@ -258,15 +259,31 @@ def _proxy(method: Any, owner: AsyncQuerySet) -> Any:
 
     @functools.wraps(method)
     def call(*args: Any, **kwargs: Any) -> Any:
-        # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
-        # it would hand the wrapper back as if it were a QuerySet.
-        result = method(
-            *(_unwrap(value) for value in args),
-            **{key: _unwrap(value) for key, value in kwargs.items()},
-        )
-        return _wrap(result, owner, *args, *kwargs.values(), own_method=own)
+        return _call(method, owner, own, args, kwargs)
 
     return call
+
+
+def _call(method: Any, owner: AsyncQuerySet, own: bool, args: Any, kwargs: dict[str, Any]) -> Any:
+    # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
+    # it would hand the wrapper back as if it were a QuerySet.
+    result = method(
+        *(_unwrap(value) for value in args),
+        **{key: _unwrap(value) for key, value in kwargs.items()},
+    )
+    return _wrap(result, owner, *args, *kwargs.values(), own_method=own)
+
+
+def call_on_manager_queryset(manager: Any, name: str, args: Any, kwargs: dict[str, Any]) -> Any:
+    """``aq(manager).<name>(*args, **kwargs)`` without building a proxy function: the call a
+    manager-level copied QuerySet method makes (ADR-0009 Decision 4). The name has passed
+    :func:`refuse_blocked` already."""
+    wrapper = aq(manager)
+    attribute = getattr(wrapper._queryset, name)
+    if not callable(attribute) or isinstance(attribute, type):
+        return getattr(wrapper, name)(*args, **kwargs)
+    own = getattr(attribute, "__func__", None) in _DJANGO_FUNCTIONS
+    return _call(attribute, wrapper, own, args, kwargs)
 
 
 def _unwrap(value: Any) -> Any:

@@ -7,7 +7,7 @@ the recording driver, and so are the executors (borrowed/pinned connection owner
 MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
-`aobjects`) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
+`aobjects`, Accepted) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
 behaviour described below is still ADR-0006's until then.
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 

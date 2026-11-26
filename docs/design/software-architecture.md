@@ -238,7 +238,7 @@ facade. The facade sits at the top because evaluation runs prefetch and `adelete
 | 0005 | Hooks: observers vs interceptors | #9 |
 | 0006 | Public API attachment (`aq` composition, `aobjects` descriptor) | Phase 1 `aobjects` |
 | 0007 | Sans-I/O cores for ported orchestration; `_django` boundary + drift tests | Phase 4/5 |
-| 0009 | Manager-level `aobjects` (async manager methods + manager proxy); supersedes 0006 Decision 3 | Phase 1 `aobjects` (#72) |
+| 0009 (Accepted) | Manager-level `aobjects` (async manager methods + manager proxy); supersedes 0006 Decision 3 | Phase 1 `aobjects` (#72) |
 
 ## 7. Sources
 

@@ -1,12 +1,14 @@
 # ADR-0009: `aobjects` is a manager-level object - async manager methods and a manager proxy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-26
 - Deciders: maintainer (@devgyurak) - options B + C and the return type chosen 2026-11-26 on #69;
-  acceptance of this ADR to be confirmed in the PR review
+  lookup order changed (evaluators overridable) in the PR #73 review; accepted by: maintainer
+  (@devgyurak), 2026-11-26 in the PR #73 review
 - Architect review: APPROVE WITH CHANGES (architect review 2026-11-26, 12 required changes
   applied; re-review 2026-11-26: APPROVE WITH CHANGES, 4 remaining changes applied; final check
-  2026-11-26 at 7eac090: APPROVE)
+  2026-11-26 at 7eac090: APPROVE; PR #73 review changes re-reviewed 2026-11-26: APPROVE WITH
+  CHANGES, 1 change applied; final: APPROVE)
 - Supersedes in part: [ADR-0006](0006-public-api-attachment.md) Decision 3 (the `aobjects` shape),
   the first half of its Consequences bullet on manager-only methods and its last Validation item
   (the `AsyncQuerySet` return type); ADR-0006 Decisions 1, 2, 4, 5 and 6 stay in force
@@ -129,10 +131,18 @@ class). The new requirement (async manager methods) does not change any of these
    class") without recursing; its `__getattr__` refuses dunder names and the binding slots the same
    way `AsyncQuerySet.__getattr__` does, so protocol lookups (`copy`, `pickle`) never reach the
    manager. `contribute_to_class` is never proxied either (bound or not, it raises
-   `AttributeError`): Django calls it on any class-body value that has it
-   (`_has_contribute_to_class`, `db/models/base.py:90-92`, used at lines 119 and 393), so
-   `aobjects = Other.aobjects` in a model body or `NewModel.add_to_class("x", Other.aobjects)` would
-   otherwise re-target `Other._default_manager` to `NewModel`.
+   `AttributeError`). Django calls it on any value that has it (`_has_contribute_to_class`,
+   `db/models/base.py:90-92`, used at line 119 for a class body and line 393 by `add_to_class`),
+   and a proxied call would run `Other._default_manager.contribute_to_class(NewModel, name)`, which
+   sets that shared manager's `model` to `NewModel` and adds it to `NewModel._meta.managers`
+   (checked on Django 6.1.3). The two cases differ:
+   - `NewModel.add_to_class("x", Other.aobjects)` on an existing model: `Other`'s default manager
+     goes over to `NewModel` (`Other.objects.model is NewModel`, so `Other.objects` queries the
+     other table) until the `Options` caches are next cleared.
+   - `aobjects = Other.aobjects` in a model body: registering the new model clears the app
+     registry caches, so `Other` gets fresh manager copies and its own model back, but
+     `NewModel._meta.managers` now holds the captured manager, so Django does not add the implicit
+     `objects` and `NewModel.objects` does not exist.
 2. **Async manager methods (B).** A subclass adds `async def` methods. They do I/O only through
    Asyncopation's evaluators reached from `self`, for example `await self.filter(...).aget(...)`, and
    read the bound model as `self.model` (the accessed class: a child or proxy model binds its own).
@@ -148,26 +158,40 @@ class). The new requirement (async manager methods) does not change any of these
    class User(Model):
        aobjects = UserAsyncObjects()  # a third-party model: UserAsyncObjects.attach(User)
    ```
-3. **Lookup order.** A name on the manager-level object resolves, first match wins:
-   1. **`AsyncObjects`' own API**: the evaluators `alist`, `aget`, `afirst`, `acount`, `aexists`
-      (one table in `query/objects.py` is the single source of these names; later evaluators join
-      it as they land), each the same call on a fresh `aq()` of the bound manager; and the
-      attributes `model` (the bound model) and `name` (the attribute name the descriptor was
-      declared under: `Model.aobjects.name` is `"aobjects"` where `Model.objects.name` is
-      `"objects"`, a new recorded divergence: under ADR-0006 `Model.aobjects.name` was proxied to
-      the QuerySet, which has no `name`, and raised `AttributeError`). These cannot be shadowed: a subclass
-      whose MRO resolves one of these names to anything but `AsyncObjects`' own (its own definition
-      or a mixin's) raises `TypeError` when the class is created (`__init_subclass__`), with a
-      message that suggests another name. `attach`, `__init__`, `__get__` and `__set_name__` are
-      ordinary class plumbing a subclass may extend.
-   2. **The subclass's own attributes** (B), including names that also exist on the manager or in
-      the blocking tables.
-   3. **The blocking tables** of `asyncopation.query.queryset`, unchanged and still single-sourced
+3. **Lookup order.** A name on the manager-level object resolves, first match wins. Steps 1-3 are
+   ordinary attribute lookup on the class (its MRO); steps 4 and 5 are `__getattr__`.
+   *Changed 2026-11-26 by the maintainer in the PR #73 review: the fixed order put the evaluators
+   before the subclass's methods; evaluators are now overridable through the normal MRO, and only
+   `model` and `name` are protected.*
+   1. **`model` and `name`**: `model` is the bound model and `name` the attribute name the
+      descriptor was declared under (`Model.aobjects.name` is `"aobjects"` where
+      `Model.objects.name` is `"objects"`, a new recorded divergence: under ADR-0006
+      `Model.aobjects.name` was proxied to the QuerySet, which has no `name`, and raised
+      `AttributeError`). These cannot be shadowed: a subclass whose MRO resolves either name to
+      anything but `AsyncObjects`' own (its own definition or a mixin's) raises `TypeError` when the
+      class is created (`__init_subclass__`), with a message that suggests another name.
+   2. **The subclass's own attributes** (B), including names that also exist on `AsyncObjects`
+      (an evaluator override, which reaches the default through `super().aget(...)`, as a Django
+      `Manager` subclass overrides `create`), on the manager or in the blocking tables. `attach`,
+      `__init__`, `__get__` and `__set_name__` are ordinary class plumbing a subclass may extend.
+      `super()` never calls `__getattr__`, so it reaches only names `AsyncObjects` defines (the
+      evaluators and the class plumbing): `super().aget(...)` works, while an override of a proxied
+      name reaches the default with `super().__getattr__("published")(...)` (or, for a copied
+      QuerySet method, `aq(self).filter(...)`), and a name that is in neither place, such as
+      `super().acreate(...)` before #20 adds that evaluator, raises a plain `AttributeError`, not
+      the blocking table's error. Overriding a manager-level evaluator does not affect chains:
+      `Model.aobjects.filter(...).aget()` and `aq(Model.aobjects).aget()` bypass an `aget` override,
+      as overriding `Manager.get` does not change `Model.objects.filter().get()`; an override used
+      for access control has to cover the chaining methods too.
+   3. **`AsyncObjects`' evaluators**: `alist`, `aget`, `afirst`, `acount`, `aexists` (one table in
+      `query/objects.py` is the single source of these names; later evaluators join it as they
+      land), each the same call on a fresh `aq()` of the bound manager.
+   4. **The blocking tables** of `asyncopation.query.queryset`, unchanged and still single-sourced
       there: a `_SYNC_EVALUATORS` name (`get`, `count`, `iterator`, ...) raises
       `SyncEvaluationError`, a `_DJANGO_COROUTINES` name (`acreate`, `aiterator`, ...) and `raw`
       raise `NotImplementedError`, exactly as on an `AsyncQuerySet`, even when the manager overrides
       that name.
-   4. **The bound default manager's attribute** (C), with the result rules of Decision 4; dunder
+   5. **The bound default manager's attribute** (C), with the result rules of Decision 4; dunder
       names, the binding slots and `contribute_to_class` are never proxied (Decision 1).
 4. **Results of the proxy.**
    - **A QuerySet method Django copied onto the manager** is not called on the manager: the call
@@ -197,6 +221,10 @@ class). The new requirement (async manager methods) does not change any of these
      - an awaitable (a sync method returning `self.filter(...).acount()`, Django's `sync_to_async`
        coroutine) is closed when it has `close()` (it has not started, so no thread has) and
        `NotImplementedError` is raised;
+     - an async generator (`inspect.isasyncgen`; a sync method returning
+       `self.get_queryset().aiterator()`, Django's `sync_to_async` iteration) is not an awaitable
+       but is refused the same way: `NotImplementedError` is raised without iterating it (it has
+       not started, so no thread has);
      - a `QuerySet` is wrapped in an `AsyncQuerySet` with ADR-0006 Decision 4's rules: the fresh
        result of Django's own `BaseManager.all()` / `get_queryset()` (whatever `get_queryset`
        override `all()` calls) is switched to `FETCH_RAISE` in place; the result of a user-defined
@@ -226,8 +254,8 @@ class). The new requirement (async manager methods) does not change any of these
      copy of it, and none of them touches the database. A copy of a QuerySet still needs `.all()`
      first. The 2026-11-26 decision on #69 listed `copy` among the operations that need `.all()`;
      a `Manager` can be copied, so copying the object itself follows `Manager` parity and only a
-     QuerySet copy needs `.all()` (a clarification of the fixed decision, to be confirmed by the
-     maintainer in the PR review).
+     QuerySet copy needs `.all()` (a clarification of the fixed decision, confirmed by the
+     maintainer (@devgyurak), 2026-11-26 in the PR #73 review).
    - `alist()` is a public named evaluator like Django's manager-level `aget()` / `acount()`, so it
      stays on the manager level.
    - The manager-level evaluators never cache: each call builds a fresh `aq(manager)`, so
@@ -270,8 +298,8 @@ class). The new requirement (async manager methods) does not change any of these
    `SynchronousOnlyOperation` is pinned by a test (Decision 8).
 5. *Sync evaluators and unimplemented `a*` names?* Unchanged: the blocking tables come before the
    manager in the lookup order and raise `SyncEvaluationError` / `NotImplementedError`; coroutines
-   and async generators the manager defines, and awaitables its sync methods return, are refused
-   too (Decisions 3 and 4).
+   and async generators the manager defines, and awaitables and async generators its sync methods
+   return, are refused too (Decisions 3 and 4).
 6. *Impact on #6 and #18?* #6 is closed; its code and the tests that pin the `AsyncQuerySet` value
    change in the implementation issue (see Consequences). `Book.aobjects.aget(...)`,
    `.filter(...).acount()`, `.all()[:n].alist()`, `.order_by(...).afirst()` in the harness, bench and
@@ -302,9 +330,12 @@ class). The new requirement (async manager methods) does not change any of these
   `test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset`. The documents that list
   `async for` on `aobjects` (README status line, `docs/architecture.md` status line, `CHANGELOG.md`,
   the Phase 1 row of the `plan.md` roadmap) change with the implementation.
-- **Upgrade hazard**: when a new evaluator lands (`alast`, `acreate`), a subclass that already
-  defines that name fails at import with the `TypeError` of Decision 3; the CHANGELOG names every
-  evaluator added to the table.
+- **Overriding evaluators**: a subclass may override an evaluator (`aget`, later `acreate`) and
+  call the default with `super()`. When a new evaluator lands (`alast`, `acreate` with #20), a
+  subclass that already defines that name keeps working and its method keeps winning (the normal
+  MRO), so it silently replaces the new default; the CHANGELOG names every evaluator added to the
+  table so such subclasses can check their semantics. Only `model` and `name` fail at class
+  creation.
 - A dependency on a private Django detail (the shared `manager_method` code object); the drift test
   and the ledger catch a Django change, and the fallback if it breaks is to send every name to the
   manager (correct, one clone more).
@@ -334,8 +365,10 @@ Implemented in the follow-up issue to #69 (PR 2); every item below is a test the
   `AsyncQuerySet` and not a `Manager`; declaring it still adds nothing to `_meta.managers`;
   `Model.aobjects.name` is the declared attribute name; the unbound declared object
   (`vars(Model)["aobjects"]`) raises `AttributeError` for an evaluator and a proxied name;
-  `hasattr(Model.aobjects, "contribute_to_class")` is false, and adding `Model.aobjects` to another
-  model (class body or `add_to_class`) leaves `Model._default_manager` and its `model` untouched.
+  `hasattr(Model.aobjects, "contribute_to_class")` is false; adding `Model.aobjects` to another
+  model, in a class body and with `add_to_class`, leaves `Model._default_manager` and its `model`
+  untouched and leaves the receiving model's `_meta.managers` and its `objects` as they were (the
+  implicit `objects` of a class-body model still exists).
 - unit: **replaces ADR-0006's Validation item pinned by
   `test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset`**: a swapped-out model's
   `aobjects` returns a bound `AsyncObjects` (`no_sql`), while its `objects` raises as Django's does.
@@ -349,15 +382,19 @@ Implemented in the follow-up issue to #69 (PR 2); every item below is a test the
   it unchanged.
 - unit: a subclass's `async def` sees `self.model` as the accessed class (inherited by a
   multi-table child, a proxy model and a concrete child of an abstract model);
-  `UserAsyncObjects.attach(Model)` binds the subclass; a subclass or a mixin defining `aget` or
-  `model` raises `TypeError`; a subclass defining a manager name or a blocking-table name has its
-  own method run (step 2 before steps 3 and 4).
+  `UserAsyncObjects.attach(Model)` binds the subclass; a subclass or a mixin defining `model` or
+  `name` raises `TypeError`; a subclass overriding `aget` has its method run and reaches the
+  default through `super().aget()` (same result as the sync ORM), an override of `published`
+  reaches the manager's through `super().__getattr__("published")()`, and `super().acreate()`
+  raises `AttributeError` (until #20); a subclass defining a manager
+  name or a blocking-table name has its own method run (step 2 before steps 4 and 5).
 - unit: `Model.aobjects.db_manager("other")` is an instance of the same subclass whose QuerySets use
   `"other"`; `aq(Model.aobjects)` and `aq(Model.aobjects.db_manager("other"))` are fresh
   `AsyncQuerySet`s with the bound manager's alias.
 - unit: a coroutine or async generator defined on the manager (a native `async def`, a
-  `sync_to_async` attribute, `UserManager.acreate_user`) and a sync manager method that returns a
-  coroutine raise `NotImplementedError` without a thread hop (no thread started, no `sync_to_async`
+  `sync_to_async` attribute, `UserManager.acreate_user`), a sync manager method that returns a
+  coroutine and one that returns an async generator (`self.get_queryset().aiterator()`) raise
+  `NotImplementedError` without a thread hop (no thread started, no `sync_to_async`
   call); sync evaluators raise `SyncEvaluationError` and unimplemented `a*` names
   `NotImplementedError` as on `aq()`, also when the manager overrides them.
 - unit: slicing, `|`, `iter()`, `.queryset` and `async for` on the manager-level object raise as on

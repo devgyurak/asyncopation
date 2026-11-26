@@ -25,10 +25,14 @@ ALIAS = "default"
 SELECT = "SELECT 1"
 
 
-def _executors() -> Any:
+def executor_module() -> Any:
+    """`asyncopation.connection.executor`, imported when a scenario needs it."""
     from asyncopation.connection import executor
 
     return executor
+
+
+_executors = executor_module  # transitional alias: older support modules still import it
 
 
 def _registry() -> Any:

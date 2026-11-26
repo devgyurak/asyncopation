@@ -97,7 +97,7 @@ the drift test. See the `port-django-internals` skill.
 ## Public API
 `aobjects` (`AsyncObjects` descriptor), `aq()`, `afetch()`, `async_atomic`, `configure()` / `setup()` /
 `close()`, the ASGI lifespan wrapper, `ConcurrentQueryError` and `SyncEvaluationError` (`asyncopation.errors`,
-re-exported at the root; imports nothing; `aq` / `AsyncQuerySet` load lazily so `import asyncopation` stays light), `observe()` / `intercept()`, fetch-mode constants and
+re-exported at the root; imports nothing; `aq` / `AsyncQuerySet` load lazily so `import asyncopation` stays light), `observe()` / `intercept()` (with `asyncopation.connection.add_observer` / `remove_observer` / `add_interceptor` / `remove_interceptor` / `QueryEvent` / `QueueObserver`), fetch-mode constants and
 `asyncopation.testing` (`__all__`: `RecordingDriver`, `RecordingConnection`, `Statement`,
 `NoQueuedResult`, `Capabilities`, `ExecResult`). `asyncopation.drivers` is internal and
 experimental, not public API.

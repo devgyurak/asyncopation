@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`), `asyncopation.observe()` reports every query to synchronous observers and `asyncopation.intercept()` wraps statements in an async chain; the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -107,6 +107,67 @@ another task (a `gather` or `TaskGroup` child, a task created inside the block),
 while a statement or stream is in flight, or after the block ended raises
 `asyncopation.ConcurrentQueryError` (a `RuntimeError`, not a `DatabaseError`, so retry loops do
 not swallow it). Run concurrent work outside the transaction.
+
+## Observing queries
+
+`asyncopation.observe(fn)` calls a synchronous `fn(event)` for every statement, stream and
+transaction-control call the current task (and the tasks it starts, such as `gather` children)
+runs until the block exits (ADR-0005; a task that outlives the block stops reporting to it then). Each call gives a `query_started` event right before the
+driver call (before the interceptor chain, when there is one) and a `query_finished` event when it returns, fails or is cancelled (a stream: when it
+closes), with `alias`, `kind` (`query`, or `transaction` for BEGIN/COMMIT/ROLLBACK), `sql`,
+`params`, `many`, `rowcount`, `error`, `queue_time`, `query_time` and `total_time` (seconds).
+Parameters are only included for an observer registered with `params=True`, or for all while
+`settings.DEBUG` is true. An observer that raises an `Exception` is logged and never fails the
+query; a `BaseException` (a cancellation, `KeyboardInterrupt`, `pytest.fail`) propagates once the
+other observers got the event. Observers
+run inline on the event loop for every query, so they must not block (no file or network I/O);
+an async consumer registers an `asyncopation.connection.QueueObserver(maxsize=1000)` (created
+inside the running loop) and drains it with `await queue.get()` or `async for`; when it is full,
+new events are dropped and counted in `dropped`. Process-wide observers use
+`asyncopation.connection.add_observer(fn)` / `remove_observer(fn)`.
+
+```python
+import asyncopation
+
+slow = []
+
+
+def record_slow(event):
+    if event.name == "query_finished" and event.total_time > 0.1:
+        slow.append((event.sql, event.total_time, event.error))
+
+
+with asyncopation.observe(record_slow):
+    books = await Book.aobjects.filter(published=True).alist()
+```
+
+`asyncopation.intercept(fn)` wraps every `fetch_all` / `execute` / `execute_many` the current task
+tree runs in an async chain shaped like Django's `execute_wrapper`: `await fn(execute, sql,
+params, many, context)`, where `context` is `{"alias", "method", "pinned"}`. Call
+`await execute(sql, params, many, context)` to go on, or return a list of rows (`fetch_all`) or an
+`ExecResult` without calling it to replace the query (test doubles). Streams and transaction
+control are not interceptable. Observers still see a replaced query, with the original SQL. The
+connection is acquired before the chain runs, so an interceptor that awaits holds it. An
+interceptor's own error propagates to the caller; inside a transaction it does not break the
+transaction unless the driver call itself failed. An interceptor that runs a query itself is
+intercepted again (guard against recursion) and, outside a transaction, borrows a second pooled
+connection while holding the first. Process-wide interceptors use
+`asyncopation.connection.add_interceptor(fn)` / `remove_interceptor(fn)`.
+
+```python
+import asyncopation
+from asyncopation.testing import ExecResult
+
+
+async def no_writes(execute, sql, params, many, context):
+    if context["method"] == "fetch_all":
+        return await execute(sql, params, many, context)
+    return ExecResult(rowcount=0)  # pretend every write touched nothing
+
+
+with asyncopation.intercept(no_writes):
+    books = await Book.aobjects.filter(published=True).alist()
+```
 
 ## Testing upper layers without a database
 

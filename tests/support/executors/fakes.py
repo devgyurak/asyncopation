@@ -56,7 +56,11 @@ class FaultyChunks:
         return self
 
     async def __anext__(self) -> list[tuple[Any, ...]]:
-        self._driver.raise_fault("chunk")
+        driver = self._driver
+        driver.raise_fault("chunk")
+        if driver.chunk_hold is not None:
+            driver.chunk_hold.enter()
+            await driver.chunk_hold.event.wait()
         return await self._inner.__anext__()
 
 
@@ -70,7 +74,7 @@ class GatedConnection:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    async def _gate(self) -> None:
+    async def _gate(self, sql: str | None = None) -> None:
         driver = self._driver
         driver.statement_calls += 1
         if driver.during is not None:
@@ -79,24 +83,36 @@ class GatedConnection:
         if driver.hold is not None:
             driver.hold.enter()
             await driver.hold.event.wait()
+        sql_hold = driver.sql_holds.get(sql) if sql is not None else None
+        if sql_hold is not None:
+            sql_hold.enter()
+            await sql_hold.event.wait()
+
+    async def _control_gate(self) -> None:
+        driver = self._driver
+        if driver.control_during is not None:
+            await driver.control_during()
+        if driver.control_hold is not None:
+            driver.control_hold.enter()
+            await driver.control_hold.event.wait()
 
     async def fetch_all(self, sql: str, params: Params) -> list[tuple[Any, ...]]:
-        await self._gate()
+        await self._gate(sql)
         return await self._inner.fetch_all(sql, params)
 
     async def execute(self, sql: str, params: Params) -> ExecResult:
-        await self._gate()
+        await self._gate(sql)
         return await self._inner.execute(sql, params)
 
     async def execute_many(self, sql: str, batch: Sequence[Params]) -> ExecResult:
-        await self._gate()
+        await self._gate(sql)
         return await self._inner.execute_many(sql, batch)
 
     @asynccontextmanager
     async def stream(
         self, sql: str, params: Params, chunk: int
     ) -> AsyncGenerator[AsyncIterator[list[tuple[Any, ...]]]]:
-        await self._gate()
+        await self._gate(sql)
         async with self._inner.stream(sql, params, chunk) as chunks:
             self._driver.streams_open += 1
             try:
@@ -108,22 +124,28 @@ class GatedConnection:
                     self._driver.streams_open -= 1
 
     async def begin(self) -> None:
+        await self._control_gate()
         self._driver.raise_fault("begin")
         await self._inner.begin()
 
     async def commit(self) -> None:
+        await self._control_gate()
         await self._inner.commit()
 
     async def rollback(self) -> None:
+        await self._control_gate()
         await self._inner.rollback()
 
     async def savepoint(self, sid: str) -> None:
+        await self._control_gate()
         await self._inner.savepoint(sid)
 
     async def release_savepoint(self, sid: str) -> None:
+        await self._control_gate()
         await self._inner.release_savepoint(sid)
 
     async def rollback_to_savepoint(self, sid: str) -> None:
+        await self._control_gate()
         await self._inner.rollback_to_savepoint(sid)
 
 
@@ -143,6 +165,16 @@ class GatedDriver(RecordingDriver):
         """Awaited inside every statement, in the task that runs it (re-entrancy scenarios)."""
         self.during_in_flight: list[int] = []
         self.close_hold: Hold | None = None
+        self.chunk_hold: Hold | None = None
+        """Every chunk read of a stream stops here until `release()` (a slow server)."""
+        self.control_hold: Hold | None = None
+        """Every transaction-control call stops here until `release()`."""
+        self.control_during: Callable[[], Awaitable[None]] | None = None
+        """Awaited inside every transaction-control call (like `during` for statements)."""
+        self.sql_holds: dict[str, Hold] = {}
+        """A statement whose SQL is a key stops at that hold until it is released."""
+        self.results_by_sql: dict[str, Any] = {}
+        """A statement whose SQL is a key gets that result instead of the next queued one."""
         self.borrow_hold: Hold | None = None
         """`connection()` stops here once it holds the connection, until `release()` (a pin that
         waits in the pool)."""
@@ -175,6 +207,21 @@ class GatedDriver(RecordingDriver):
 
         return registry.in_flight(self.alias)
 
+    def hold_chunks(self) -> Hold:
+        """Every later chunk read stops at the gate until `release()`."""
+        self.chunk_hold = Hold()
+        return self.chunk_hold
+
+    def hold_controls(self) -> Hold:
+        """Every later transaction-control call stops at the gate until `release()`."""
+        self.control_hold = Hold()
+        return self.control_hold
+
+    def hold_sql(self, sql: str) -> Hold:
+        """Statements with exactly this SQL stop at the gate until `release()`."""
+        hold = self.sql_holds[sql] = Hold()
+        return hold
+
     def hold_borrows(self) -> Hold:
         self.borrow_hold = Hold()
         return self.borrow_hold
@@ -198,7 +245,9 @@ class GatedDriver(RecordingDriver):
             yield wrapped
 
     def _take(self, kind: str, sql: str, params: Any) -> Any:
-        if not self._queue:  # an unqueued statement returns one row instead of failing
+        if sql in self.results_by_sql:
+            self._queue.insert(0, self.results_by_sql[sql])
+        elif not self._queue:  # an unqueued statement returns one row instead of failing
             self._queue.append(list(DEFAULT_ROWS))
         return super()._take(kind, sql, params)
 

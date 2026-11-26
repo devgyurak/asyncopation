@@ -3,7 +3,7 @@ the ADR-0005 event kind of each is fixed (Decision 2: savepoints are queries).""
 
 import pytest
 
-from asyncopation.connection.executor import EVENT_KINDS
+from asyncopation.connection.hooks import EVENT_KINDS
 from tests.support.executors.control import (
     connection_methods,
     kinds_seen_by_run,

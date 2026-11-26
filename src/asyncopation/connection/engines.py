@@ -30,8 +30,11 @@ class Engine:
 
     inject: Callable[[str, dict[str, Any], ServerInfo], Any]
     """``inject(alias, settings_dict, info)``: hand the info to the compile-only wrapper and return
-    that wrapper (the registered one is reused while ``settings_dict`` and ``info`` are unchanged,
-    so calling it again is how the engine layer fetches the wrapper to compile with)."""
+    that wrapper (the registered one is reused while ``settings_dict``, ``info`` and
+    ``(USE_TZ, TIME_ZONE)`` are unchanged, so calling it again is how the engine layer fetches the
+    wrapper to compile with). The time zone is split in two: a change of those settings rebuilds the
+    *wrapper* (its derived ``timezone`` / ``timezone_name``), but a driver session that is already
+    open keeps the time zone ``prepare`` resolved at ``configure()`` (ADR-0008 Decision 5)."""
 
 
 def _postgresql() -> Engine:

@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=19c00c2c5da8 -->
+<!-- i18n: source=README.md source-sha256=e95c3af9fe51 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -124,7 +124,10 @@ asyncio.run(main())
 
 필요 도구: [uv](https://docs.astral.sh/uv/), Docker. MySQL 차등 테스트에는 `mysqlclient` 빌드
 의존성(`brew install mysql-client pkg-config` 또는 `apt install libmysqlclient-dev`)과
-`uv sync --group mysql-sync`도 필요하다.
+`uv sync --group mysql-sync`도 필요하다. mysqlclient가 설치되어 있으면
+`ASYNCOPATION_REQUIRE_MYSQLDB=1 uv run pytest tests/unit/django_drift tests/unit/compile`도
+실행한다. MySQL wrapper drift 스위트와 "`MySQLdb`가 로드되지 않음" 검사는 그 환경에서만 의미가 있다
+(CI는 integration job과 Django main job에서 실행한다).
 
 ```bash
 uv sync                     # dev + e2e 의존성 그룹 설치

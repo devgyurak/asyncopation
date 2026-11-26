@@ -10,7 +10,7 @@ from typing import Any
 
 from asyncopation._django.postgresql import BaseWrapper, CompileOperations, inject_pg_version
 from asyncopation.compile.server_info import PostgreSQLServerInfo, ServerInfo
-from asyncopation.compile.wrapper import CompileOnlyMixin
+from asyncopation.compile.wrapper import CompileOnlyMixin, snapshot_settings, timezone_key
 
 
 class PostgreSQLCompileWrapper(CompileOnlyMixin, BaseWrapper):
@@ -26,20 +26,6 @@ class PostgreSQLCompileWrapper(CompileOnlyMixin, BaseWrapper):
         self.server_info = info
 
 
-def _snapshot(value: Any) -> Any:
-    """Copy the dict/list structure of a settings value and share every leaf.
-
-    Leaves (an ``ssl.SSLContext``, psycopg's ``AdaptersMap``, callables holding locks) are neither
-    copyable nor comparable by value, so they are compared by identity; tuples and sets are leaves
-    too, so mutating one in place is not detected, and settings must not contain cycles.
-    """
-    if isinstance(value, dict):
-        return {k: _snapshot(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_snapshot(v) for v in value]
-    return value
-
-
 _WRAPPERS: dict[str, PostgreSQLCompileWrapper] = {}
 
 
@@ -52,7 +38,7 @@ def wrapper_for(
     ``OPTIONS`` applied, as ``ConnectionHandler.configure_settings`` does; the engine provides it),
     not a raw ``settings.DATABASES`` entry. The wrapper keeps a copy of the dict/list structure
     (leaf values are shared and compared by identity), so a dict mutated in place later compares
-    unequal. A different ``settings_dict`` or ``info`` yields a fresh wrapper that replaces the
+    unequal. A different ``settings_dict``, ``info`` or ``(USE_TZ, TIME_ZONE)`` yields a fresh wrapper that replaces the
     registered one, so cached properties derived from the old server version never go stale.
 
     Construction is synchronous and performs no I/O. The registry check-then-set is unlocked:
@@ -60,7 +46,16 @@ def wrapper_for(
     (autocommit) is set by ``compile_scope`` at entry, never stored here.
     """
     wrapper = _WRAPPERS.get(alias)
-    if wrapper is None or wrapper.settings_dict != settings_dict or wrapper.server_info != info:
-        wrapper = _WRAPPERS[alias] = PostgreSQLCompileWrapper(_snapshot(settings_dict), alias)
+    tz = timezone_key()
+    if (
+        wrapper is None
+        or wrapper.settings_dict != settings_dict
+        or wrapper.server_info != info
+        or wrapper.timezone_key != tz
+    ):
+        wrapper = _WRAPPERS[alias] = PostgreSQLCompileWrapper(
+            snapshot_settings(settings_dict), alias
+        )
+        wrapper.timezone_key = tz
         wrapper.apply_server_info(info)
     return wrapper

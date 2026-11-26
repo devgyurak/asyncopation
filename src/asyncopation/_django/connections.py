@@ -101,7 +101,7 @@ del _build
 def _snapshot(value: Any) -> Any:
     """Copy the dict/list structure of a settings value and share every leaf.
 
-    Same rule as ``compile.postgresql._snapshot``: leaves (an ``ssl.SSLContext``, psycopg's
+    Same rule as ``compile.wrapper.snapshot_settings``: leaves (an ``ssl.SSLContext``, psycopg's
     ``AdaptersMap``, callables holding locks) are neither copyable nor comparable by value, so they
     are shared and compared by identity; ``copy.deepcopy`` would fail on them in ``ready()``.
     """

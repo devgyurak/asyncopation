@@ -53,3 +53,13 @@ class PlainMethodSample:
 
 class LegacyMarker:
     """Stands in for a legacy decorator class in helper unit tests."""
+
+
+class RenamedCachedProperty(functools.cached_property):
+    """A cached property decorator class under another name (a future Django rename)."""
+
+
+class RenamedSample:
+    @RenamedCachedProperty
+    def value(self) -> int:
+        return 1

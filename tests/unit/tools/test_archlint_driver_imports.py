@@ -2,7 +2,7 @@
 
 import pytest
 
-from tests.support.guards import distinct_codes, rule_outcome
+from tests.support.guards import distinct_codes, rule_outcome, with_mysqlclient_ban
 from tests.support.reexport_cases import MODULE_PARAMS, NAME_PARAMS
 
 P = pytest.param
@@ -14,6 +14,7 @@ ANY = "from django.db.backends.postgresql.psycopg_any import"
 BASE = "from django.db.backends.postgresql.base import"
 LEAK = ["A104", "A201", "A203"]
 INSIDE = ["A201", "A203"]
+MYSQL_LEAK = ["A101", "A104", "A201", "A203"]
 
 
 @pytest.mark.parametrize(("module", "name"), NAME_PARAMS)
@@ -23,7 +24,7 @@ def test_every_listed_reexport_is_a_driver_import_outside_drivers(module, name):
     # when
     outcome = rule_outcome(source, QUERY, "A104", REEXPORT)
     # then
-    assert outcome == (LEAK, True)
+    assert outcome == (with_mysqlclient_ban(LEAK, module), True)
 
 
 @pytest.mark.parametrize("module", MODULE_PARAMS)
@@ -55,12 +56,13 @@ def test_a_star_import_of_a_reexporting_module_is_rejected(module):
         P(f"{BASE} IsolationLevel\n", QUERY, LEAK, True, id="base-isolation-level"),
         P(f"{BASE} psycopg\n", QUERY, LEAK, True, id="base-psycopg"),
         P(f"{BASE} psycopg_pool\n", QUERY, LEAK, True, id="base-psycopg-pool"),
-        P("from django.db.backends.mysql.base import Database\n", QUERY, LEAK, True,
+        P("from django.db.backends.mysql.base import Database\n", QUERY, MYSQL_LEAK, True,
           id="mysql-database"),
-        P("from django.db.backends.mysql.base import MySQLdb\n", QUERY, LEAK, True,
+        P("from django.db.backends.mysql.base import MySQLdb\n", QUERY, MYSQL_LEAK, True,
           id="mysql-mysqldb"),
         P("from django.db.backends.mysql.base import Database\n",
-          "src/asyncopation/drivers/mysql/x.py", INSIDE, False, id="mysql-inside-drivers"),
+          "src/asyncopation/drivers/mysql/x.py", ["A101", "A201", "A203"], False,
+          id="mysql-inside-drivers"),
         P("from django.db.backends.postgresql.operations import Jsonb\n", QUERY, LEAK, True,
           id="operations-jsonb"),
         P("from django.db.backends.postgresql.operations import errors\n", QUERY, LEAK, True,
@@ -142,7 +144,7 @@ def test_the_adapter_boundary_module_may_import_the_helpers():
         P("import django.db.backends.postgresql.base as b\n\ndef f():\n    return b.psycopg_pool\n",
           QUERY, LEAK, True, id="psycopg-pool-attribute"),
         P("import django.db.backends.mysql.base as b\n\ndef f():\n    return b.MySQLdb\n",
-          QUERY, ["A104", "A201", "A203"], True, id="mysqldb-attribute"),
+          QUERY, MYSQL_LEAK, True, id="mysqldb-attribute"),
         P("import django.db.backends.postgresql.base as b\n\ndef f():\n    return b.psycopg\n",
           DRIVERS, ["A201", "A203"], False, id="psycopg-attribute-inside-drivers"),
     ],
@@ -193,7 +195,7 @@ def test_literal_reexports_stay_pinned_even_if_the_table_loses_a_row(module, nam
     # when
     outcome = rule_outcome(source, QUERY, "A104", REEXPORT)
     # then
-    assert outcome == (LEAK, True)
+    assert outcome == (with_mysqlclient_ban(LEAK, module), True)
 
 
 @pytest.mark.parametrize(
@@ -215,6 +217,11 @@ def test_literal_reexports_stay_pinned_even_if_the_table_loses_a_row(module, nam
         P("import runpy\n", ["A101"], id="runpy"),
         P("import pydoc\n", ["A101"], id="pydoc"),
         P("import builtins\n", ["A101"], id="builtins"),
+        P("from django.utils.module_loading import import_string\n", ["A101", "A201", "A203"], id="import-string"),
+        P("import django.utils.module_loading as ml\n", ["A101", "A201", "A203"], id="module-loading-aliased"),
+        P("from django.utils import module_loading\n", ["A101", "A201", "A203"], id="module-loading-from-package"),
+        P("from django.utils import timezone\n", ["A201", "A203"], id="sibling-module-is-fine"),
+        P("from asgiref import sync\n", ["A101"], id="banned-module-from-package"),
         P("x = __builtins__\n", ["A103"], id="builtins-name"),
         P("__import__('x')\n", ["A103"], id="dunder-import"),
         P("eval('1')\n", ["A103"], id="eval"),

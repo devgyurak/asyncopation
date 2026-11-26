@@ -11,8 +11,10 @@ from unittest import mock
 from django.db.backends.base.base import BaseDatabaseWrapper
 
 from asyncopation._django.postgresql import BaseWrapper
+from asyncopation.compile.mysql import MySQLCompileWrapper
 from asyncopation.compile.postgresql import PostgreSQLCompileWrapper
 from asyncopation.compile.wrapper import CompileOnlyConnectionError, CompileOnlyMixin
+from harness.settings import VENDOR
 from tests.support.compile_wrappers import make_distinct_wrapper, make_wrapper
 
 _SYNC_CONNECT_METHODS = (
@@ -25,6 +27,15 @@ _SYNC_CONNECT_METHODS = (
     "get_new_connection",
 )
 _MIXIN_METHODS = _SYNC_CONNECT_METHODS
+
+
+def real_wrapper_classes() -> tuple[type, ...]:
+    """Django's backend-neutral wrapper plus the real wrapper of the tested backend."""
+    if VENDOR == "postgresql":
+        return (BaseDatabaseWrapper, BaseWrapper)
+    from django.db.backends.mysql.base import DatabaseWrapper
+
+    return (BaseDatabaseWrapper, DatabaseWrapper)
 
 
 @dataclass
@@ -42,12 +53,12 @@ def count_sync_connection_attempts() -> Generator[AttemptCounter]:
     """
     counter = AttemptCounter()
     with contextlib.ExitStack() as stack:
-        for owner in (BaseDatabaseWrapper, BaseWrapper):
+        for owner in real_wrapper_classes():
             for name in _SYNC_CONNECT_METHODS:
                 stack.enter_context(
                     mock.patch.object(owner, name, _tripwire(counter, name), create=True)
                 )
-        for owner in (CompileOnlyMixin, PostgreSQLCompileWrapper):
+        for owner in (CompileOnlyMixin, PostgreSQLCompileWrapper, MySQLCompileWrapper):
             for name in _MIXIN_METHODS:
                 stack.enter_context(
                     mock.patch.object(

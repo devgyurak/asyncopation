@@ -87,7 +87,7 @@ def _wrap_with_lifespan(app):
     return application
 
 
-# MySQL/MariaDB have no async driver until #7: there the plain Django app serves /sync and /core.
+# MySQL/MariaDB have no async read path until #7b (the driver exists since #7a): there the plain Django app serves /sync and /core.
 if os.environ.get("ASYNCOPATION_DB", "postgresql") == "postgresql":
     application = _wrap_with_lifespan(_django_application)
 else:

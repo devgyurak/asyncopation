@@ -30,8 +30,8 @@ from tests.support.executors.postgres import (
 
 pytestmark = pytest.mark.skipif(
     VENDOR != "postgresql",
-    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; the executor integration "
-    "tests run on PostgreSQL only until then",
+    reason="PostgreSQL executor tests (they count pg_stat_activity backends); the "
+    "MySQL/MariaDB executor integration tests arrive with issue #7b",
 )
 
 CHILDREN = pytest.mark.parametrize("taskgroup", [False, True], ids=["gather", "taskgroup"])

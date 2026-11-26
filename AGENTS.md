@@ -15,7 +15,7 @@ Read before non-trivial work: `docs/design/plan.md` (plan and roadmap), `docs/ar
 ## Commands
 | Task | Command |
 |---|---|
-| Install | `uv sync` |
+| Install | `uv sync --group mysql-sync` (`make check` compares the composed MySQL wrapper with Django's real MySQL backend, which needs mysqlclient: `brew install mysql-client pkg-config` / `apt install libmysqlclient-dev`; a plain `uv sync` removes it) |
 | Databases | `make db-up` / `make db-down` (docker compose: postgres 25432, mysql 23306, mariadb 23307) |
 | Fast gate | `make check` (ruff format check, ruff lint, ty, import-linter, guards, agents-check, unit tests) |
 | Format | `make fmt` (ruff format + ruff check --fix) |

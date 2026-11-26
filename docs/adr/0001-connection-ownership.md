@@ -7,6 +7,8 @@
 - Amended: 2026-11-24 (#2, PR #46) - Decision 8: pool options are `OPTIONS["pool"]` (validation rule, `None`/`True`/`False` all mean defaults, size defaults: a missing `max_size` becomes `max(10, min_size)`, `min_size > max_size` raises `ValueError` from `open()`) and `CONN_HEALTH_CHECKS` behaviour (implementation note); approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-25 (#5, PR #52) - Decision 8 (pool sizing defaults are decided by benchmark in #8, not in the ADR-0004 implementation issue; the provisional `min_size=1`, `max_size=10` stay); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Amended: 2026-11-25 (#5, PR #61) - Decision 3 (D1: one public exception in `asyncopation.errors`, three messages; `pin`, `PinnedExecutor` and the owner/re-entrancy/closed checks), Decision 4 (a same-alias pin from a non-owner task raises with its own message), Decision 6c (D2: a broken transaction raises Django's `TransactionManagementError`; the pool drops the closed connection), new Decision 10 (D3: a pin is one in-flight unit; D4: transaction-control passthroughs without policy) and Validation; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#7, PR #70) - Decision 8 (MySQL/MariaDB pool implementation note: options live in `DATABASES[alias]["ASYNCOPATION"]["pool"]`, the acquire timeout and waiting counter are added around asyncmy's pool, bounded close, `max_waiting` and `CONN_HEALTH_CHECKS`/`CONN_MAX_AGE` behaviour), Validation; approved by: maintainer (@devgyurak), 2026-11-25 (issue #7a design session); architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-26 (#7, PR #70) - Decision 8 (MySQL/MariaDB transaction note points to the ADR-0003 Decision 5 amendment: `SET autocommit = 0` after a server-ended transaction, a failed `COMMIT` / `ROLLBACK` / autocommit restore discards the connection); approved by: pending maintainer approval (to be confirmed in the PR #70 review); architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-26, changes applied)
 
 ## Context
 Django's connections are thread-local (plan §1.3). Asyncopation replaces them with
@@ -127,6 +129,29 @@ psycopg and asyncmy. - work inside `async_atomic` must stay in the task that ope
    is not fixed up: `psycopg_pool`'s builtin `ValueError` is raised from `open()` before any
    connection is made (an explicit exception to ADR-0003 Decision 4, which covers database errors;
    this is a configuration error).
+   *Amended 2026-11-25 (#7, PR #70) - implementation note, MySQL/MariaDB:* asyncmy's pool has neither an acquire timeout
+   nor a waiter count, so the driver wraps `pool.acquire()` in `asyncio.timeout(timeout)` (default
+   30 s) and raises `django.db.OperationalError` on expiry (the first path of this Decision), keeps
+   its own `waiting` counter (acquires in progress, which includes a task still opening a
+   connection; PostgreSQL counts queued requests only) and reports `in_use = size - freesize`.
+   Without a task boundary between `_used.add()` and the return, a timeout can never land after a
+   connection was checked out, so none leaks; no `wait_for`, `shield` or `create_task` is used. The
+   pool options are **not** in `OPTIONS` (Django's MySQL backend forwards every `OPTIONS` key to
+   `MySQLdb.connect`, so a `pool` key would break the sync backend on the same alias) but in
+   `DATABASES[alias]["ASYNCOPATION"]["pool"]`, a top-level key Django ignores: `min_size`,
+   `max_size`, `timeout`, `max_waiting`, `max_idle` (asyncmy `minsize`, `maxsize`,
+   `pool_recycle`: whole seconds, an integer >= 1; asyncmy replaces a connection idle that long,
+   which is not a total lifetime like PostgreSQL's `max_lifetime`); PostgreSQL rejects the key; unknown keys, bad types and `min_size > max_size` raise `ImproperlyConfigured`.
+   `OPTIONS` itself is validated against `asyncmy.connect`'s signature (unknown keys, such as
+   mysqlclient-only ones, raise `ImproperlyConfigured`; `stmt_cache_size > 0` is rejected because
+   asyncmy's prepared-statement path ignores `conv`). `driver.close()` is `pool.close()`, a bounded
+   `wait_closed()`, then `terminate()`. Transactions: `begin()` is `BEGIN` on an autocommit connection; when the server ends the transaction itself (deadlock rollback, DDL implicit commit) the next statement starts a new one, like Django's `autocommit = False` (ADR-0003 Decision 5). *Amended 2026-11-26 (#7, PR #70): that is now done as described in the ADR-0003 Decision 5 amendment of that date (after a server-ended transaction the session switches to `SET autocommit = 0`, restored on commit, rollback and release; the next statement is not a second `BEGIN`; a failed `COMMIT`, `ROLLBACK` or autocommit restore discards the connection).* A statement cancelled in flight makes asyncmy close that
+   connection (the server keeps running the query: asyncmy sends no `KILL`), so a cancel costs a
+   reconnect. When `waiting` has reached `max_waiting` the next acquire raises
+   `django.db.OperationalError` at once (as PostgreSQL's too-many-requests error is mapped). `CONN_MAX_AGE` is ignored (the async side always
+   pools; `max_idle` maps to `pool_recycle`); with `CONN_HEALTH_CHECKS` true a borrowed connection is
+   checked with `ping(reconnect=False)` and a failed one is discarded and replaced by another acquire within the same
+   timeout. Sizing defaults stay with #8.
    Side effect: Django's own sync backend reads the same key and would also enable its sync pool
    for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django raises
    `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes `psycopg_pool`'s
@@ -182,6 +207,7 @@ outer `async_atomic`. Leak checks use the registry pool stats from ADR-0004.
 - integration: a `create_task` child querying after the block exited raises
 - integration: a savepoint opened from a `TaskGroup` child raises
 - integration: a statement cancelled mid-query discards the connection (pool stats unchanged)
+- *Added 2026-11-25 (#7, PR #70):* integration (MySQL, MariaDB; run on every supported Python, since `asyncio.timeout` / `uncancel` behaviour differs between versions): acquires that time out or are cancelled while the pool is exhausted or opening a connection, in a stress run with many tasks and timeouts near completion, leave `size == freesize + borrowed` and no connection leaked (counted per run, through the connection ids the pool opened); `max_waiting` and `CONN_HEALTH_CHECKS` behave as the implementation note says. The pool wrapper relies on asyncmy's pool internals (`_acquire` has no await between taking a connection and returning it, `release()` discards a closed connection or one released inside a transaction, the `RuntimeError` text `closing pool`): the dependency is `asyncmy>=0.2.18,<0.3` (a new minor must be re-checked) and tests pin what is observable (acquire after close, release inside a transaction, the stress run).
 - integration (*added 2026-11-25 (#5, PR #61)*): a statement cancelled inside a pinned transaction
   makes later statements raise `TransactionManagementError` and leaving the pin discards the
   connection; a cancel while waiting in `getconn`, and a cancel racing the acquisition, return the

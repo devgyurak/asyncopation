@@ -90,6 +90,11 @@ def build_config(
     # is always on (the driver leaves it only inside begin()); the isolation level is parsed here
     # instead of in get_new_connection; Django's CONN_MAX_AGE-vs-pool check is omitted (the
     # driver pools connections itself and never closes them on request end).
+    if settings_dict.get("ASYNCOPATION") is not None:
+        raise ImproperlyConfigured(
+            f"DATABASES[{alias!r}]['ASYNCOPATION'] configures the MySQL/MariaDB pool; "
+            "PostgreSQL uses OPTIONS['pool'] (ADR-0001 Decision 8)."
+        )
     if settings_dict.get("TIME_ZONE") is not None and not use_tz:
         raise ImproperlyConfigured(
             f"Connection '{alias}' cannot set TIME_ZONE because USE_TZ is False."

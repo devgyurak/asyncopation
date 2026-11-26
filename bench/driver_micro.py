@@ -371,14 +371,16 @@ def _paired(
     ]
 
 
-async def _measure_group(
+async def measure_group(
     group: str,
     tasks: int,
     impls: list[str],
     ops: dict[str, Op],
     seconds: float,
     rounds: int,
+    prefix: str = "driver",
 ) -> dict[str, Any]:
+    """Measure one group; ``prefix`` names the cases (``driver`` here, ``mysqldriver`` for MySQL)."""
     results: dict[str, Any] = {}
     failed: set[str] = set()
     for impl in impls:
@@ -386,7 +388,7 @@ async def _measure_group(
             await throughput(ops[impl], tasks, 0.3)  # warm-up
         except Exception as exc:
             failed.add(impl)
-            results[f"driver.{group}.{impl}.t{tasks}"] = {
+            results[f"{prefix}.{group}.{impl}.t{tasks}"] = {
                 "status": "error",
                 "error": summarize_error(exc),
             }
@@ -401,7 +403,7 @@ async def _measure_group(
                 sample = await throughput(ops[impl], tasks, seconds)
             except Exception as exc:
                 failed.add(impl)
-                results[f"driver.{group}.{impl}.t{tasks}"] = {
+                results[f"{prefix}.{group}.{impl}.t{tasks}"] = {
                     "status": "error",
                     "error": summarize_error(exc),
                 }
@@ -413,7 +415,7 @@ async def _measure_group(
         if impl in failed:
             continue
         if not data:
-            results[f"driver.{group}.{impl}.t{tasks}"] = {"status": "no-samples", "tasks": tasks}
+            results[f"{prefix}.{group}.{impl}.t{tasks}"] = {"status": "no-samples", "tasks": tasks}
             continue
         row: dict[str, Any] = {"status": "ok", "tasks": tasks}
         for key in ("ops_per_s", "p50_us", "p95_us", "p99_us", "cpu_us"):
@@ -441,7 +443,7 @@ async def _measure_group(
         loads = [r["load_1m"] for r in data.values()]
         row["load_avg_1m"] = max(loads)
         row["load_avg_1m_min"] = min(loads)
-        results[f"driver.{group}.{impl}.t{tasks}"] = row
+        results[f"{prefix}.{group}.{impl}.t{tasks}"] = row
     return results
 
 
@@ -467,7 +469,7 @@ async def run(
             for group, impls in GROUPS.items():
                 wanted = [i for i in impls if f"driver.{group}.{i}.t{tasks}" in names]
                 if wanted and tasks in group_tasks(group):
-                    results |= await _measure_group(
+                    results |= await measure_group(
                         group, tasks, wanted, ops[group], seconds, rounds
                     )
     finally:

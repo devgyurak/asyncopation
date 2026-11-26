@@ -52,6 +52,10 @@ class PoolStats:
     ``in_use`` is the pool's size minus its idle connections, so it also counts connections that
     are still opening or being replaced (a discarded connection is replaced in the background and
     counts as in use until the replacement is idle). Tests therefore wait for the pool to settle.
+
+    ``waiting`` differs per driver (ADR-0004 Decision 6): psycopg_pool counts requests queued for a
+    connection; the asyncmy driver counts acquires in progress, which includes a task that is
+    itself opening a new connection.
     """
 
     in_use: int
@@ -113,3 +117,14 @@ class SupportsPoolStats(Protocol):
     """Optional: drivers backed by a pool expose its counters for tests and metrics."""
 
     def pool_stats(self) -> PoolStats: ...
+
+
+class SupportsServerData(Protocol):
+    """Optional (ADR-0003 Decision 2, MySQL/MariaDB): the frozen server facts the driver read once
+    in ``open()``, from which the engine's pure probe builds the compile wrapper's server info."""
+
+    @property
+    def server_data(self) -> object:
+        """Available while the driver is open; raises ``RuntimeError`` before ``open()`` and after
+        ``close()``, like ``capabilities``."""
+        ...

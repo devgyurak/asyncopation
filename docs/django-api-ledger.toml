@@ -107,7 +107,10 @@ names = [
     "BaseDatabaseWrapper.timezone_name",
     "BaseDatabaseWrapper.check_settings",
 ]
-used_by = ["src/asyncopation/drivers/postgresql/settings.py"]
+used_by = [
+    "src/asyncopation/drivers/postgresql/settings.py",
+    "src/asyncopation/drivers/mysql/settings.py",
+]
 reason = "Ported: `timezone` / `timezone_name` (settings.resolve_timezone) and the USE_TZ / TIME_ZONE check (settings.build_config)"
 verified_against = "6.1.3"
 ported = true
@@ -577,8 +580,45 @@ names = [
     "DatabaseWrapper.sql_mode",
     "server_version_re",
 ]
-used_by = ["src/asyncopation/compile/mysql.py"]
+used_by = ["src/asyncopation/compile/mysql.py", "src/asyncopation/_django/mysql.py"]
 reason = "Ported (mysql.base imports MySQLdb, so it is never imported): the DatabaseWrapper attributes SQL generation reads; `mysql_server_data` is injected from MySQLServerInfo instead of queried, `server_version_re` is a plain re.compile and `cached_property` is functools' (Django's django.utils.functional one is deprecated on main) (ADR-0008 Decision 5)"
+verified_against = "6.1.3"
+ported = true
+
+# --------------------------------------------------------------------------- MySQL / MariaDB driver (#7)
+[[internal]]
+module = "django.db.backends.utils"
+names = ["typecast_time"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "Django's TIME decoder (`django_conversions`): the asyncmy decoder shim returns datetime.time like Django's mysqlclient backend"
+verified_against = "6.1.3"
+signatures = { typecast_time = "(s)" }
+
+[[internal]]
+module = "django.db.backends.mysql.base"
+names = [
+    "DatabaseWrapper.get_connection_params",
+    "DatabaseWrapper.init_connection_state",
+    "django_conversions",
+]
+used_by = ["src/asyncopation/drivers/mysql/settings.py"]
+reason = "Ported: connection parameters (charset, FOUND_ROWS, isolation level default and validation, OPTIONS), the session assignments and the TIME decoder override"
+verified_against = "6.1.3"
+ported = true
+
+[[internal]]
+module = "django.db.backends.mysql.base"
+names = ["CursorWrapper.codes_for_integrityerror", "CursorWrapper.execute"]
+used_by = ["src/asyncopation/_django/mysql.py", "src/asyncopation/drivers/mysql/errors.py"]
+reason = "Ported: OperationalError with a code in codes_for_integrityerror is re-raised as IntegrityError"
+verified_against = "6.1.3"
+ported = true
+
+[[internal]]
+module = "django.db.backends.mysql.operations"
+names = ["DatabaseOperations.quote_name"]
+used_by = ["src/asyncopation/drivers/mysql/connection.py"]
+reason = "Ported: savepoint identifier quoting"
 verified_against = "6.1.3"
 ported = true
 

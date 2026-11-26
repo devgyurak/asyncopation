@@ -70,8 +70,49 @@ def _postgresql() -> Engine:
     return Engine(prepare, probe, inject)
 
 
+def _mysql() -> Engine:
+    # MySQL and MariaDB share the ENGINE; Django tells them apart by the server's VERSION().
+    from asyncopation.compile.mysql import wrapper_for
+    from asyncopation.compile.server_info import MySQLServerInfo
+    from asyncopation.drivers.mysql import MySQLDriver
+    from asyncopation.drivers.mysql.server_data import MySQLServerData
+    from asyncopation.drivers.mysql.settings import build_config
+
+    def prepare(
+        alias: str, settings_dict: dict[str, Any], *, use_tz: bool, time_zone: str
+    ) -> Callable[[], AsyncDriver]:
+        config = build_config(alias, settings_dict, use_tz=use_tz, time_zone=time_zone)
+        return lambda: MySQLDriver(config)
+
+    def probe(driver: AsyncDriver) -> ServerInfo:
+        # The driver's open() ran Django's `mysql_server_data` SELECT once (ADR-0003 Decision 2);
+        # this stays pure and synchronous like PostgreSQL's.
+        data = getattr(driver, "server_data", None)
+        if not isinstance(data, MySQLServerData):
+            raise TypeError(
+                "expected a driver exposing MySQLServerData (SupportsServerData), "
+                f"got {type(driver).__name__}"
+            )
+        return MySQLServerInfo(
+            version=data.version,
+            sql_mode=data.sql_mode,
+            default_storage_engine=data.default_storage_engine,
+            sql_auto_is_null=data.sql_auto_is_null,
+            lower_case_table_names=data.lower_case_table_names,
+            has_zoneinfo_database=data.has_zoneinfo_database,
+        )
+
+    def inject(alias: str, settings_dict: dict[str, Any], info: ServerInfo) -> Any:
+        if not isinstance(info, MySQLServerInfo):
+            raise TypeError(f"expected MySQLServerInfo, got {type(info).__name__}")
+        return wrapper_for(alias, settings_dict, info)
+
+    return Engine(prepare, probe, inject)
+
+
 FACTORIES: dict[str, Callable[[], Engine]] = {
     "django.db.backends.postgresql": _postgresql,
+    "django.db.backends.mysql": _mysql,
 }
-"""Django ``ENGINE`` string -> lazy engine factory. MySQL/MariaDB arrive with #7; PostGIS needs a
+"""Django ``ENGINE`` string -> lazy engine factory (MySQL and MariaDB share one). PostGIS needs a
 PostGIS compile wrapper first, so its ENGINE is unsupported until then."""

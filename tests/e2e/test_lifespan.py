@@ -7,8 +7,8 @@ from tests.support.e2e_server import ServerProcess
 
 PG_ONLY = pytest.mark.skipif(
     VENDOR != "postgresql",
-    reason="MySQL/MariaDB drivers (asyncmy) arrive with issue #7; there is no pool to count "
-    "(on those backends the harness serves plain Django, so only the route tests run)",
+    reason="PostgreSQL pool counting through pg_stat_activity; the harness serves plain Django "
+    "on MySQL/MariaDB until the executor integration arrives with issue #7b",
 )
 
 

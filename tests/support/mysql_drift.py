@@ -49,6 +49,8 @@ EXPECTED_PORTED: frozenset[str] = frozenset(
         "sql_mode",
     }
 )
+# Ported by the asyncmy driver (`drivers/mysql/settings.py`), not composed into the compile wrapper.
+DRIVER_PORTED = frozenset({"get_connection_params", "init_connection_state"})
 type Outcome = tuple[Any, ...]
 
 
@@ -64,7 +66,9 @@ def ported_names() -> list[str]:
     return sorted(
         name.removeprefix(prefix)
         for module, name in Ledger.load().ported
-        if module == BASE_MODULE and name.startswith(prefix)
+        if module == BASE_MODULE
+        and name.startswith(prefix)
+        and name.removeprefix(prefix) not in DRIVER_PORTED
     )
 
 

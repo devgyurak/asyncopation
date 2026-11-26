@@ -6,7 +6,8 @@ Asyncopation cases are reported as skipped until the API exists.
 
 ``driver.*`` cases (see ``bench/driver_micro.py``) compare the PostgreSQL driver with the raw
 psycopg_pool calls it wraps at 1/8/64 tasks and report client CPU per operation and the paired
-ratio vs the baseline.
+ratio vs the baseline. On MySQL/MariaDB (``ASYNCOPATION_DB``) the ``mysqldriver.*`` cases of
+``bench/driver_micro_mysql.py`` replace them (``MySQLDriver`` vs raw asyncmy pool calls).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from bench import driver_micro
+from bench import driver_micro, driver_micro_mysql
 from bench.db import BENCH_DB, ROOT, ensure_bench_db
 from bench.stats import summarize
 
@@ -132,7 +133,7 @@ async def main_async(
     iterations: int,
     warmup: int,
     only: set[str],
-    driver: tuple[Any, Any] | None,
+    driver: tuple[Any, Any, Any] | None,
     driver_seconds: float,
     driver_rounds: int,
 ) -> dict[str, Any]:
@@ -147,10 +148,9 @@ async def main_async(
     finally:
         await asyncopation.close()
     if driver is not None:
-        names = driver_micro.selected(only)
-        results |= await driver_micro.run(
-            driver[0], driver[1], names, driver_seconds, driver_rounds
-        )
+        module, instance, config = driver
+        names = module.selected(only)
+        results |= await module.run(instance, config, names, driver_seconds, driver_rounds)
     return results
 
 
@@ -191,7 +191,9 @@ def main() -> None:
     pg_version = connection.pg_version if connection.vendor == "postgresql" else None  # sync probe
     only = {s for s in args.only.split(",") if s}
     known = {"aget", "gather3", "list20", "compile_scope", "as_sql_scoped", "as_sql_unscoped"}
-    unknown = sorted(only - known - driver_micro.known_suffixes())
+    unknown = sorted(
+        only - known - driver_micro.known_suffixes() - driver_micro_mysql.known_suffixes()
+    )
     if unknown:
         parser.error(f"--only matches no case: {', '.join(unknown)}")
     driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
@@ -224,24 +226,30 @@ def main() -> None:
     print(f"\nwritten: {out.relative_to(ROOT)}")
 
 
-def build_driver(only: set[str]) -> tuple[Any, Any] | None:
-    """``(driver, config)`` when a ``driver.*`` case is selected on PostgreSQL, else ``None``."""
-    if os.environ.get("ASYNCOPATION_DB", "postgresql") != "postgresql":
-        return None
-    if not driver_micro.selected(only):
+def build_driver(only: set[str]) -> tuple[Any, Any, Any] | None:
+    """``(module, driver, config)`` for the driver cases of the selected backend, else ``None``.
+
+    ``module`` is ``driver_micro`` (PostgreSQL) or ``driver_micro_mysql`` (MySQL, MariaDB);
+    ``None`` when none of its cases is selected.
+    """
+    vendor = os.environ.get("ASYNCOPATION_DB", "postgresql")
+    module = driver_micro if vendor == "postgresql" else driver_micro_mysql
+    if not module.selected(only):
         return None
     from django.conf import settings
 
-    from asyncopation.drivers.postgresql import PostgresDriver
-    from asyncopation.drivers.postgresql.settings import build_config
+    options: dict[str, Any] = {"use_tz": settings.USE_TZ, "time_zone": settings.TIME_ZONE}
+    if vendor == "postgresql":
+        from asyncopation.drivers.postgresql import PostgresDriver
+        from asyncopation.drivers.postgresql.settings import build_config
 
-    config = build_config(
-        "default",
-        settings.DATABASES["default"],
-        use_tz=settings.USE_TZ,
-        time_zone=settings.TIME_ZONE,
-    )
-    return PostgresDriver(config), config
+        config = build_config("default", settings.DATABASES["default"], **options)
+        return module, PostgresDriver(config), config
+    from asyncopation.drivers.mysql.driver import MySQLDriver
+    from asyncopation.drivers.mysql.settings import build_config as build_mysql_config
+
+    mysql_config = build_mysql_config("default", settings.DATABASES["default"], **options)
+    return module, MySQLDriver(mysql_config), mysql_config
 
 
 def render(payload: dict[str, Any]) -> str:

@@ -4,7 +4,8 @@ Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
 the recording driver, and so are the executors (borrowed/pinned connection ownership, #5) and the first read path
 (`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6); the
-MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
+MySQL/MariaDB (asyncmy) driver and its server-info probe (#7a) are implemented as well;
+transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
 `aobjects`, Accepted) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
@@ -139,6 +140,45 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   also enable *its* sync pool for that alias (`CONN_MAX_AGE` must then stay 0, otherwise Django
   raises `ImproperlyConfigured`). With `CONN_HEALTH_CHECKS` true the driver passes
   `psycopg_pool`'s `check_connection` (one extra round trip per borrow, as in Django's pool).
+- **MySQL / MariaDB** (`drivers/mysql`, asyncmy; one ENGINE, `django.db.backends.mysql`, for both):
+  `settings` ports Django's `get_connection_params` (`charset=utf8mb4`, `CLIENT.FOUND_ROWS`, isolation
+  level default `read committed`, `OPTIONS` validated against `asyncmy.connect`) and the decoder shim
+  (`TIME` -> `typecast_time`, zero dates -> `None`; every other value equals mysqlclient's);
+  connections are autocommit, a transaction is `BEGIN` / `COMMIT` with autocommit left on (when the
+  server ends it by itself - a deadlock rollback, a DDL implicit commit - the driver switches the
+  session to `SET autocommit = 0` until `commit()` / `rollback()` / release, like Django's sync
+  backend; after an error reply one `DO 0` refreshes asyncmy's stale status flags), session
+  setup rides on a composed `init_command` (the user's, then `OPTIONS["sql_mode"]` quoted, then
+  `SET SQL_AUTO_IS_NULL = 0` when the server needs it, then the isolation level). Parameters
+  asyncmy cannot escape are converted (`list` -> tuple, a set of strings -> one comma-joined string like mysqlclient,
+  `bytearray` / `memoryview` -> `bytes`, `int` / `float` / `Decimal` subclasses -> their quoted
+  `str()`, like mysqlclient) and, under `NO_BACKSLASH_ESCAPES`, the
+  driver renders `bytes`, nested strings and unknown types itself. Server errors keep
+  mysqlclient's Django classes (`_ERRNO_CLASSES` for the seven errnos where asyncmy differs). A
+  failed `COMMIT` / `ROLLBACK` / autocommit restore and errno 2014 discard the connection
+  (PostgreSQL keeps it after a failed `COMMIT`). Outside `NO_BACKSLASH_ESCAPES` a top-level `bytes`
+  parameter stays asyncmy's `_binary'..'` literal (nested in a sequence it is a plain literal as
+  with mysqlclient; `X'..'` under `NO_BACKSLASH_ESCAPES`), so comparing it with a character column
+  is binary (mysqlclient: plain literal); `OPTIONS["binary_prefix"]` is rejected. Every string the
+  caller supplies is checked against the connection's charset before any I/O (a lone surrogate,
+  also U+DC80, is a `UnicodeEncodeError`; asyncmy would send it as a byte), non-finite floats
+  (`-inf` too) are a `ProgrammingError`, and only the exact types `tuple`, `list`, `set` and
+  `frozenset` are containers, as in mysqlclient. `execute_many` is owned by the driver: it
+  rewrites `INSERT` / `REPLACE ... VALUES (...) [ON DUPLICATE ...]` into multi-row statements of
+  at most 64 KiB (the rule is adapted from asyncmy, Apache-2.0), runs anything else once per set,
+  and prepares, checks, formats and encodes the whole batch before the first statement, so a
+  client error applies nothing (mysqlclient's per-row loop applies the rows before it). The
+  intended differences from Django's sync path are listed in ADR-0003 Decision 5. asyncmy's pool has
+  no acquire timeout or waiter count, so `driver.py` wraps `acquire()` in `asyncio.timeout` (`OperationalError`), counts acquires in
+  progress as `waiting` and bounds `close()` (`wait_closed()`, then `terminate()`). Streams use an
+  unbuffered `SSCursor` (early exit drains the rest, bounded; a slow consumer can hit the server's
+  `net_write_timeout`). A cancelled statement makes asyncmy close the connection (a reconnect).
+  `atomic_execute_many` is `False`. The pool is configured in
+  `DATABASES[alias]["ASYNCOPATION"]["pool"]` (`min_size`, `max_size`, `timeout`, `max_waiting`,
+  `max_idle`: idle seconds before a connection is replaced), not in `OPTIONS`, because Django's MySQL backend forwards every `OPTIONS` key to
+  `MySQLdb.connect` (ADR-0001 Decision 8). `open()` also runs Django's `mysql_server_data`
+  `SELECT` once on its first direct connection and exposes the frozen `MySQLServerData` through
+  the optional `SupportsServerData` protocol (ADR-0003 Decision 2).
 - **Open fails fast.** `open()` first connects once directly, so bad credentials or a failing
   `assume_role` raise the same Django exception as the sync backend and leave no pool behind;
   only then is the pool opened (the pool object is built earlier, without I/O, only to validate
@@ -148,13 +188,16 @@ behaves like Django's sync backend connection ([ADR-0003](adr/0003-driver-contra
   `Capabilities`; `driver.capabilities` is the single owner of runtime facts and is available
   only while the driver is open (`RuntimeError` before `open()` and after `close()`). The
   ADR-0004 probe (once per alias) reads `driver.capabilities` instead of running a second source of
-  truth, and the registry builds the alias-level server info from it. For MySQL/MariaDB the probe
-  keeps running the full `mysql_server_data` query; the future asyncmy driver's `open()` builds
-  `Capabilities` from its own connection and its `server_version` must equal what that probe
-  derives. The once-per-alias probe takes the first successfully opened driver's
+  truth, and the registry builds the alias-level server info from it. For MySQL/MariaDB the
+  asyncmy driver's `open()` runs Django's `mysql_server_data` `SELECT` once on its first direct
+  connection (ADR-0003 Decision 2), builds `Capabilities` from the same `VERSION()` string and
+  exposes the frozen result through the optional `SupportsServerData` protocol; the probe is still a
+  pure synchronous function (no query) that reads `driver.server_data` and builds `MySQLServerInfo`. The once-per-alias probe takes the first successfully opened driver's
   `driver.capabilities` (`server_version` is loop-independent) and is retried if that open fails.
 - Connections are in autocommit outside `begin()`; a connection returned mid-transaction is rolled
-  back, and a failed `COMMIT` restores autocommit. Cancellation: a statement cancelled in
+  back, and (PostgreSQL) a failed `COMMIT` restores autocommit; on MySQL / MariaDB a failed
+  `COMMIT`, `ROLLBACK` or autocommit restore discards the connection (the session may still be
+  inside a transaction, and a retry would commit implicitly). Cancellation: a statement cancelled in
   autocommit is cancelled and rolled back (the connection is discarded when its state is
   unknown). Inside a transaction (autocommit off) or while a stream is open the connection is
   **discarded**: a held cursor survives a rollback, and a silent rollback would continue in a new
@@ -213,7 +256,7 @@ Configure in `AppConfig.ready()` (`asyncopation.apps.AsyncopationConfig`, an ent
 every layer; no I/O) -> open drivers per `(alias, loop)` in the ASGI lifespan
 (`asyncopation.connection.asgi.LifespanApp(app)`, which consumes the `lifespan` scope; an app with
 its own lifespan calls `setup()` / `close()` itself) -> probe server info once per alias (open -> probe:
-PostgreSQL reads `driver.capabilities`, MySQL/MariaDB run the full `mysql_server_data` query) ->
+PostgreSQL reads `driver.capabilities`, MySQL/MariaDB also read `driver.server_data`, which the driver's `open()` queried once; no probe runs a query) ->
 close on shutdown, with a lock-guarded lazy fallback:
 [ADR-0004](adr/0004-lifecycle-and-registry.md).
 
@@ -230,8 +273,7 @@ drivers and keeps the server info; an open fails closed when `DATABASES` changed
 (the test runner's rename: call `asyncopation.configure()` again); whether
 `django.contrib.postgres` is installed is also fixed at `configure()` (a later `INSTALLED_APPS`
 change needs `asyncopation.configure()` again, ADR-0003 Decision 2); `setup()` opens only aliases with
-a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL/MariaDB raise `ImproperlyConfigured` at the first open
-until #7.
+a supported engine unless names are given; the entries of closed loops are dropped with an ERROR log. MySQL and MariaDB share the ENGINE `django.db.backends.mysql`; pool options for them live in `DATABASES[alias]["ASYNCOPATION"]["pool"]` (ADR-0001 Decision 8).
 
 ## Harness
 

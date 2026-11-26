@@ -18,12 +18,13 @@ dependencies = ["django>=6.1,<6.2", "asgiref>=3.13"]
 
 [project.optional-dependencies]
 postgresql = ["psycopg[pool]>=3.3"]
-mysql = ["asyncmy>=0.2.18"]
+mysql = ["asyncmy>=0.2.18,<0.3", "cryptography>=44"]
 
 [dependency-groups]
 dev = [
     "psycopg[binary,pool]>=3.3",
-    "asyncmy>=0.2.18",
+    "asyncmy>=0.2.18,<0.3",
+    "cryptography>=44",
     "pytest>=9.0",
     "pytest-asyncio>=1.5",
     "pytest-django>=4.14",

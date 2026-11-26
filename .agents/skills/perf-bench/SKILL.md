@@ -16,7 +16,7 @@ Asyncopation cases are reported as `skipped` until the API exists. Compile cases
 synchronous `compile_scope` swap and need no database round trip.
 
 ### Driver cases
-`bench/micro.py` also runs PostgreSQL driver cases (implementation in `bench/driver_micro.py`)
+`bench/micro.py` also runs PostgreSQL driver cases (implementation in `bench/driver_micro.py`; the MySQL/MariaDB set is described below)
 named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
 - groups: `select1` (`SELECT 1`), `wide` (one row with 15 columns), `execute` (`execute()` with
   rowcount), `tx` (`begin` / statement / `commit`), `stream` (200 rows in chunks of 50);
@@ -44,13 +44,32 @@ Compare ratios, not absolute times, and rerun when the load is high. Real-DB rat
 0.5-0.7 us/op, `noio-yield` about 0.6-1.4 us/op (the IQR reaches about 2.4 us under load, so
 rerun on a quiet machine).
 
+### MySQL / MariaDB driver cases
+With `ASYNCOPATION_DB=mysql|mariadb` (`ASYNCOPATION_DB=mysql make bench-micro`) the `driver.*`
+cases are replaced by `mysqldriver.<group>.<impl>.t<N>` (implementation in
+`bench/driver_micro_mysql.py`; `driver.*` runs on PostgreSQL only). Same method, flags, metrics
+and `--only` suffixes (`select1.driver.t8`) as above, comparing `MySQLDriver` with raw asyncmy
+pool calls:
+- groups: `select1` (`SELECT 1`), `wide` (one row, 12 mixed-type columns: ints, text, DATETIME,
+  DECIMAL, JSON, BLOB, DATE, TIME, float, NULL), `execute` (`INSERT` with rowcount and lastrowid
+  into a scratch table that the run creates and drops), `tx` (`begin` / statement / `commit`),
+  `stream` (200 rows of a recursive CTE in chunks of 50, unbuffered cursor), `noio` (1 task; fake
+  pool, connection and cursor: LOWER BOUND of the driver's own cost);
+- impls: `raw` (`pool.acquire()` + cursor + `release()`, rolling back an open transaction before
+  release like the driver's reset), `getconn` (acquire, the same statement, release: the cheapest
+  baseline; present in every group) and `driver` (`driver.connection()` + the driver API); the
+  raw pool is built from the driver's own configuration;
+- no `executor` impl and no `noio-yield` group yet (the executor is not wired for MySQL);
+  on MySQL the `noio` ratio against `getconn` is large because the baseline is a few
+  tenths of a microsecond: read `driver-getconn µs` instead.
+
 ## Load (k6, minutes)
 ```bash
 make bench BENCH_ARGS="--configs wsgi,asgi-core,asyncopation --scenarios single,gather,nplus1,write --duration 30s --vus 50"
 ```
 `bench/run.py` per config: prepares `bench_asyncopation` DB (create + seed), starts the server
 (gunicorn for `wsgi`, uvicorn for ASGI configs, same worker count), waits for `/health/`,
-uses `--lifespan on` for the `asyncopation` config on PostgreSQL (its pools are opened at startup by `LifespanApp`, ADR-0004, so the first requests do not pay for the open and the probe) and `--lifespan off` for `asgi-core` (it does not use the registry). On MySQL/MariaDB the `asyncopation` config is reported `unavailable` (no async driver until #7), and a server that fails to start is reported as an `error` row instead of aborting the run. The runner
+uses `--lifespan on` for the `asyncopation` config on PostgreSQL (its pools are opened at startup by `LifespanApp`, ADR-0004, so the first requests do not pay for the open and the probe) and `--lifespan off` for `asgi-core` (it does not use the registry). On MySQL/MariaDB the `asyncopation` config is reported `unavailable` (no async read path until #7b: the driver exists, the harness site does not use it yet), and a server that fails to start is reported as an `error` row instead of aborting the run. The runner
 samples DB connections (`pg_stat_activity` / `information_schema.processlist`) and server RSS
 every 250 ms, runs k6 in docker (`docker compose --profile bench run k6`), and writes
 `bench/results/load-<ts>.json` plus a markdown table to stdout.

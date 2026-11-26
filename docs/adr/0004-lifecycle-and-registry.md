@@ -7,6 +7,7 @@
 - Amended: 2026-11-24 (#2, PR #46) - Decision 2 (the driver, not the probe, builds `Capabilities`; PostgreSQL probe reads `driver.capabilities`; the once-per-alias probe takes the first successfully opened driver's capabilities; MySQL/MariaDB asyncmy driver builds them from its own connection and the probe result must equal it), Decision 3 (`open()` connects directly first: fail-fast, order open -> probe), Decision 4 (same order on the lazy path), new Validation item for MySQL/MariaDB; approved by: maintainer (@devgyurak), 2026-11-24 in the PR #46 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-25 (#5, PR #52) - Decision 1 (`configure()` is re-callable until a driver is open or opening and reads the configured settings through `_django`; `asyncopation.apps` is a top-level entry module; a per-alias preparation failure or unsupported ENGINE is recorded and raised at that alias's first open, never in `ready()`; an open fails closed when `DATABASES` changed since `configure()`), Decision 2 (the probe is a pure synchronous function published with `setdefault`; server info survives `close()`), Decision 3 (`setup()` opens only aliases with a supported engine by default; explicit aliases must be usable; all or nothing for the drivers it opened), Decision 5 (`close(timeout)` semantics, bounded wait for an open in progress, overlapping closes), Decision 7 (`LifespanApp(app)` consumes the `lifespan` scope and does not forward it; no `aliases` argument), Consequences (loops that end without `close()`), new Implementation note (pool sizing -> #8, see ADR-0001 D8) and Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, re-review after the maintainer's LifespanApp scope decision, changes applied)
 - Amended: 2026-11-25 (#5, PR #61) - Decision 5 (`close()` also waits for open pin blocks and streams); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#7, PR #70) - Decision 2 (the probe is the same pure synchronous function for every engine: MySQL/MariaDB read `capabilities` and `driver.server_data`; no engine's probe runs a query), Decision 5 (asyncmy close sequence), Decision 6 (`PoolStats.waiting` differs per driver), Validation; approved by: maintainer (@devgyurak), 2026-11-25 (issue #7a design session); architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 
 ## Context
 The compile-only `DatabaseWrapper` must know the server version/features before the first
@@ -48,7 +49,7 @@ Prior art:
    again until a driver is open or opening (`RuntimeError` afterwards): the test runner renames `NAME` after
    `ready()`, so tests call it again once the test database exists; an alias whose configuration
    changed loses its server info. For PostgreSQL `build_config()` runs here (it reads the tz
-   database), never inside the loop. An ENGINE without a driver yet (MySQL/MariaDB until #7) is
+   database), never inside the loop. An ENGINE without a driver (SQLite or PostGIS, for example) is
    recorded and raises `ImproperlyConfigured` at the first open / `setup()`, not in `ready()`, so
    projects that never open a driver keep starting. The app config `asyncopation.apps` is a
    top-level entry module above every layer and reaches `connection` only inside `ready()`.
@@ -70,12 +71,14 @@ Prior art:
    probe no longer builds `Capabilities`: the driver builds them in `open()` and
    `driver.capabilities` is the single owner of runtime facts. PostgreSQL: the probe reads
    `server_version` / `pg_version` from `driver.capabilities` (taken from the startup parameters of
-   `open()`'s direct connection, no query) and runs no second query. MySQL/MariaDB: the future
+   `open()`'s direct connection, no query) and runs no second query. ~~MySQL/MariaDB: the future
    asyncmy driver's `open()` builds `Capabilities` from its own connection's server version
    before/while the probe runs, and the probe's `mysql_server_data` result must equal it (see
-   Validation). The once-per-alias probe takes the first successfully opened driver's
+   Validation).~~ *(Amended 2026-11-25 (#7, PR #70): superseded below - the driver's `open()` runs
+   `mysql_server_data` itself and builds `Capabilities` from the same result.)* The once-per-alias probe takes the first successfully opened driver's
    `driver.capabilities`; `server_version` is loop-independent, so later loops need no re-read. If
    the first open fails the probe stays once-unless-exception (retried on the next open).*
+   *Amended 2026-11-25 (#7, PR #70): the MySQL/MariaDB probe does not run `mysql_server_data` itself. The asyncmy driver's `open()` runs it on its first direct connection (ADR-0003 Decision 2) and exposes the frozen result through the optional `SupportsServerData` protocol; the engine's `probe` reads `driver.server_data` only (`Capabilities.server_version` comes from the same `VERSION()` string, so there is nothing else to read) and builds `MySQLServerInfo` (all six fields, `sql_mode` as a string), so it stays pure and synchronous like PostgreSQL's. A driver without `SupportsServerData` makes the MySQL probe raise `TypeError`. The sentence above about the probe's `mysql_server_data` result equalling `Capabilities` is satisfied by construction (one query, one `VERSION()` string).*
    *Amended 2026-11-25 (#5, PR #52): the probe is a pure synchronous function of an open driver's
    `capabilities` (no I/O, no `await`), published with an atomic `dict.setdefault(alias, info)`;
    a loop that opens while the info is already stored injects that stored value, and loops that probe concurrently derive equal values from the same server, so the compile wrapper never sees a different one for long (`wrapper_for` replaces a wrapper whose info changed). Server
@@ -107,6 +110,7 @@ Prior art:
    connect cannot make shutdown outlast `timeout` (only an open is cancelled; a hung `driver.close()`
    is not bounded). A driver that fails to close is raised in preference to the `TimeoutError`
    (the timeout is logged). Only the current loop is touched.*
+   *Amended 2026-11-25 (#7, PR #70): asyncmy's `Pool.wait_closed()` waits for every borrowed connection, so the asyncmy driver closes the pool, waits for it under a bound, then `terminate()`s it, which keeps the shielded driver close finite.*
    *Amended 2026-11-25 (#5, PR #61): the in-flight counter also counts every open pin block and
    open stream (ADR-0001 Decision 10), so `close()` waits for them up to its timeout and then closes
    anyway; pins still open then are marked closed first (the registry tracks them), so they raise
@@ -115,6 +119,7 @@ Prior art:
 6. **Registry:** process-global, owned by `asyncopation.connection`, keyed by `(alias, loop)` for
    drivers/pools and by `alias` for server info. Never in a contextvar (the transient `compile_scope` swap of ADR-0008 uses asgiref's contextvar-backed storage but carries no state across an `await`), never populated at import.
    It exposes read-only pool stats per entry (in use / idle / waiting) for tests and metrics.
+   *Amended 2026-11-25 (#7, PR #70): `waiting` means different things per driver: psycopg_pool counts requests queued for a connection; the asyncmy driver counts acquires in progress, which includes a task that is itself opening a new connection. `in_use` is `size - idle` for both, so it also counts connections still opening. Tests wait for the pool to settle; the `PoolStats` docstring says the same.*
 7. **ASGI lifespan wrapper:** `asyncopation.connection.asgi.LifespanApp(django_asgi_app)` handles
    the `lifespan` scope (setup on startup, close on shutdown) and delegates `http` to Django.
    *Amended 2026-11-25 (#5, PR #52): the public surface is `LifespanApp(app)` only. It consumes
@@ -172,6 +177,7 @@ race benign).
 - e2e: uvicorn lifespan opens and closes pools; pool stats are zero after shutdown.
 - *Amended 2026-11-24 (#2, PR #46):* integration (MySQL/MariaDB, asyncmy driver issue):
   `Capabilities.server_version` equals the version derived by the `mysql_server_data` probe.
+  *Amended 2026-11-25 (#7, PR #70):* the probe result equals Django's sync `mysql_server_data` field by field (including with an `init_command` that changes `sql_mode`); `Engine.probe` for MySQL runs no query (a fake driver proves it); zero sync connections during `as_sql()` after `setup()` on MySQL and MariaDB; `driver.close()` with a leaked borrow finishes within its bound.
 - *Amended 2026-11-25 (#5, PR #52):* integration: `configure()` after the test database exists reflects its
   name, and is rejected while a driver is open; a failed first open stores no server info and is
   retried; `close()` leaves no registry entry and zero pool stats; `import asyncopation` imports no

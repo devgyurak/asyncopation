@@ -22,7 +22,18 @@ from asyncopation.engine.evaluate import evaluate_list
 from asyncopation.engine.read import evaluate_count, evaluate_exists, evaluate_first, evaluate_get
 from asyncopation.errors import SyncEvaluationError
 
-__all__ = ["AsyncQuerySet", "aq", "manager_queryset", "refuse_blocked", "wrap_result"]
+__all__ = [
+    "AQ_MANAGER_HOOK",
+    "AsyncQuerySet",
+    "aq",
+    "manager_queryset",
+    "refuse_blocked",
+    "wrap_result",
+]
+
+# The method a manager-level object (`AsyncObjects`, ADR-0009 Decision 7) defines on its type to
+# hand `aq()` its bound manager; `query/objects.py` imports this module, not the other way round.
+AQ_MANAGER_HOOK = "_AsyncObjects__aq_manager"
 
 # Django's own coroutine methods (alist-like evaluators, aget, acreate, ...): ours replace them one by
 # one; until then they must not reach `sync_to_async`. The scan is over the class, so a Django
@@ -317,7 +328,7 @@ def aq(obj: Any) -> AsyncQuerySet:
         return manager_queryset(obj.get_queryset())
     # The manager-level `aobjects` object (ADR-0009 Decision 7), found on its type: its instance
     # `__getattr__` proxies a manager and must not be asked.
-    bound_manager = getattr(type(obj), "_aq_manager", None)
+    bound_manager = getattr(type(obj), AQ_MANAGER_HOOK, None)
     if bound_manager is not None:
         return aq(bound_manager(obj))
     from_source = not isinstance(obj, QuerySet) and hasattr(obj, "get_queryset")

@@ -8,6 +8,7 @@ import pytest
 from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member]
 
 from asyncopation import AsyncObjects
+from asyncopation.query.objects import EVALUATORS
 from tests.support.aq_wrapper import has_attribute, read_attribute
 from tests.support.manager_models import (
     alist_twice,
@@ -18,6 +19,7 @@ from tests.support.manager_models import (
     iterated,
     or_combined,
     record_evaluators,
+    shares_manager,
     sliced,
 )
 from tests.support.object_models import Plain, Widget, fetch_mode_of, where_conditions
@@ -117,6 +119,23 @@ def test_a_duplicate_of_aobjects_keeps_the_default_manager_filter(no_sql, duplic
     assert where_conditions(result.all()) == [("active", "exact")]
 
 
+@pytest.mark.parametrize(
+    ("duplicate", "shared"),
+    [
+        pytest.param(copy.copy, True, id="copy"),
+        pytest.param(copy.deepcopy, False, id="deepcopy"),
+        pytest.param(lambda bound: pickle.loads(pickle.dumps(bound)), False, id="pickle"),
+    ],
+)
+def test_only_a_shallow_copy_shares_the_bound_manager(no_sql, duplicate, shared):
+    # given
+    bound = Plain.aobjects
+    # when
+    result = duplicate(bound)
+    # then
+    assert shares_manager(result, bound) is shared
+
+
 def test_repr_of_aobjects_runs_no_sql(no_sql):
     # when
     text = repr(Plain.aobjects)
@@ -127,7 +146,7 @@ def test_repr_of_aobjects_runs_no_sql(no_sql):
 # -- evaluators never cache ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["alist", "afirst", "acount", "aexists"])
+@pytest.mark.parametrize("name", EVALUATORS)
 async def test_an_evaluator_runs_on_a_fetch_raise_queryset_of_the_bound_model(
     evaluator_calls, name
 ):

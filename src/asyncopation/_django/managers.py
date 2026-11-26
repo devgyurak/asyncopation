@@ -18,7 +18,13 @@ from typing import Any
 from django.db.models import Manager
 from django.db.models.manager import BaseManager
 
-__all__ = ["DJANGO_QUERYSET_SOURCES", "MANAGER_METHOD_CODE", "default_manager", "is_queryset_copy"]
+__all__ = [
+    "DJANGO_QUERYSET_SOURCES",
+    "MANAGER_METHOD_CODE",
+    "BaseManager",
+    "default_manager",
+    "is_queryset_copy",
+]
 
 # `co_qualname` of the copies `_get_queryset_methods` makes (a drift test pins it).
 _COPY_QUALNAME = f"{BaseManager._get_queryset_methods.__qualname__}.<locals>.create_method.<locals>.manager_method"

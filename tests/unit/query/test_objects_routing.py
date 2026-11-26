@@ -3,24 +3,61 @@ go to `aq(manager)`, names the manager defines come from the manager, and every 
 as an `AsyncQuerySet` in `FETCH_RAISE`."""
 
 import pytest
+from django.db import models
 from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member]
 from django.db.models.query import RawQuerySet
 
 from asyncopation import AsyncObjects, aq
+from asyncopation._django.managers import is_queryset_copy
 from asyncopation.query import AsyncQuerySet
+from tests.support.aq_wrapper import has_attribute
 from tests.support.manager_models import (
     AliasItem,
+    AliasManager,
+    BaseManagedItem,
     ChainedItem,
+    ChainedManager,
+    CountingItem,
     DecoratedItem,
+    DecoratedManager,
     FilterItem,
+    FilterOverrideManager,
     Item,
+    ItemManager,
     ModelAsyncObjects,
+    OwnedItem,
     Root,
-    fetch_mode_of,
+    StoredItem,
+    aq_manager_hook,
+    call_twice,
+    chains_during,
+    clear_stored,
+    get_queryset_calls_during,
+    manager_with_instance_attribute,
     queryset_db,
-    where_conditions,
+    queryset_fetch_mode,
+    set_instance_all,
+    store_querysets,
+    unset_instance_all,
 )
-from tests.support.object_models import Plain, Widget
+from tests.support.object_models import Plain, Widget, fetch_mode_of, where_conditions
+
+
+@pytest.fixture
+def stored():
+    """A fresh unevaluated (`shared`) and a filled-cache (`filled`) QuerySet that `StoredItem`'s
+    manager methods hand out, held by the test."""
+    yield store_querysets()
+    clear_stored()
+
+
+@pytest.fixture
+def instance_all(stored):
+    """`all` set on the INSTANCE of `StoredItem`'s default manager, returning `stored["shared"]`."""
+    manager = set_instance_all(StoredItem, stored["shared"])
+    yield stored
+    unset_instance_all(manager)
+
 
 # -- Django's copies of QuerySet methods ---------------------------------------------------------
 
@@ -232,3 +269,138 @@ def test_aq_of_a_db_manager_uses_its_alias():
     assert isinstance(wrapper, AsyncQuerySet)
     assert fetch_mode_of(wrapper) is FETCH_RAISE
     assert queryset_db(wrapper) == "other"
+
+
+# -- a copy is reached lazily, with one clone ----------------------------------------------------
+
+
+def test_reading_a_copied_method_runs_no_get_queryset():
+    # when
+    calls = get_queryset_calls_during(lambda: CountingItem.aobjects.filter)
+    # then
+    assert calls == 0
+
+
+def test_hasattr_of_a_copied_method_runs_no_get_queryset():
+    # when
+    calls = get_queryset_calls_during(lambda: has_attribute(CountingItem.aobjects, "filter"))
+    # then
+    assert calls == 0
+
+
+def test_each_call_of_a_copied_method_runs_get_queryset_once():
+    # given
+    method = CountingItem.aobjects.filter
+    # when
+    calls = get_queryset_calls_during(lambda: call_twice(method))
+    # then
+    assert calls == 2
+
+
+def test_a_copied_method_builds_one_queryset_clone():
+    # when
+    chains = chains_during(lambda: Plain.aobjects.filter(name="x"))
+    # then
+    assert chains == 1
+
+
+@pytest.mark.parametrize(
+    ("build", "name", "expected"),
+    [
+        pytest.param(models.Manager, "filter", True, id="manager-filter"),
+        pytest.param(ItemManager, "cheap", True, id="from-queryset-user-method"),
+        pytest.param(ChainedManager, "cheap", True, id="chained-first-queryset"),
+        pytest.param(ChainedManager, "expensive", True, id="chained-second-queryset"),
+        pytest.param(AliasManager, "published", False, id="alias-of-a-copy"),
+        pytest.param(FilterOverrideManager, "filter", False, id="filter-override"),
+        pytest.param(DecoratedManager, "filter", False, id="decorated-copy"),
+        pytest.param(models.Manager, "all", False, id="manager-all"),
+        pytest.param(
+            lambda: manager_with_instance_attribute("filter"),
+            "filter",
+            False,
+            id="instance-attribute",
+        ),
+    ],
+)
+def test_is_queryset_copy_tells_django_copies_from_manager_names(build, name, expected):
+    # given
+    manager = build()
+    # when
+    copied = is_queryset_copy(manager, name)
+    # then
+    assert copied is expected
+
+
+# -- QuerySets a manager method hands out that the test holds ------------------------------------
+
+
+def test_a_shared_queryset_from_a_manager_method_is_cloned(stored):
+    # when
+    wrapper = StoredItem.aobjects.shared()
+    # then
+    assert wrapper.queryset is not stored["shared"]
+    assert fetch_mode_of(wrapper) is FETCH_RAISE
+
+
+def test_a_shared_queryset_from_a_manager_method_keeps_its_fetch_mode(stored):
+    # given
+    before = queryset_fetch_mode(stored["shared"])
+    # when
+    StoredItem.aobjects.shared()
+    # then
+    assert queryset_fetch_mode(stored["shared"]) is before
+
+
+def test_a_filled_queryset_from_a_manager_method_is_wrapped_as_it_is(no_sql, stored):
+    # when
+    wrapper = StoredItem.aobjects.filled()
+    # then
+    assert wrapper.queryset is stored["filled"]
+
+
+def test_an_all_set_on_the_manager_instance_gives_a_clone(instance_all):
+    # when
+    wrapper = StoredItem.aobjects.all()
+    # then
+    assert wrapper.queryset is not instance_all["shared"]
+
+
+def test_an_all_set_on_the_manager_instance_leaves_the_fetch_mode_alone(instance_all):
+    # given
+    before = queryset_fetch_mode(instance_all["shared"])
+    # when
+    StoredItem.aobjects.all()
+    # then
+    assert queryset_fetch_mode(instance_all["shared"]) is before
+
+
+# -- managers handed out -------------------------------------------------------------------------
+
+
+def test_db_manager_of_a_base_manager_default_is_rebound():
+    # when
+    rebound = BaseManagedItem.aobjects.db_manager("other")
+    # then
+    assert type(rebound) is ModelAsyncObjects
+    assert rebound.model is BaseManagedItem
+    assert queryset_db(rebound.all()) == "other"
+
+
+def test_a_manager_of_another_model_is_rebound_as_a_plain_async_objects():
+    # when
+    rebound = OwnedItem.aobjects.other_manager()
+    # then
+    assert type(rebound) is AsyncObjects
+    assert rebound.model is Plain
+
+
+# -- the aq() hook ---------------------------------------------------------------------------------
+
+
+def test_the_aq_manager_hook_is_the_name_mangled_method():
+    # when
+    hook = aq_manager_hook()
+    # then
+    assert hook == "_AsyncObjects__aq_manager"
+    assert has_attribute(AsyncObjects, hook) is True

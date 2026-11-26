@@ -3,25 +3,30 @@ evaluators, the protected `model` / `name`, and the lookup order of a subclass's
 
 import pytest
 
+from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
+from tests.support.aq_wrapper import read_attribute
 from tests.support.manager_models import (
     AbstractRootChild,
     DelegatingItem,
+    FaultyItem,
     MarkingItem,
     ModelAsyncObjects,
     OwnedItem,
     Root,
     RootChild,
     RootProxy,
+    SlottedItem,
     StatefulItem,
     attach_subclass_to_bare,
     declared_object,
     define_mixin_subclass_with,
     define_subclass_with,
     detach_from_bare,
+    model_declaring_subclass_with,
     record_evaluators,
-    where_conditions,
 )
+from tests.support.object_models import where_conditions
 
 
 @pytest.fixture
@@ -57,6 +62,22 @@ async def test_a_subclass_method_sees_the_accessed_class_as_self_model(model):
     assert seen is model
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(Root, id="declaring-model"),
+        pytest.param(RootChild, id="multi-table-child"),
+        pytest.param(RootProxy, id="proxy-model"),
+        pytest.param(AbstractRootChild, id="concrete-child-of-an-abstract-model"),
+    ],
+)
+async def test_an_evaluator_of_a_subclass_queries_the_accessed_class(evaluator_calls, model):
+    # when
+    await model.aobjects.acount()
+    # then
+    assert evaluator_calls[0].queryset.model is model
+
+
 def test_aobjects_of_a_model_declaring_a_subclass_is_an_instance_of_that_subclass():
     # when
     bound = Root.aobjects
@@ -87,6 +108,58 @@ def test_a_subclass_whose_mixin_defines_a_protected_name_raises_type_error(attri
     # when / then
     with pytest.raises(TypeError, match=r"shadow"):
         define_mixin_subclass_with(attribute)
+
+
+# -- private names of AsyncObjects are free for a subclass ----------------------------------------
+
+
+@pytest.mark.parametrize("attribute", ["_model", "_manager", "_bind", "_aq_manager"])
+def test_a_subclass_reusing_a_private_name_binds_the_model(attribute):
+    # given
+    model = model_declaring_subclass_with(attribute)
+    # when
+    bound = model.aobjects
+    # then
+    assert bound.model is model
+
+
+@pytest.mark.parametrize("attribute", ["_model", "_manager", "_bind", "_aq_manager"])
+def test_a_subclass_reusing_a_private_name_keeps_aq_working(attribute):
+    # given
+    model = model_declaring_subclass_with(attribute)
+    # when
+    wrapper = aq(model.aobjects)
+    # then
+    assert wrapper.model is model
+
+
+@pytest.mark.parametrize("attribute", ["_model", "_manager", "_bind", "_aq_manager"])
+def test_a_subclass_reusing_a_private_name_keeps_copies_working(attribute):
+    # given
+    model = model_declaring_subclass_with(attribute)
+    # when
+    chained = model.aobjects.filter(name="x")
+    # then
+    assert isinstance(chained, AsyncQuerySet)
+    assert chained.model is model
+
+
+# -- state and properties of a subclass -----------------------------------------------------------
+
+
+def test_a_bound_object_carries_a_slot_its_subclass_set_in_init():
+    # when
+    tag = SlottedItem.aobjects.tag
+    # then
+    assert tag == "tagged"
+
+
+def test_a_subclass_property_raising_attribute_error_is_not_proxied_to_the_manager():
+    # given
+    bound = FaultyItem.aobjects
+    # when / then
+    with pytest.raises(AttributeError, match=r"label"):
+        read_attribute(bound, "label")
 
 
 # -- overriding an evaluator ----------------------------------------------------------------------

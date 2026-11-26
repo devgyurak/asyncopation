@@ -4,22 +4,27 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import gc
 import itertools
 import threading
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
 from typing import Any
+from unittest import mock
 
 from asgiref.sync import sync_to_async
 from django.apps.registry import Apps
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.db import models
+from django.db.models.manager import BaseManager
 
 from asyncopation import AsyncObjects
+from asyncopation.query.objects import EVALUATORS
 from tests.support.aio import collect
+from tests.support.object_models import Plain
 
 registry = Apps()
 LABEL = "aobjects_manager_unit"
@@ -27,6 +32,10 @@ LABEL = "aobjects_manager_unit"
 
 def _meta(**options: Any) -> type:
     return type("Meta", (), {"app_label": LABEL, "apps": registry, **options})
+
+
+# Objects the managers below hand out, filled per test by fixtures (never shared between tests).
+STORED: dict[str, Any] = {}
 
 
 # -- QuerySets -------------------------------------------------------------------------------------
@@ -67,6 +76,10 @@ class PublishedManager(ItemManager):
     def label(self) -> str:
         return "manager label"
 
+    def other_manager(self) -> Any:
+        """The default manager of another model."""
+        return Plain._default_manager
+
 
 class AliasManager(models.Manager):
     """`published` is Django's copy of `filter` under another name (it keeps `__name__ == "filter"`)."""
@@ -96,6 +109,9 @@ class DecoratedManager(models.Manager):
 
 
 ChainedManager: Any = models.Manager.from_queryset(ItemQuerySet).from_queryset(RichItemQuerySet)
+
+# A default manager that is a `BaseManager` but not a `Manager`.
+BaseOnlyManager: Any = BaseManager.from_queryset(models.QuerySet)
 
 
 def _manager_get(self: Any, *args: Any, **kwargs: Any) -> str:
@@ -155,6 +171,37 @@ class AsyncNamesManager(models.Manager):
     def stream(self) -> Any:
         return self.get_queryset().aiterator()
 
+    def future(self) -> Any:
+        """A pending `asyncio.Future` (needs a running loop)."""
+        STORED["future"] = asyncio.get_running_loop().create_future()
+        return STORED["future"]
+
+    def task(self) -> Any:
+        """A pending `asyncio.Task` that would never finish on its own (needs a running loop)."""
+        STORED["future"] = asyncio.ensure_future(asyncio.Event().wait())
+        return STORED["future"]
+
+
+class StoredResultManager(models.Manager):
+    """Manager-defined methods returning QuerySets that the test (not Django) holds."""
+
+    def shared(self) -> Any:
+        return STORED["shared"]
+
+    def filled(self) -> Any:
+        return STORED["filled"]
+
+
+GET_QUERYSET_CALLS: list[int] = []
+
+
+class CountingManager(models.Manager):
+    """Records every `get_queryset()` call in `GET_QUERYSET_CALLS`."""
+
+    def get_queryset(self) -> Any:
+        GET_QUERYSET_CALLS.append(1)
+        return super().get_queryset()
+
 
 # -- AsyncObjects subclasses -----------------------------------------------------------------------
 
@@ -186,20 +233,22 @@ class PassThroughAsyncObjects(AsyncObjects):
         return await super().aget(*args, **kwargs)
 
 
-def attach_pass_through(model: Any) -> Any:
-    """`PassThroughAsyncObjects.attach(model)`; returns the declared object it replaced."""
-    original = vars(model)["aobjects"]
-    PassThroughAsyncObjects.attach(model)
-    return original
+class SlottedAsyncObjects(AsyncObjects):
+    """Keeps `__init__` state in a slot, not in `__dict__`."""
+
+    __slots__ = ("tag",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tag = "tagged"
 
 
-def restore_aobjects(model: Any, original: Any) -> None:
-    model.aobjects = original
+class FaultyPropertyAsyncObjects(AsyncObjects):
+    """A property whose body raises `AttributeError`; the manager has a `label` of its own."""
 
-
-def pass_through_calls(model: Any) -> list[str]:
-    """The calls recorded by the `PassThroughAsyncObjects` declared on `model`."""
-    return list(vars(model)["aobjects"].calls)
+    @property
+    def label(self) -> str:
+        raise AttributeError("internal failure")
 
 
 class OwnNamesAsyncObjects(AsyncObjects):
@@ -296,6 +345,27 @@ class AsyncItem(Fields):
     Meta = _meta()
 
 
+class StoredItem(Fields):
+    objects = StoredResultManager()
+    aobjects = AsyncObjects()
+
+    Meta = _meta()
+
+
+class CountingItem(Fields):
+    objects = CountingManager()
+    aobjects = AsyncObjects()
+
+    Meta = _meta()
+
+
+class BaseManagedItem(Fields):
+    objects = BaseOnlyManager()
+    aobjects = ModelAsyncObjects()
+
+    Meta = _meta()
+
+
 class MarkingItem(Fields):
     aobjects = MarkingAsyncObjects()
 
@@ -318,6 +388,19 @@ class DelegatingItem(Fields):
 
 class StatefulItem(Fields):
     aobjects = PassThroughAsyncObjects()
+
+    Meta = _meta()
+
+
+class SlottedItem(Fields):
+    aobjects = SlottedAsyncObjects()
+
+    Meta = _meta()
+
+
+class FaultyItem(Fields):
+    objects = PublishedManager()
+    aobjects = FaultyPropertyAsyncObjects()
 
     Meta = _meta()
 
@@ -388,18 +471,122 @@ def detach_from_bare() -> None:
     delattr(Bare, "aobjects")
 
 
+def attach_pass_through(model: Any) -> Any:
+    """`PassThroughAsyncObjects.attach(model)`; returns the declared object it replaced."""
+    original = vars(model)["aobjects"]
+    PassThroughAsyncObjects.attach(model)
+    return original
+
+
+def restore_aobjects(model: Any, original: Any) -> None:
+    model.aobjects = original
+
+
+def pass_through_calls(model: Any) -> list[str]:
+    """The calls recorded by the `PassThroughAsyncObjects` declared on `model`."""
+    return list(vars(model)["aobjects"].calls)
+
+
+# -- models declaring a subclass that reuses a private name of AsyncObjects ------------------------
+
+shadow_registry = Apps()
+_shadow_numbers = itertools.count()
+
+
+def model_declaring_subclass_with(attribute: str) -> Any:
+    """A model (private registry, unique name) whose `aobjects` is an `AsyncObjects` subclass that
+    defines `attribute` (set to None) itself."""
+    subclass = define_subclass_with(attribute)
+    number = next(_shadow_numbers)
+    return type(
+        f"ShadowItem{number}",
+        (models.Model,),
+        {
+            "__module__": __name__,
+            "__str__": _receiver_str,
+            "Meta": type("Meta", (), {"app_label": "aobjects_shadow", "apps": shadow_registry}),
+            "name": models.CharField(max_length=10),
+            "aobjects": subclass(),
+        },
+    )
+
+
+# -- stored QuerySets, coroutines and futures ------------------------------------------------------
+
+
+def store_querysets() -> dict[str, Any]:
+    """Fill `STORED` with a fresh unevaluated QuerySet (`shared`) and a filled-cache one (`filled`)
+    of `StoredItem`, built directly (not in FETCH_RAISE) and held by the test."""
+    STORED["shared"] = models.QuerySet(model=StoredItem)
+    STORED["filled"] = models.QuerySet(model=StoredItem)
+    STORED["filled"]._result_cache = []
+    return dict(STORED)
+
+
+def clear_stored() -> None:
+    STORED.clear()
+
+
+def queryset_fetch_mode(queryset: Any) -> Any:
+    return queryset._fetch_mode
+
+
+def set_instance_all(model: Any, queryset: Any) -> Any:
+    """Set `all` on the INSTANCE of `model`'s default manager to return `queryset`."""
+    manager = model._default_manager
+    manager.all = lambda: queryset
+    return manager
+
+
+def unset_instance_all(manager: Any) -> None:
+    del manager.all
+
+
+async def _pending() -> int:
+    return 1
+
+
+def store_pending_coroutine(model: Any, name: str) -> Any:
+    """Set a not-yet-started coroutine object as attribute `name` of `model`'s default manager."""
+    coroutine = _pending()
+    setattr(model._default_manager, name, coroutine)
+    return coroutine
+
+
+def remove_pending_coroutine(model: Any, name: str, coroutine: Any) -> None:
+    coroutine.close()
+    delattr(model._default_manager, name)
+
+
+def is_open(coroutine: Any) -> bool:
+    """A coroutine that was closed (or finished) has no frame any more."""
+    return coroutine.cr_frame is not None
+
+
+def handed_out_future() -> Any:
+    return STORED["future"]
+
+
+async def discard_handed_out() -> None:
+    """Cancel and await the future a manager method handed out (if any), then forget it, so no
+    pending task outlives the test even when the code under test did not cancel it."""
+    future = STORED.pop("future", None)
+    if future is not None:
+        future.cancel()
+        await asyncio.gather(future, return_exceptions=True)
+    clear_stored()
+
+
+async def cancelled_after_a_turn(future: Any) -> bool:
+    """Let the loop process a cancellation, report it, then make sure the future is done."""
+    await asyncio.wait([future], timeout=1.0)
+    cancelled = future.cancelled()
+    future.cancel()
+    await asyncio.gather(future, return_exceptions=True)
+    return cancelled
+
+
 # -- reading results -------------------------------------------------------------------------------
-
-
-def where_conditions(wrapper: Any) -> list[tuple[str, str]]:
-    """`(field name, lookup name)` of each WHERE condition of the wrapped QuerySet, in order."""
-    return [
-        (node.lhs.target.name, node.lookup_name) for node in wrapper.queryset.query.where.children
-    ]
-
-
-def fetch_mode_of(wrapper: Any) -> Any:
-    return wrapper.queryset._fetch_mode
 
 
 def queryset_db(wrapper: Any) -> str:
@@ -414,14 +601,6 @@ def declared_object(model: Any, name: str = "aobjects") -> Any:
 async def await_evaluator(obj: Any, name: str) -> Any:
     """`await obj.<name>()`; the attribute access, the call or the await may raise."""
     return await getattr(obj, name)()
-
-
-def call_named(obj: Any, name: str, *args: Any, **kwargs: Any) -> Any:
-    return getattr(obj, name)(*args, **kwargs)
-
-
-def read_attribute(obj: Any, name: str) -> Any:
-    return getattr(obj, name)
 
 
 def sliced(obj: Any) -> Any:
@@ -441,33 +620,120 @@ async def collected(obj: Any) -> list[Any]:
     return await collect(obj)
 
 
+def shares_manager(first: Any, second: Any) -> bool:
+    """Whether two bound objects hold the very same manager (the private binding slot)."""
+    return first._AsyncObjects__manager is second._AsyncObjects__manager
+
+
+def get_queryset_calls_during(call: Callable[[], Any]) -> int:
+    """`get_queryset()` calls of a `CountingManager` while `call()` runs."""
+    GET_QUERYSET_CALLS.clear()
+    call()
+    return len(GET_QUERYSET_CALLS)
+
+
+def call_twice(function: Callable[[], Any]) -> None:
+    function()
+    function()
+
+
+def chains_during(call: Callable[[], Any]) -> int:
+    """`QuerySet._chain` calls (each one is a QuerySet clone) while `call()` runs."""
+    from django.db.models.query import QuerySet
+
+    original = QuerySet._chain
+    count: list[int] = []
+
+    def counting(self: Any, *args: Any, **kwargs: Any) -> Any:
+        count.append(1)
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(QuerySet, "_chain", counting):
+        call()
+    return len(count)
+
+
+def manager_with_instance_attribute(name: str) -> Any:
+    """A plain `Manager` with `name` set in its instance `__dict__` (to Django's own copy)."""
+    manager = models.Manager()
+    setattr(manager, name, functools.partial(models.Manager.filter, manager))
+    return manager
+
+
+def aq_manager_hook() -> str:
+    """`asyncopation.query.queryset.AQ_MANAGER_HOOK` (imported here, so a missing name fails one
+    test, not the collection of the module)."""
+    from asyncopation.query.queryset import AQ_MANAGER_HOOK
+
+    return AQ_MANAGER_HOOK
+
+
 # -- refusals --------------------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Refusal:
     """What one refused call did: the `NotImplementedError` message (None when nothing was
-    raised), the `RuntimeWarning`s seen once the error and its traceback were released and garbage
-    collected ("coroutine ... was never awaited"), and how many threads it started."""
+    raised), the "coroutine '...<name>' was never awaited" warnings seen once the error and its
+    traceback were released and garbage collected, and how many threads it started."""
 
     message: str | None
-    runtime_warnings: list[str]
-    threads_started: int
+    unawaited: list[str]
+    thread_starts: int
 
 
-def refusal_of(call: Callable[[], Any]) -> Refusal:
-    """Run `call()`, expecting `NotImplementedError` (any other error propagates)."""
-    threads_before = threading.active_count()
+@contextlib.contextmanager
+def _counted_thread_starts() -> Generator[list[int]]:
+    original = threading.Thread.start
+    starts: list[int] = []
+
+    def counting(self: Any) -> None:
+        starts.append(1)
+        original(self)
+
+    with mock.patch.object(threading.Thread, "start", counting):
+        yield starts
+
+
+def refusal_of(call: Callable[[], Any], coroutine: str) -> Refusal:
+    """Run `call()`, expecting `NotImplementedError` (any other error propagates). `coroutine` is
+    the name of the coroutine function whose "never awaited" warning would show it was dropped
+    unclosed."""
+    gc.collect()  # garbage of earlier tests must not report here
     message: str | None = None
-    with warnings.catch_warnings(record=True) as caught:
+    with warnings.catch_warnings(record=True) as caught, _counted_thread_starts() as starts:
         warnings.simplefilter("always")
         try:
             call()
         except NotImplementedError as exc:
             message = str(exc)
         gc.collect()
-    found = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
-    return Refusal(message, found, threading.active_count() - threads_before)
+    unawaited = [
+        str(w.message)
+        for w in caught
+        if issubclass(w.category, RuntimeWarning)
+        and "never awaited" in str(w.message)
+        and coroutine in str(w.message)
+    ]
+    return Refusal(message, unawaited, len(starts))
+
+
+async def _leaked_coroutine() -> None:
+    return None
+
+
+def leak_a_coroutine_and_refuse() -> None:
+    """Positive control for `refusal_of`: create a coroutine, drop it unclosed, refuse."""
+    _dropped = _leaked_coroutine()  # deliberately never awaited or closed
+    raise NotImplementedError("refused after leaking a coroutine")
+
+
+def start_a_thread_and_refuse() -> None:
+    """Positive control for `refusal_of`: start (and join) one thread, then refuse."""
+    thread = threading.Thread(target=_one)
+    thread.start()
+    thread.join()
+    raise NotImplementedError("refused after starting a thread")
 
 
 # -- receiving models (contribute_to_class must never be proxied) ---------------------------------
@@ -537,8 +803,6 @@ def receive_with_add_to_class(source: Any) -> Received:
 
 # -- evaluator calls (recorded on AsyncQuerySet, no database) --------------------------------------
 
-EVALUATORS = ("alist", "aget", "afirst", "acount", "aexists")
-
 
 @dataclass(frozen=True)
 class EvaluatorCall:
@@ -557,8 +821,8 @@ def _recorder(name: str, calls: list[EvaluatorCall]) -> Callable[..., Any]:
 
 
 def record_evaluators(monkeypatch: Any) -> list[EvaluatorCall]:
-    """Replace the five evaluators of `AsyncQuerySet` with stubs that record the QuerySet they
-    were called on and return `("default", name, args, kwargs)`."""
+    """Replace the evaluators of `AsyncQuerySet` (`asyncopation.query.objects.EVALUATORS`) with
+    stubs that record the QuerySet they were called on and return `("default", name, args, kwargs)`."""
     from asyncopation.query import AsyncQuerySet
 
     calls: list[EvaluatorCall] = []

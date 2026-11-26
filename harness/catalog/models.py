@@ -17,8 +17,10 @@ from asyncopation import AsyncObjects
 
 class PublisherManager(models.Manager):
     """A default manager with a manager-only chaining method and an `all()` override (ADR-0009).
-    It overrides neither `get_queryset` nor `use_in_migrations`, so it needs no migration and the
-    other tests (which never read publishers through `all()`) see no change."""
+    It overrides neither `get_queryset` nor `use_in_migrations`, so it needs no migration and
+    every read through `get_queryset()` (filter, get, counts, the evaluators) is unchanged. The
+    only other caller of `Publisher.objects.all()` is `harness/seed.py`'s `reset()`, whose
+    `delete()` clears the ordering."""
 
     def from_country(self, code: str) -> models.QuerySet[Publisher]:
         return self.get_queryset().filter(country=code)

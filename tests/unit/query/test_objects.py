@@ -5,12 +5,12 @@ import pytest
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import FETCH_RAISE, Manager  # ty: ignore[missing-module-member]
 
-from asyncopation import AsyncObjects
+from asyncopation import AsyncObjects, aq
 from asyncopation.query import AsyncQuerySet
-from tests.support.aq_wrapper import has_attribute, read_attribute
+from asyncopation.query.objects import EVALUATORS
+from tests.support.aq_wrapper import call_named, has_attribute, read_attribute
 from tests.support.manager_models import (
     await_evaluator,
-    call_named,
     declared_object,
     receive_in_class_body,
     receive_with_add_to_class,
@@ -220,12 +220,21 @@ def test_aobjects_is_a_descriptor_not_a_manager():
 # -- the unbound declared object ------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", ["alist", "aget", "afirst", "acount", "aexists"])
+@pytest.mark.parametrize("name", EVALUATORS)
 async def test_an_evaluator_of_the_unbound_declared_object_raises_attribute_error(name):
     # given
     declared = declared_object(Plain)
     # when / then
     with pytest.raises(AttributeError, match=r"not bound to a model"):
+        await await_evaluator(declared, name)
+
+
+@pytest.mark.parametrize("name", EVALUATORS)
+async def test_the_unbound_evaluator_error_names_the_evaluator(name):
+    # given
+    declared = declared_object(Plain)
+    # when / then
+    with pytest.raises(AttributeError, match=name):
         await await_evaluator(declared, name)
 
 
@@ -356,6 +365,54 @@ def test_aobjects_of_a_proxy_model_uses_the_proxy_model():
     wrapper = ProxyPlain.aobjects
     # then
     assert wrapper.model is ProxyPlain
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(Child, id="multi-table-child"),
+        pytest.param(ProxyPlain, id="proxy-model"),
+        pytest.param(Concrete, id="concrete-child-of-an-abstract-model"),
+    ],
+)
+def test_aq_of_aobjects_queries_the_accessed_class(model):
+    # when
+    wrapper = aq(model.aobjects)
+    # then
+    assert wrapper.model is model
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(Child, id="multi-table-child"),
+        pytest.param(ProxyPlain, id="proxy-model"),
+        pytest.param(Concrete, id="concrete-child-of-an-abstract-model"),
+    ],
+)
+def test_aobjects_all_queries_the_accessed_class(model):
+    # when
+    wrapper = model.aobjects.all()
+    # then
+    assert wrapper.model is model
+
+
+# -- repr ----------------------------------------------------------------------------------------
+
+
+def test_repr_of_aobjects_names_the_class_and_the_model_label(no_sql):
+    # when
+    text = repr(Plain.aobjects)
+    # then
+    assert "AsyncObjects" in text
+    assert "aobjects_unit.Plain" in text
+
+
+def test_repr_of_the_unbound_declared_object_says_unbound(no_sql):
+    # when
+    text = repr(declared_object(Plain))
+    # then
+    assert "unbound" in text
 
 
 # -- attach --------------------------------------------------------------------------------------

@@ -10,7 +10,9 @@ proof): other job or workflow ``env`` variables besides ``PYTEST_ADDOPTS`` (``PY
 itself (``conftest.py``, the pytest configuration in ``pyproject.toml``, ``-p`` in ``addopts``, the
 drift tests), job keys such as ``timeout-minutes``, ``permissions``, ``services``, ``runs-on`` and
 the matrix values, workflow triggers, later steps, and that ``tests/unit/compile`` collects at
-least one test.
+least one test. Steps before the drift step (except the canary's install step) are not compared;
+the integration job's drift step sets ``ASYNCOPATION_REQUIRE_MYSQLDB=1``, so a skipped or missing
+mysqlclient fails at run time instead.
 """
 
 from __future__ import annotations

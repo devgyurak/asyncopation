@@ -30,7 +30,9 @@ def snapshot_value(value: Any, _path: frozenset[int] = frozenset()) -> tuple[str
     if isinstance(value, dict | list):
         return type_name, json.dumps(value, sort_keys=True, default=str)
     if isinstance(value, tuple):
-        return type_name, tuple(snapshot_value(v, _path) for v in value)
+        items = tuple(snapshot_value(v, _path) for v in value)
+        fields = getattr(value, "_fields", None)  # a namedtuple: its field names are part of it
+        return type_name, items if fields is None else (fields, items)
     return type_name, value
 
 

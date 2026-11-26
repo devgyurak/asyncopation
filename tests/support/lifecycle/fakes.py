@@ -43,6 +43,9 @@ class FakeCloseError(Exception):
     """Raised by the fake driver's `close()` when the script says so."""
 
 
+INJECTED_WRAPPER = object()  # what the fake engine's `inject()` returns: the "compile-only wrapper"
+
+
 class FakeInjectError(Exception):
     """Raised by the fake engine's `inject()` while the script says so."""
 
@@ -160,11 +163,12 @@ def make_engine(recorder: Recorder, script: Script) -> Any:
             raise FakeProbeError("boom: probe")
         return FakeInfo(driver.capabilities.server_version)
 
-    def inject(alias: str, settings_dict: dict[str, Any], info: Any) -> None:
+    def inject(alias: str, settings_dict: dict[str, Any], info: Any) -> Any:
         if script.fail_injects > 0:
             script.fail_injects -= 1
             raise FakeInjectError("boom: inject")
         recorder.injects.append((alias, info))
+        return INJECTED_WRAPPER
 
     return Engine(prepare=prepare, probe=probe, inject=inject)
 

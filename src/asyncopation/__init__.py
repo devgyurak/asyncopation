@@ -11,11 +11,34 @@ nor a database driver.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
-from asyncopation.errors import ConcurrentQueryError
+from asyncopation.errors import ConcurrentQueryError, SyncEvaluationError
+
+if TYPE_CHECKING:
+    from asyncopation.query import AsyncQuerySet, aq
 
 __version__ = "0.0.0"
-__all__ = ["ConcurrentQueryError", "close", "configure", "setup"]
+__all__ = [
+    "AsyncQuerySet",
+    "ConcurrentQueryError",
+    "SyncEvaluationError",
+    "aq",
+    "close",
+    "configure",
+    "setup",
+]
+
+
+if not TYPE_CHECKING:  # a module-level __getattr__ would make every missing name type-check
+
+    def __getattr__(name: str) -> Any:
+        """Load the Django-facing facade only when it is used (PEP 562)."""
+        if name in ("aq", "AsyncQuerySet"):
+            from asyncopation import query
+
+            return getattr(query, name)
+        raise AttributeError(f"module 'asyncopation' has no attribute {name!r}")
 
 
 def configure() -> None:

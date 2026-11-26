@@ -100,3 +100,10 @@ def make_deferred_author(*deferred: str, fetch_mode: Any = FETCH_ONE) -> Author:
 def make_deferred_edition() -> BookEdition:
     """A composite-pk edition whose ``isbn`` is deferred (the pk fields are loaded)."""
     return BookEdition.from_db(None, ["book_id", "number", "released"], [1, 1, None])
+
+
+def named_row(names: list[str], *values: Any) -> Any:
+    """A namedtuple row with the given field names (the shape of `values_list(named=True)`)."""
+    from collections import namedtuple
+
+    return namedtuple("Row", names)(*values)

@@ -13,6 +13,7 @@ from hypothesis import given
 
 from harness.catalog.models import Author, Book, BookEdition, FieldZoo
 from harness.seed import EXPECTED_COUNTS
+from tests.support.backends import XFAIL_UNTIL_ASYNCMY
 from tests.support.deferred_queries import (
     count_deferred_markers,
     deferred_field_names,
@@ -214,7 +215,7 @@ async def test_reference_editions_filter_matches_sync(
     assert result.async_outcome == result.sync_outcome
 
 
-@pytest.mark.xfail(strict=True, reason="Phase 1: asyncopation.aq() / alist() not implemented yet")
+@XFAIL_UNTIL_ASYNCMY
 async def test_asyncopation_list_matches_sync(readonly_db, differential):
     # given
     build = partial(Book.objects.filter, published=True)

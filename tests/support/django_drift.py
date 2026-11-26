@@ -414,3 +414,46 @@ def _assigns_self_attribute(cls: Any, name: str) -> bool:
         and node.value.id == "self"
         for node in ast.walk(tree)
     )
+
+
+def _klass_info_keys_read(module: Any) -> set[str]:
+    """String keys read from a name called ``klass_info`` in ``module`` (``klass_info["k"]`` and
+    ``klass_info.get("k", ...)``), found by parsing its source."""
+    tree = ast.parse(inspect.getsource(module))
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "klass_info"
+            and isinstance(node.slice, ast.Constant)
+        ):
+            keys.add(str(node.slice.value))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "klass_info"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            keys.add(str(node.args[0].value))
+    return keys
+
+
+def klass_info_key_problem(key: str) -> str | None:
+    """Why ``klass_info[key]`` is no longer set by a real compiler or read by the query module, or
+    None. "Set" is observed on the ``klass_info`` of a compiled ``select_related`` query."""
+    from django.db.models import query
+
+    from tests.support.engine.stages import compile_case
+
+    keys = compile_case("book_select_related_author", "default").compiler.klass_info.keys()
+    read = key in _klass_info_keys_read(query)
+    written = key in keys
+    if read and written:
+        return None
+    return (
+        f"klass_info[{key!r}]: read in django.db.models.query={read}, set by the compiler={written}"
+    )

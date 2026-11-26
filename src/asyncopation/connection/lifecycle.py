@@ -26,7 +26,14 @@ logger = logging.getLogger("asyncopation.connection")
 
 DEFAULT_CLOSE_TIMEOUT = 10.0
 
-__all__ = ["close", "configure", "ensure_driver", "setup"]
+__all__ = [
+    "close",
+    "compile_wrapper",
+    "configure",
+    "ensure_driver",
+    "is_configured_alias",
+    "setup",
+]
 
 
 def configure() -> None:
@@ -125,6 +132,24 @@ async def ensure_driver(alias: str, *, lazy: bool = True) -> AsyncDriver:
         task = asyncio.current_task()
         entry.opener = None if task is None else weakref.ref(task)
         return driver
+
+
+def is_configured_alias(alias: str) -> bool:
+    """Whether ``alias`` is a configured database (whatever its engine); raises when not configured."""
+    return alias in _require_configured()
+
+
+def compile_wrapper(alias: str) -> Any:
+    """The compile-only wrapper of ``alias``; its driver must have been opened (``ensure_driver``).
+
+    The server info exists only after the first successful open of the alias (ADR-0004 Decision 2),
+    so asking earlier is a programming error, not a runtime condition.
+    """
+    config = _config(alias)
+    info = registry.server_info(alias)
+    if info is None or config.engine is None:
+        raise RuntimeError(f"asyncopation: {alias!r} is not open; await ensure_driver() first")
+    return config.engine.inject(alias, config.settings_dict, info)
 
 
 async def _discard(driver: AsyncDriver) -> None:

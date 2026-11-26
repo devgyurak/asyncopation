@@ -140,6 +140,8 @@ Things to know about subclasses:
 
 - `self.model` is the class the object was read from (a child or a proxy model binds its own), and
   `model` and `name` cannot be redefined (`TypeError`).
+- Names starting with `_asyncopation_` are reserved for the binding machinery. This is not
+  checked, so do not define such names on a subclass.
 - `super()` reaches only what `AsyncObjects` defines (the evaluators). It does not reach proxied
   names. Call the manager's own method with `super().__getattr__("published")(...)`, or a QuerySet
   method with `aq(self).filter(...)`. `super().acreate()` raises `AttributeError` until the write

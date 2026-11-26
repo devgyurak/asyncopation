@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=91ba61609418 -->
+<!-- i18n: source=README.md source-sha256=e4d6bef8fcb4 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`)와 매니저 수준 `aobjects`(`async for`를 뺀 같은 evaluator와 async 매니저 메서드)로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -125,6 +125,8 @@ class Book(models.Model):
 
 - `self.model`은 객체를 읽어 온 클래스다(자식 모델이나 프록시 모델은 자기 클래스에 바인딩된다).
   `model`과 `name`은 다시 정의할 수 없다(`TypeError`).
+- `_asyncopation_`으로 시작하는 이름은 바인딩 장치용으로 예약되어 있다. 검사하지 않으므로
+  서브클래스에 이런 이름을 정의하지 않는다.
 - `super()`는 `AsyncObjects`가 정의한 것(evaluator)에만 닿는다. 프록시되는 이름에는 닿지 않는다.
   매니저 자신의 메서드는 `super().__getattr__("published")(...)`로, QuerySet 메서드는
   `aq(self).filter(...)`로 호출한다. 쓰기 API가 생기기 전까지 `super().acreate()`는 `AttributeError`를 낸다.

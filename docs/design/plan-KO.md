@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=4923b379596a -->
+<!-- i18n: source=docs/design/plan.md source-sha256=71cd3cdf633f -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -186,6 +186,7 @@ AsyncDriver (protocol)                       AsyncDbConnection (protocol)
    - `get_or_create`, `update_or_create`
    - `prefetch_related_objects`
    - `async def` 복사본이 아니라 하나의 async 실행기가 구동하는 sans-I/O 제너레이터 코어로 작성한다(ADR-0007).
+   - 두 번째 코어가 compile_scope 밖에서 변환을 필요로 하면, engine/runner.py가 더 이상 _django.aggregation을 import하지 않도록 Convert가 자체 callable을 담도록 일반화한다(ADR-0007, Decision 1).
 
 ### 4.5 Lazy loading
 

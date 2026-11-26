@@ -47,6 +47,17 @@ async def intercepted_call(op: str, interceptor: Any, *, pinned: bool) -> Observ
     return Observed(recorder, result, error)
 
 
+async def intercepted_on_alias(alias: str, op: str, interceptor: Any, *, pinned: bool) -> Any:
+    """`op` on a pinned or borrowed executor of `alias` under `intercept(interceptor)`; returns
+    the result."""
+    module = executor_module()
+    with hooks().intercept(interceptor):
+        if not pinned:
+            return await call(module.BorrowedExecutor(alias), op)
+        async with module.pin(alias) as executor:
+            return await call(executor, op)
+
+
 async def intercepted_with_observer(
     op: str, interceptor: Any, observer: Any, *, pinned: bool
 ) -> Observed:

@@ -255,6 +255,33 @@ async def test_an_ordinary_driver_failure_then_a_swallowed_cancellation_breaks_t
     assert isinstance(outcome.next_error, TransactionManagementError)
 
 
+async def test_an_ordinary_driver_failure_then_a_breaking_one_on_retry_breaks_the_transaction(
+    execenv,
+):
+    # given
+    lost = LostConnection("connection lost on retry")
+    execenv.default.queue(IntegrityError("duplicate key"), lost)
+    # when
+    outcome = await intercepted_in_transaction(execenv, Retrying(), follow_up=True)
+    # then
+    assert (outcome.error, outcome.broken) == (lost, True)
+    assert isinstance(outcome.next_error, TransactionManagementError)
+
+
+async def test_a_swallowed_cancellation_then_a_swallowed_ordinary_failure_breaks_the_transaction(
+    execenv,
+):
+    # given
+    execenv.default.during = failing_once(execenv.default, asyncio.CancelledError())
+    execenv.default.queue(IntegrityError("duplicate key"))
+    supplied = supplied_result("fetch_all")
+    # when
+    outcome = await intercepted_in_transaction(execenv, CatchingTwice(supplied), follow_up=True)
+    # then
+    assert (outcome.result, outcome.error, outcome.broken) == (supplied, None, True)
+    assert isinstance(outcome.next_error, TransactionManagementError)
+
+
 async def test_a_real_cancellation_swallowed_by_an_interceptor_still_breaks_the_transaction(
     execenv,
 ):

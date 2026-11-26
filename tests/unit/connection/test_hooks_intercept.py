@@ -12,6 +12,7 @@ from tests.support.executors.ops import CONTROLS, kinds_of
 from tests.support.hooks.events import BOTH, STARTED, Raising, error_messages
 from tests.support.hooks.intercepting import (
     intercepted_call,
+    intercepted_on_alias,
     intercepted_with_observer,
     statement_after_the_query,
     task_left_behind,
@@ -103,6 +104,21 @@ async def test_an_intercepted_statement_is_observed_once_as_started_then_finishe
     observed = await intercepted_call(op, PassThrough(), pinned=pinned)
     # then
     assert observed.names == BOTH
+
+
+@pytest.mark.parametrize("alias", ["default", "other"])
+@PINNED
+async def test_an_interceptor_context_names_the_alias_of_the_query(execenv, alias, pinned):
+    # given
+    interceptor = PassThrough()
+    # when
+    await intercepted_on_alias(alias, "fetch_all", interceptor, pinned=pinned)
+    # then
+    assert interceptor.calls[0].context == {
+        "alias": alias,
+        "method": "fetch_all",
+        "pinned": pinned,
+    }
 
 
 # --------------------------------------------------------------------------- suppression

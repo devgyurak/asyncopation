@@ -757,7 +757,8 @@ async def _intercepted_statement(
 class QueueObserver:
     """An observer that puts every event on a bounded ``asyncio.Queue`` for an async consumer
     (ADR-0005 Decision 1): ``with observe(queue):`` then ``await queue.get()`` or
-    ``async for event in queue``. Never blocks and schedules nothing: when the queue is full the
+    ``async for event in queue``. Never blocks and never creates a task (it may wake a waiting
+    consumer): when the queue is full the
     incoming event is dropped and counted in ``dropped``. Bound to the event loop it was created
     in (create it inside the running loop); an event from another loop is dropped and counted.
     ``async for`` never ends by itself (there is no queue shutdown on Python 3.12): break out of it

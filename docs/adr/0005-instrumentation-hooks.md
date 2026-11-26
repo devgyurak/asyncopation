@@ -46,7 +46,7 @@ since an observer is not tied to an alias or a loop):
    never propagated. Async consumers use a provided bounded-queue observer they drain themselves.
    *Amended 2026-11-26 (#4, PR #75):* `asyncopation.connection.QueueObserver(maxsize=1000)`,
    registered like any observer; when its queue is full the incoming event is dropped and counted
-   in `dropped` (it never blocks or schedules); it is bound to the event loop it was created in
+   in `dropped` (it never blocks and never creates a task; it may wake a waiting consumer); it is bound to the event loop it was created in
    (created inside the running loop), and an event delivered from another loop is dropped and
    counted. It has `get()`, `get_nowait()` and `async for` (which never ends by itself: break out
    or cancel the consumer).

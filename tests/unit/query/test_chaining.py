@@ -149,7 +149,7 @@ def test_django_own_method_on_a_fetch_raise_queryset_is_wrapped_without_another_
     assert calls == []
 
 
-def test_a_user_defined_method_on_a_fetch_raise_queryset_records_one_fetch_mode_call():
+def test_counting_recorder_sees_the_clone_a_user_defined_method_makes():
     # given
     queryset, calls = counting_queryset()
     wrapper = aq(queryset)
@@ -166,10 +166,13 @@ async def test_an_overriding_method_that_returns_a_cached_stored_queryset_only_r
 ):
     # given
     queryset, stored = overriding_queryset(method, cached=True)
+    cache = stored._result_cache
     # when
-    await reach(aq(queryset)).alist()
+    rows = await reach(aq(queryset)).alist()
     # then
-    assert stored._result_cache == [CACHED_ROW]
+    assert rows == [CACHED_ROW]
+    assert stored._result_cache is cache
+    assert cache == [CACHED_ROW]
 
 
 def test_a_user_defined_method_that_returns_its_receiver_gets_a_clone():

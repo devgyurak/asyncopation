@@ -6,7 +6,7 @@ import inspect
 from typing import Any
 
 import pytest
-from django.db.models import Manager, QuerySet
+from django.db.models import FETCH_RAISE, Manager, QuerySet  # ty: ignore[missing-module-member] - missing from django-types
 
 from harness.catalog.models import Book
 
@@ -128,8 +128,6 @@ def prefilled_manager() -> SharedQuerysetManager:
 def raise_mode_manager() -> SharedQuerysetManager:
     """A real Manager whose `get_queryset()` returns ONE shared QuerySet that is already FETCH_RAISE
     (what a custom manager returning a class-level QuerySet of an `aq()` user looks like)."""
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
     manager = SharedQuerysetManager()
     manager.shared = manager.shared.fetch_mode(FETCH_RAISE)
     return manager
@@ -151,8 +149,6 @@ def prefilled_duck_source() -> Any:
 
 def raise_mode_books() -> QuerySet[Book]:
     """A Book QuerySet that already carries FETCH_RAISE."""
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
     return Book.objects.all().fetch_mode(FETCH_RAISE)
 
 
@@ -218,15 +214,11 @@ class IdentityQuerySet(QuerySet):
 
 
 def identity_queryset() -> QuerySet[Book]:
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
     return IdentityQuerySet(model=Book).fetch_mode(FETCH_RAISE)
 
 
 def combination_operands() -> tuple[Any, Any, Any, Any]:
     """Two user-held FETCH_RAISE QuerySets (one empty) and the wrappers `aq()` makes of them."""
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
     from asyncopation import aq
 
     empty = Book.objects.none().order_by().fetch_mode(FETCH_RAISE)
@@ -388,8 +380,6 @@ def foreign_mode_identity_wrapper() -> Any:
 
 def prefetched_operands() -> tuple[Any, Any, Any, Any]:
     """A manager with a filled cache, its wrapper, an empty wrapper and an empty plain QuerySet."""
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
     from asyncopation import aq
 
     manager = prefilled_manager()
@@ -422,25 +412,33 @@ def prefetched_identity_manager() -> SharedQuerysetManager:
     return manager
 
 
-def overriding_queryset(method: str) -> tuple[Any, QuerySet[Book]]:
+def overriding_queryset(method: str, *, cached: bool = False) -> tuple[Any, QuerySet[Book]]:
     """A FETCH_RAISE QuerySet of a subclass that overrides `method` (`all`, `__or__`, `__and__`,
-    `__xor__`, `__getitem__` or `filter`) to return a stored unevaluated FETCH_RAISE QuerySet, and that
-    stored QuerySet."""
+    `__xor__`, `__getitem__` or `filter`) to return a stored FETCH_RAISE QuerySet (unevaluated, or
+    with a filled cache when `cached`), and that stored QuerySet."""
     stored = raise_mode_books()
-    overrides = {
-        "all": lambda self: stored,
-        "__or__": lambda self, other: stored,
-        "__and__": lambda self, other: stored,
-        "__xor__": lambda self, other: stored,
-        "__getitem__": lambda self, key: stored,
-        "filter": lambda self, *args, **kwargs: stored,
-    }
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+    if cached:
+        stored._result_cache = [CACHED_ROW]
 
-    override = overrides[method]
+    def override(self: Any, *args: Any, **kwargs: Any) -> QuerySet[Book]:
+        return stored
+
     override.__name__ = method  # a method is known by its name, as a def would give it
     subclass = type("OverridingQuerySet", (QuerySet,), {method: override})
     return subclass(model=Book).fetch_mode(FETCH_RAISE), stored
+
+
+def counting_queryset() -> tuple[Any, list[int]]:
+    """A FETCH_RAISE QuerySet that Django chains as usual, and the list that records each
+    `fetch_mode()` call made on it or on its clones (an extra clone into FETCH_RAISE shows up)."""
+    calls: list[int] = []
+
+    class CountingQuerySet(QuerySet):
+        def fetch_mode(self, mode: Any) -> Any:
+            calls.append(1)
+            return super().fetch_mode(mode)
+
+    return CountingQuerySet(model=Book).fetch_mode(FETCH_RAISE), calls
 
 
 # (overridden method, how a wrapper of that QuerySet reaches it)

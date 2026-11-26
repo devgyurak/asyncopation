@@ -13,6 +13,7 @@ from tests.support.aq_wrapper import (
     OVERRIDE_CASES,
     PREFETCHED_COMBINATIONS,
     combination_operands,
+    counting_queryset,
     filled_by_alist_wrapper,
     foreign_mode_identity_wrapper,
     fresh_books,
@@ -121,6 +122,31 @@ def test_an_overriding_method_that_returns_a_stored_queryset_is_cloned_into_fetc
     # then
     assert returned.queryset is not stored
     assert returned.queryset._fetch_mode is FETCH_RAISE
+
+
+@pytest.mark.parametrize(("method", "reach"), OVERRIDE_CASES)
+def test_an_overriding_method_that_returns_a_cached_stored_queryset_shares_it(method, reach):
+    # given
+    queryset, stored = overriding_queryset(method, cached=True)
+    # when
+    returned = reach(aq(queryset))
+    # then
+    assert returned.queryset is stored
+
+
+@pytest.mark.parametrize(("method", "reach"), OVERRIDE_CASES)
+def test_django_own_method_on_a_fetch_raise_queryset_is_wrapped_without_another_clone(
+    method, reach
+):
+    # given
+    queryset, calls = counting_queryset()
+    wrapper = aq(queryset)
+    calls.clear()
+    # when
+    returned = reach(wrapper)
+    # then
+    assert returned.queryset._fetch_mode is FETCH_RAISE
+    assert calls == []
 
 
 def test_a_user_defined_method_that_returns_its_receiver_gets_a_clone():

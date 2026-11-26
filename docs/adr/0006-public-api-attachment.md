@@ -83,10 +83,10 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `fetch_mode(FETCH_RAISE)`, so the caller's is never touched and `alist()` never fills its
    cache (a class-attribute QuerySet would otherwise return stale rows to later requests). Only
    the QuerySets Django creates while the wrapper re-wraps its own chaining (`filter()`, `all()`,
-   a slice) skip the clone; copies are clones that keep `FETCH_RAISE`. The clone is a chain, which
-   consumes the pending sticky filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so
-   it is copied onto the clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how
-   `tag` was loaded.
+   a slice) skip the clone (only when the method is Django's own, see the 2026-11-26 amendment);
+   copies are clones that keep `FETCH_RAISE`. The clone is a chain, which consumes the pending
+   sticky filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
+   clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
    (which returns `get_queryset()` unchained) does: its sticky filter, and a prefetched result
    cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement). `all()`
@@ -95,7 +95,8 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    are an unevaluated clone, so a copy of a prefetched wrapper queries where its `all()` does
    not. The in-place switch assumes `Manager.get_queryset()` returns a fresh QuerySet, as
    Django's and related managers do; a custom manager returning a shared one that is already
-   `FETCH_RAISE` gets a clone.*
+   `FETCH_RAISE` gets a clone, unless its cache is filled. Which methods skip the clone is
+   narrowed by the 2026-11-26 amendment below.*
 
    *Amended 2026-11-26 (#6, PR #65): a result of a proxied call that IS the receiver or one of the
    arguments is cloned too (Django returns an operand itself when one side is empty: `none() | qs`,

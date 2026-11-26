@@ -358,13 +358,14 @@ def test_a_plain_queryset_combined_with_a_wrapper_returns_a_plain_queryset(combi
     assert combined._fetch_mode is not FETCH_RAISE
 
 
-def test_an_empty_plain_queryset_anded_with_a_wrapper_returns_a_plain_queryset():
+def test_an_empty_plain_queryset_anded_with_a_wrapper_returns_the_empty_queryset_itself():
     # given
+    empty = fresh_books().none()
     wrapper = aq(fresh_books())
     # when
-    combined = operator.and_(fresh_books().none(), wrapper)
+    combined = operator.and_(empty, wrapper)
     # then
-    assert isinstance(combined, QuerySet)
+    assert combined is empty
 
 
 @pytest.mark.parametrize("combine", [operator.or_, operator.xor])

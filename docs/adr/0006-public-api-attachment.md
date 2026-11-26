@@ -83,7 +83,7 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `fetch_mode(FETCH_RAISE)`, so the caller's is never touched and `alist()` never fills its
    cache (a class-attribute QuerySet would otherwise return stale rows to later requests). Only
    the QuerySets Django creates while the wrapper re-wraps its own chaining (`filter()`, `all()`,
-   a slice, copies) skip the clone. The clone is a chain, which consumes the pending sticky
+   a slice) skip the clone; copies are clones that keep `FETCH_RAISE`. The clone is a chain, which consumes the pending sticky
    filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
    clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
@@ -101,7 +101,7 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `none() | qs`, `qs ^ none()`, `none().union(qs)`, `qs.intersection(none())`, so
    `aq(none) | user_qs` would otherwise wrap the caller's QuerySet and `alist()` would fill its
    cache), and so is the result of any user-defined chaining method, a stored `FETCH_RAISE`
-   QuerySet included: only Django's own methods are known to return a fresh clone, and a
+   QuerySet included: only Django's own methods are known to return a fresh clone (an operand is cloned even when it is `FETCH_RAISE`), and a
    user-defined method (an override of a Django one too) may return a QuerySet it stores. User-
    defined chaining methods must return a new QuerySet. The one exception: a result whose cache
    is filled is shared, whether or not it is an operand (a prefetched related manager, a wrapper
@@ -114,7 +114,7 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    queries like `t.books.all().all()`. A stored QuerySet with an unfilled cache that a
    user-defined method returns is cloned. `deepcopy` of a wrapper drops the cache, like
    `copy.copy`. Reflected operators: `QuerySet | aq(...)` runs Django's operator, which never
-   defers to `__ror__`, so a non-empty left side returns a plain QuerySet without `FETCH_RAISE`;
+   defers to `__ror__`, so a non-empty left side returns a plain QuerySet that does not get `FETCH_RAISE` from `aq()` (the left side keeps its own fetch mode);
    with an empty left side `&` returns that plain empty QuerySet (`self`), while `|` and `^`
    return the other operand, the wrapper itself. Keep the wrapper on the left of `|`, `&` and
    `^`. A slice with a step is refused whatever the QuerySet holds, although Django evaluates

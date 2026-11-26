@@ -37,11 +37,15 @@ def shared_sliced_combinator_with_self_returning_all() -> Any:
 
 
 class _SelfReturningFilter(QuerySet):
+    """A QuerySet subclass whose `filter()` returns itself."""
+
     def filter(self, *args: Any, **kwargs: Any) -> Any:
         return self
 
 
 class _SelfReturningOrderBy(QuerySet):
+    """A QuerySet subclass whose `order_by()` returns itself."""
+
     def order_by(self, *field_names: Any) -> Any:
         return self
 
@@ -57,4 +61,11 @@ def shared_unordered_with_self_returning_order_by() -> Any:
     """An unordered `Order` QuerySet whose `order_by()` returns itself."""
     return filled_in_a_user_fetch_mode(
         _SelfReturningOrderBy(model=Order, query=Order.objects.all().query)
+    )
+
+
+def shared_unsliced_with_self_returning_filter() -> Any:
+    """An unsliced QuerySet (an `order_by()` step follows) whose `filter()` returns itself."""
+    return filled_in_a_user_fetch_mode(
+        _SelfReturningFilter(model=Book, query=Book.objects.all().query)
     )

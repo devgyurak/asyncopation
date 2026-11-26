@@ -197,8 +197,8 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   leaves the QuerySets the caller and the operand wrappers hold unevaluated, a combination with an
   `alist()`-evaluated operand runs the statements the sync ORM runs (0 for each operator and for
   `none().union(u)`), `aq(manager).same().all().alist()` over a prefetched user-method result runs
-  the one statement Django's does, and `aq(author.books).all()
-  .all().alist()` after `prefetch_related` runs the one statement Django's does.
+  the one statement Django's does, and `aq(author.books).all().all().alist()` after
+  `prefetch_related` runs the one statement Django's does.
 - *Amended 2026-11-26 (#6, PR #65):* unit: `QuerySet | aq(...)`, `&` and `^` with a non-empty left
   side return a plain QuerySet that is not in `FETCH_RAISE`; with an empty left side `&` returns
   a plain QuerySet and `|` and `^` return the wrapper. Nested wrappers in arguments stay an

@@ -28,6 +28,7 @@ from tests.support.object_models import (
     restore_marker,
     where_conditions,
 )
+from tests.support.swapped_model import read_objects, swapped_out_model
 
 
 @pytest.fixture
@@ -44,6 +45,13 @@ def attached_plain_name():
     AsyncObjects.attach(Plain, "async_rows")
     yield "async_rows"
     delattr(Plain, "async_rows")
+
+
+@pytest.fixture
+def swapped_model():
+    """A model with `objects` and `aobjects` whose swappable setting names another model."""
+    with swapped_out_model() as model:
+        yield model
 
 
 @pytest.fixture
@@ -268,3 +276,20 @@ def test_attach_over_an_existing_attribute_replaces_it(attached_over_marker):
     # then
     assert isinstance(wrapper, AsyncQuerySet)
     assert wrapper.model is Occupied
+
+
+# -- a swapped-out model ---------------------------------------------------------------------------
+
+
+def test_objects_of_a_swapped_out_model_raises_as_django_does(swapped_model):
+    # when / then
+    with pytest.raises(AttributeError, match="has been swapped"):
+        read_objects(swapped_model)
+
+
+def test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset(swapped_model, no_sql):
+    # when
+    wrapper = swapped_model.aobjects
+    # then
+    assert isinstance(wrapper, AsyncQuerySet)
+    assert wrapper.model is swapped_model

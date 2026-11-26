@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=fd5ba40f2e34 -->
+<!-- i18n: source=docs/design/plan.md source-sha256=95401555efbe -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -186,6 +186,7 @@ AsyncDriver (protocol)                       AsyncDbConnection (protocol)
    - `get_or_create`, `update_or_create`
    - `prefetch_related_objects`
    - `async def` 복사본이 아니라 하나의 async 실행기가 구동하는 sans-I/O 제너레이터 코어로 작성한다(ADR-0007).
+   - 두 번째 코어가 `compile_scope` 밖에서 변환을 필요로 하면, `engine/runner.py`가 더 이상 `_django.aggregation`을 import하지 않도록 `Convert`가 자체 callable을 담도록 일반화한다(ADR-0007, Decision 1).
 
 ### 4.5 Lazy loading
 
@@ -279,7 +280,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] 실행기와 연결 소유권: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, 깨진 트랜잭션 상태, 열린 pin과 스트림을 기다리는 `close()` (#5, ADR-0001; `async_atomic` → #19, 풀 크기 → #8, 훅 → #4)
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
-- [ ] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, 현재 strict xfail)
+- [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6 PR C / #7)
 - [ ] asyncmy로 같은 흐름 재현
 
 ---

@@ -88,17 +88,17 @@ def build_cases(
         return [b async for b in Book.objects.all()[:20]]
 
     async def aopt_aget() -> Any:
-        return await Book.aobjects.aget(pk=pk)  # ty: ignore[missing-attribute]
+        return await Book.aobjects.aget(pk=pk)
 
     async def aopt_gather3() -> Any:
         return await asyncio.gather(
-            Author.aobjects.afirst(),  # ty: ignore[missing-attribute]
-            Book.aobjects.acount(),  # ty: ignore[missing-attribute]
-            Tag.aobjects.afirst(),  # ty: ignore[missing-attribute]
+            Author.aobjects.afirst(),
+            Book.aobjects.acount(),
+            Tag.aobjects.afirst(),
         )
 
     async def aopt_list20() -> Any:
-        return await Book.aobjects.all()[:20].alist()  # ty: ignore[missing-attribute]
+        return await Book.aobjects.all()[:20].alist()
 
     return {
         "core.aget": core_aget,
@@ -138,7 +138,14 @@ async def main_async(
 ) -> dict[str, Any]:
     cases = build_cases(pk, pg_version, settings_dict)
     selected = {k: v for k, v in cases.items() if not only or k.split(".", 1)[1] in only}
-    results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
+    import asyncopation
+
+    # Open the pools before timing: the `asyncopation.*` cases measure queries, not the first open.
+    await asyncopation.setup()
+    try:
+        results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
+    finally:
+        await asyncopation.close()
     if driver is not None:
         names = driver_micro.selected(only)
         results |= await driver_micro.run(

@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`; the compile stage compiles a copy of the QuerySet's Query, so overlapping evaluations of one QuerySet do not see each other's `as_sql()` mutations), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f)
+- Amended: 2026-11-25 (#6, PR #67) - Decision 2 (`ResultKind` gains `SINGLE`, which `acount` / `aexists` use; `CompiledQuery` also carries `requested`, the shape asked for, because an EMPTY query keeps it; the compile stage is `compile_statement(query, alias, wrapper, ...)` over a Django `Query`, `compile_query` is its MULTI shorthand), Decision 3 (the SINGLE paths are implemented as sans-I/O cores, ADR-0007); approved by: maintainer (@devgyurak), 2026-11-26 in the PR #67 review; architect verdict: APPROVE (architect re-review 2026-11-26 of the final wording; the diagram note requested in the first pass is applied)
 
 ## Context
 Plan §4.1 fixes *what* is reused (Django's `as_sql()`) and *what* is replaced (execution), but
@@ -46,6 +47,7 @@ QuerySet (Django, lazy)
 ```
 *Amended 2026-11-25 (#6, PR #65): the `CompiledQuery` box also holds `alias` and `values_names`
 (Decision 2).*
+*Amended 2026-11-25 (#6, PR #67): the `CompiledQuery` box also holds `requested` (Decision 2).*
 
 1. **Layers.** A new layer `asyncopation.engine` (above `transaction`, below `fetch`) defines
    `CompiledQuery`, builds it from a QuerySet using the compile-only wrapper (`compile` provides
@@ -63,11 +65,20 @@ QuerySet (Django, lazy)
    `evaluate_list`, and compile and materialize reuse it. An EMPTY query does no statement I/O,
    but `evaluate_list` still opens the alias first (ADR-0004 Decision 4), so `.none()` or
    `pk__in=[]` may open the pool.*
+   *Amended 2026-11-25 (#6, PR #67): `ResultKind` has `MULTI`, `SINGLE` and `EMPTY` (`ROWCOUNT`
+   arrives with updates). `CompiledQuery` also carries `requested`, the kind that was asked for: an
+   EMPTY query keeps it, so a SINGLE read of nothing yields `None` and a MULTI read `[]`. The
+   compile stage is `compile_statement(query, alias, wrapper, kind=..., elide_empty=...)`, which
+   compiles a Django `Query` (the aggregation cores compile rewritten queries that no QuerySet
+   holds); `compile_query(queryset, ...)` is its MULTI shorthand.*
 3. **Scope of the seam.** The `results_iter` seam covers MULTI evaluation: `ModelIterable`,
    `ValuesIterable`, `ValuesListIterable`, `FlatValuesListIterable`, `NamedValuesListIterable`.
    SINGLE paths (`acount` via `Query.get_aggregation`, `aexists` via `has_results`) are separate,
    ledgered ports. Write compilers (insert returning / `last_insert_id`, update related updates and
-   `pre_sql_setup` queries) are orchestration and follow ADR-0007.
+   `pre_sql_setup` queries) are orchestration and follow ADR-0007. *Amended 2026-11-25 (#6, PR
+   #67): `acount` (via `Query.get_aggregation`) and `aexists` (via `has_results`) are implemented
+   as cores of `engine/cores.py` over `Compile` / `Execute` / `Convert` requests; the conversion of
+   the aggregation row runs outside `compile_scope`, like the materializer.*
 4. **Streaming.** The materializer sets up once per query (`select`, `klass_info`, `init_list`,
    `related_populators`, `known_related_objects`, one shared `peers` list) and then calls
    `results_iter(results=[chunk])` for each fetched chunk; sharing `peers` across chunks matches

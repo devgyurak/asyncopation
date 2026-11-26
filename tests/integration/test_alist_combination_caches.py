@@ -9,9 +9,11 @@ tests in `tests/unit/query/test_chaining.py` carry the behaviour there.
 import pytest
 
 from tests.support.alist_cases import (
+    FILLED_OPERAND_READS,
     FILLED_OPERAND_SHAPES,
     alist_of_a_combination_with_a_filled_operand,
     alist_of_all_of_a_user_method_result_over_a_prefetched_manager,
+    read_of_a_combination_with_a_filled_operand,
 )
 from tests.support.aq_wrapper import COMBINATIONS, user_caches_after_alist_of
 from tests.support.backends import XFAIL_UNTIL_ASYNCMY
@@ -51,3 +53,27 @@ async def test_all_of_a_user_method_result_over_a_prefetched_manager_queries_as_
     assert outcome.statements == 1
     assert outcome.row_count > 0
     assert outcome.same_pks
+
+
+# Django 6.1 reads the evaluated operand's cache for each of these: no statement. The wrapper shares
+# that cache, so nothing reaches the driver and MySQL/MariaDB need no xfail.
+@pytest.mark.parametrize(("shape", "operation"), FILLED_OPERAND_READS)
+async def test_a_read_of_a_combination_with_a_filled_operand_runs_no_statement(
+    async_env, shape, operation
+):
+    # when
+    outcome = await read_of_a_combination_with_a_filled_operand(shape, operation)
+    # then
+    assert outcome.sync_statements == 0
+    assert outcome.statements == 0
+
+
+@pytest.mark.parametrize(("shape", "operation"), FILLED_OPERAND_READS)
+async def test_a_read_of_a_combination_with_a_filled_operand_returns_what_django_does(
+    async_env, shape, operation
+):
+    # when
+    outcome = await read_of_a_combination_with_a_filled_operand(shape, operation)
+    # then
+    assert outcome.sync_result
+    assert outcome.async_result == outcome.sync_result

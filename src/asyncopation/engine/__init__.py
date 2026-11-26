@@ -6,5 +6,5 @@ generator cores of ported orchestration against the current executor (ADR-0007).
 
 Stages: ``compiled`` (QuerySet -> ``CompiledQuery``), ``execute`` (rows from an executor),
 ``materialize`` (rows -> instances, ported post-execute iterable code), ``evaluate`` (the three in
-order). The sans-I/O runner arrives with the first ported core (``acount``, #6 PR B).
+order). The sans-I/O runner arrives with the first ported core (``acount``, #6, PR #67).
 """

@@ -12,6 +12,7 @@ from tests.support.alist_env import asyncopation_runner, prepare_registry, relea
 from tests.support.lifecycle.checks import assert_registry_clean
 from tests.support.seeded import (
     seeded_author_with_books,
+    seeded_book_pk,
     seeded_edition_keys,
     seeded_tag_with_peer,
 )
@@ -55,3 +56,9 @@ async def author_with_books(async_env: None) -> Author:
 async def tag_with_peer(async_env: None) -> tuple[Tag, str]:
     """A seeded tag and the name of another tag on one of its books, read from the database."""
     return await seeded_tag_with_peer()
+
+
+@pytest.fixture
+async def book_pk(async_env: None) -> int:
+    """The primary key of the first seeded book, read from the database."""
+    return await seeded_book_pk()

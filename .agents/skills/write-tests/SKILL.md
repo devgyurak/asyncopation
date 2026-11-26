@@ -27,6 +27,13 @@ async def test_filter_by_title_matches_sync(readonly_db, differential, title, ex
     assert len(result.sync_outcome.rows) == expected_count
 ```
 
+## Markers and comments (testlint)
+- `# given` / `# when` / `# then` go on their own comment lines inside the body, in that order. A
+  marker may be followed by explanatory comment lines before the first statement; a marker
+  trailing the `def` line is not recognised (the guard reports it as missing: T205 for `# given`, T201 for `# when`).
+- `tests/support/**` is exempt from the test lint, `tests/unit/support/**` (tests of the
+  helpers) is not: it follows every rule above.
+
 ## Replacing control flow
 | Instead of | Use |
 |---|---|

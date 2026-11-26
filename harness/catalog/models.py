@@ -12,8 +12,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
+from asyncopation import AsyncObjects
+
 
 class Publisher(models.Model):
+    aobjects = AsyncObjects()
+
     name = models.CharField(max_length=100)
     country = models.CharField(max_length=2)
 
@@ -22,6 +26,8 @@ class Publisher(models.Model):
 
 
 class Author(models.Model):
+    aobjects = AsyncObjects()
+
     name = models.CharField(max_length=100)
     email = models.EmailField(unique=True)
     birth_date = models.DateField(null=True)
@@ -35,12 +41,16 @@ class Author(models.Model):
 
 
 class AuthorProfile(models.Model):
+    aobjects = AsyncObjects()
+
     author = models.OneToOneField(Author, on_delete=models.CASCADE, related_name="profile")
     bio = models.TextField()
     website = models.URLField(blank=True)
 
 
 class Tag(models.Model):
+    aobjects = AsyncObjects()
+
     name = models.SlugField(unique=True)
 
     class Meta:
@@ -48,6 +58,8 @@ class Tag(models.Model):
 
 
 class Book(models.Model):
+    aobjects = AsyncObjects()
+
     title = models.CharField(max_length=200)
     author = models.ForeignKey(Author, on_delete=models.CASCADE, related_name="books")
     tags = models.ManyToManyField(Tag, related_name="books")
@@ -65,6 +77,8 @@ class Book(models.Model):
 class BookEdition(models.Model):
     """Composite primary key (FK + integer)."""
 
+    aobjects = AsyncObjects()
+
     pk = models.CompositePrimaryKey("book", "number")
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="editions")
     number = models.PositiveSmallIntegerField()
@@ -76,6 +90,8 @@ class BookEdition(models.Model):
 
 
 class Comment(models.Model):
+    aobjects = AsyncObjects()
+
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveBigIntegerField()
     target = GenericForeignKey("content_type", "object_id")
@@ -90,12 +106,16 @@ class Comment(models.Model):
 class Order(models.Model):
     """Write-path benchmark/e2e target."""
 
+    aobjects = AsyncObjects()
+
     book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name="orders")
     quantity = models.PositiveIntegerField()
     created_at = models.DateTimeField(auto_now_add=True)
 
 
 class FieldZoo(models.Model):
+    aobjects = AsyncObjects()
+
     char = models.CharField(max_length=50)
     text = models.TextField()
     small = models.SmallIntegerField()

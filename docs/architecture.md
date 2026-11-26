@@ -3,8 +3,8 @@
 Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
 the recording driver, and so are the executors (borrowed/pinned connection ownership, #5) and the first read path
-(`aq(qs).alist()`: compile, execute, materialize; #6, PR #65); `aget` / `afirst` / `acount` /
-`aexists` / `aobjects`, the MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
+(`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6); the
+MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
@@ -63,6 +63,19 @@ current executor, trimmed to `col_count` for `extra(select=...)`; EMPTY does no 
 Materialization runs outside `compile_scope`: converters, `from_db_value` and `Model.from_db` must
 not see the compile-only wrapper (ADR-0008 Decision 2), which the integration tests check by
 counting sync connection attempts.
+
+Beyond `alist` (#6, PR #67): `engine.runner` is the sans-I/O runner (`Compile`, `Execute` and
+`Convert` requests, `run_core(core, alias)`: it opens the alias, resolves the executor and the
+compile-only wrapper, and runs every synchronous stretch of the core, every `Compile` and the
+core's `close()` (failed or cancelled runs only; an error it raises is attached to the original
+exception as a note and never replaces it) inside `compile_scope`; `Convert`, the conversion of
+an aggregation row, runs outside it like the materializer);
+`engine.cores` holds the cores of `Query.get_count` / `has_results` / `get_aggregation`, whose
+Django-side halves are ported without their I/O in `_django.aggregation` (split at the I/O seam,
+ADR-0007 Decision 5); `engine.read` follows `QuerySet.get` / `first` / `count` / `exists` (result-cache
+shortcuts, the `MAX_GET_RESULTS` bound, the `select_for_update` limit read from the compile-only
+wrapper's `features`). `asyncopation.query.AsyncObjects` is the `aobjects` descriptor (not a Django
+`Manager`).
 
 Stage contracts: [ADR-0002](adr/0002-pipeline-contracts.md). Ported orchestration (prefetch,
 `Collector`, `get_or_create`) is written as generators that yield requests and is driven by one

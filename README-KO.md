@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=fa2a57f0f157 -->
+<!-- i18n: source=README.md source-sha256=19c00c2c5da8 -->
 # Asyncopation
 
-> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs).alist()`로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -67,22 +67,25 @@ async def lifespan(app):  # e.g. Starlette(lifespan=lifespan)
 from asyncopation import aq
 
 books = await aq(Book.objects.filter(published=True).order_by("title")).alist()
+book = await Book.aobjects.aget(pk=1)  # 모델에 `aobjects = AsyncObjects()`를 선언한 경우
+how_many = await Book.aobjects.filter(published=True).acount()
 titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 ```
 
-`aq()`는 넘겨받은 QuerySet의 복제본을 감싼다(예외는 결과 캐시가 이미 채워진 QuerySet이며, `alist()`는 그 캐시를 읽기만 한다. prefetch된 관계 매니저나 사용자 정의 메서드가 돌려주는 보관된 QuerySet이 여기에 해당한다). 따라서 `alist()`는 래퍼 자신의 캐시를 채울 뿐 사용자의 QuerySet은 건드리지 않는다. 클래스 속성에 보관한 QuerySet이 이후 요청에 오래된 행을 돌려주는 일이 없다. 조합에도 같은 규칙이 적용된다(`aq(Book.objects.none()) | qs`, `.union(qs)`는 Django가 `qs` 자체를 돌려주지만 결과는 복제본이다). 사용자 정의 체이닝 메서드는 새 QuerySet을 돌려줘야 한다. 인자 안에 중첩된 래퍼(`Prefetch(queryset=aq(...))`, 리스트, `Q`)는 풀리지 않으며 지원하지 않는다. 대신 `.queryset`을 넘긴다. `|`, `&`, `^`에서는 래퍼를 왼쪽에 두어야 한다. `QuerySet | aq(...)`는 래퍼에 위임하지 않는 Django 연산자를 그대로 실행하므로 `aq()`가 `FETCH_RAISE`를 적용하지 않은 일반 QuerySet을 돌려준다. 결과 캐시가 이미 채워진 QuerySet(prefetch된 관계 매니저, 동기로 평가된 QuerySet)을 감싸면 그 캐시의 인스턴스는 처음 로드될 때의 fetch 모드를 유지하며, 이는 `FETCH_RAISE`가 아니다. Manager가 막 만든 QuerySet은 그대로 사용한다(`Manager.get_queryset()`은 Django의 매니저와 관계 매니저처럼 새 QuerySet을 돌려준다고 가정한다). `aq()`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
+`aq()`는 넘겨받은 QuerySet의 복제본을 감싼다(예외는 결과 캐시가 이미 채워진 QuerySet이며, `alist()`는 그 캐시를 읽기만 한다. prefetch된 관계 매니저나 사용자 정의 메서드가 돌려주는 보관된 QuerySet이 여기에 해당한다). 따라서 `alist()`는 래퍼 자신의 캐시를 채울 뿐 사용자의 QuerySet은 건드리지 않는다. 클래스 속성에 보관한 QuerySet이 이후 요청에 오래된 행을 돌려주는 일이 없다. 조합에도 같은 규칙이 적용된다(`aq(Book.objects.none()) | qs`, `.union(qs)`는 Django가 `qs` 자체를 돌려주지만 결과는 복제본이다). 사용자 정의 체이닝 메서드는 새 QuerySet을 돌려줘야 한다. 인자 안에 중첩된 래퍼(`Prefetch(queryset=aq(...))`, 리스트, `Q`)는 풀리지 않으며 지원하지 않는다. 대신 `.queryset`을 넘긴다. `|`, `&`, `^`에서는 래퍼를 왼쪽에 두어야 한다. `QuerySet | aq(...)`는 래퍼에 위임하지 않는 Django 연산자를 그대로 실행하므로 `aq()`가 `FETCH_RAISE`를 적용하지 않은 일반 QuerySet을 돌려준다. 결과 캐시가 이미 채워진 QuerySet(prefetch된 관계 매니저, 동기로 평가된 QuerySet)을 감싸면 그 캐시의 인스턴스는 처음 로드될 때의 fetch 모드를 유지하며, 이는 `FETCH_RAISE`가 아니다. Manager가 막 만든 QuerySet은 그대로 사용한다(`Manager.get_queryset()`은 Django의 매니저와 관계 매니저처럼 새 QuerySet을 돌려준다고 가정한다). `aq()`와 `aobjects`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
 실행하는 대신 `FieldFetchBlocked`가 발생한다. 동기 평가(`list(aq(qs))`, `aq(qs).get()`,
 `len(...)`, `aq(qs).iterator()`, `aq(qs)[::2]` 같은 step 슬라이스)는
-`asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`aget`, `afirst`,
-`acount`, `aexists`, `aiterator`, `async for` 등)와 `raw()`(래핑되지 않은 `RawQuerySet`을
-돌려주게 된다)는 `NotImplementedError`를 낸다. 일치할 수 없는 `QuerySet`(`.none()`,
-`pk__in=[]`)은 SQL을 실행하지 않지만, `alist()`는 먼저 해당 alias의 풀을 연다(ADR-0004). 지금은
-PostgreSQL의 `alist()`만 있고 `prefetch_related`는 지원하지 않는다. 나머지 읽기 API와
-MySQL/MariaDB는 뒤따른다.
+`asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`acreate`, `aiterator` 등)와
+`raw()`(래핑되지 않은 `RawQuerySet`을 돌려주게 된다)는 `NotImplementedError`를 낸다. 일치할 수 없는
+`QuerySet`(`.none()`, `pk__in=[]`)은 SQL을 실행하지 않지만, 읽기 API는 먼저 해당 alias의 풀을 연다(ADR-0004).
+PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()`, `async for`이다
+(`prefetch_related`는 아직 없고 MySQL/MariaDB는 뒤따른다). `aobjects = AsyncObjects()`를 선언한
+모델(서드파티 모델은 `AsyncObjects.attach(Model)`)은 `await Book.aobjects.filter(...).alist()`처럼
+`aobjects`로 읽는다. `aobjects`는 교체되어 쓰이지 않는 모델을 거부하지 않으므로, 실제로 사용하는 모델에 붙여야 한다.
 
 ## 동시성과 트랜잭션
 
-지금은 `alist()`만 있고 `async_atomic`(#19)은 없다. 아래는 그것들이 기반으로 삼을 소유권 모델(ADR-0001)이다.
+`async_atomic`(#19)은 아직 없다. 아래는 그것이 기반으로 삼을 소유권 모델(ADR-0001)이다.
 트랜잭션 밖에서는 구문마다 풀에서 연결을 따로 빌리므로 `asyncio.gather` 아래의 구문이 병렬로
 실행된다. `async_atomic` 블록 안에서는 연결 하나가 그 블록을 연 태스크에 고정된다. 다른
 태스크(`gather`나 `TaskGroup`의 자식, 블록 안에서 만든 태스크)에서 쓰거나, 구문이나 스트림이 진행

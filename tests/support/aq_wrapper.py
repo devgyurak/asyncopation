@@ -10,7 +10,7 @@ from django.db.models import FETCH_RAISE, Manager, QuerySet  # ty: ignore[missin
 
 from harness.catalog.models import Book
 
-IMPLEMENTED_ASYNC_METHODS = frozenset({"alist"})
+IMPLEMENTED_ASYNC_METHODS = frozenset({"alist", "aget", "afirst", "acount", "aexists"})
 
 _EXECUTOR_STATEMENTS = ("fetch_all", "execute", "execute_many", "stream")
 

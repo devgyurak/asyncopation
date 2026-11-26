@@ -12,12 +12,14 @@ from __future__ import annotations
 import copy
 import functools
 import inspect
+from collections.abc import AsyncIterator
 from typing import Any
 
 from django.db.models import FETCH_RAISE, Manager, QuerySet  # ty: ignore[missing-module-member] - missing from django-types
 
 from asyncopation._django import query as dq
 from asyncopation.engine.evaluate import evaluate_list
+from asyncopation.engine.read import evaluate_count, evaluate_exists, evaluate_first, evaluate_get
 from asyncopation.errors import SyncEvaluationError
 
 __all__ = ["AsyncQuerySet", "aq"]
@@ -99,8 +101,26 @@ class AsyncQuerySet:
         """
         return await evaluate_list(self._queryset)
 
-    def __aiter__(self) -> Any:
-        raise NotImplementedError("async iteration is not implemented yet (#6, PR B)")
+    async def aget(self, *args: Any, **kwargs: Any) -> Any:
+        """The one object matching the arguments; ``DoesNotExist`` / ``MultipleObjectsReturned`` as Django's ``get()``."""
+        return await evaluate_get(self._queryset, args, kwargs)
+
+    async def afirst(self) -> Any:
+        """The first object (ordered by ``pk`` when the QuerySet has no ordering), or ``None``."""
+        return await evaluate_first(self._queryset)
+
+    async def acount(self) -> int:
+        """The number of rows: the result cache's length when it is filled, else ``COUNT(*)``."""
+        return await evaluate_count(self._queryset)
+
+    async def aexists(self) -> bool:
+        """Whether the QuerySet has any row (a ``LIMIT 1`` query unless the result cache is filled)."""
+        return await evaluate_exists(self._queryset)
+
+    async def __aiter__(self) -> AsyncIterator[Any]:
+        """Iterate the rows: evaluates like :meth:`alist` (filling the result cache) first."""
+        for obj in await self.alist():
+            yield obj
 
     # -- synchronous evaluators are refused ---------------------------------------------------
     def __iter__(self) -> Any:

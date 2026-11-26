@@ -336,8 +336,9 @@ def test_snapshot_never_loads_deferred_fields_in_any_fetch_mode(monkeypatch, fet
 
 
 def test_deferred_foreign_key_attname_is_marker_while_cached_relation_is_recorded():
-    # given: an artificial state (Django itself refuses to cache a relation whose attname is
-    # deferred), used to pin that the marker is decided per attname
+    # An artificial state (Django itself refuses to cache a relation whose attname is deferred),
+    # used to pin that the marker is decided per attname.
+    # given
     author = make_deferred_author("publisher_id")
     cache_related(author, "publisher", make_publisher())
     # when

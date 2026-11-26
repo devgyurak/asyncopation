@@ -11,12 +11,21 @@ from asyncopation.engine.compiled import compile_query
 from asyncopation.engine.execute import execute_multi
 from asyncopation.engine.materialize import materialize
 
-__all__ = ["evaluate_list"]
+__all__ = ["evaluate_list", "resolve_alias"]
 
 
-async def evaluate_list(queryset: Any) -> list[Any]:
+def resolve_alias(queryset: Any) -> str:
+    """The database alias of ``queryset``; an unconfigured one raises as ``connections[alias]`` does."""
+    alias = queryset.db
+    if not lifecycle.is_configured_alias(alias):
+        raise dq.ConnectionDoesNotExist(f"The connection '{alias}' doesn't exist.")
+    return alias
+
+
+async def evaluate_list(queryset: Any, *, alias: str | None = None) -> list[Any]:
     """The result list of ``queryset`` (``await alist()``); fills the QuerySet's result cache.
 
+    ``alias`` is the one the caller already resolved (the routers run once per evaluation).
     A pre-filled result cache is returned without I/O. ``prefetch_related`` lookups are not
     evaluated yet (Phase 4) and raise ``NotImplementedError``.
     """
@@ -26,10 +35,8 @@ async def evaluate_list(queryset: Any) -> list[Any]:
     dq.iterable_kind(queryset)  # refuse unsupported iterables before any I/O
     if dq.has_prefetch(queryset):
         raise NotImplementedError("prefetch_related evaluation is not implemented yet (Phase 4)")
-    alias = queryset.db  # the routers run here, once: compile and materialize reuse it
-    if not lifecycle.is_configured_alias(alias):
-        # What `connections[alias]` raises in the sync ORM, so error handling carries over.
-        raise dq.ConnectionDoesNotExist(f"The connection '{alias}' doesn't exist.")
+    # The routers run here, once (unless the caller did): compile and materialize reuse the alias.
+    alias = alias or resolve_alias(queryset)
     # Opening first matters: the compile-only wrapper exists only once the alias's server info is
     # known. `pinned` is read right before compiling, after the last await that could change it.
     await lifecycle.ensure_driver(alias)

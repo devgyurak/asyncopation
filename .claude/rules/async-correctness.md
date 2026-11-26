@@ -28,7 +28,12 @@ paths:
 4. **Cancellation safety.** Every acquire has a matching release on `CancelledError`, including
    an acquire that completes after the caller was cancelled. A connection whose statement was
    cancelled mid-flight is discarded or reset, never returned as-is; inside a transaction it marks
-   the transaction broken. Never swallow `CancelledError`.
+   the transaction broken. Never swallow `CancelledError`. A core's cleanup (`core.close()` in
+   the runner) never replaces the original exception: an Exception it raises, ScopeContextError
+   included, is attached as a note; a BaseException from it, and an error entering or leaving the
+   runner's own compile_scope, propagate. Elsewhere a cleanup call either does not raise in
+   practice (psycopg close(), pool putconn() / close()) or its error is suppressed or logged,
+   never raised over the original.
 5. **No hidden global state.** Drivers and pools live in the registry keyed by `(alias, loop)`
    and are created inside the running loop; server info is probed once per alias. Never create
    pools at import time, never store them in a contextvar (ADR-0004).

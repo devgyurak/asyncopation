@@ -53,7 +53,7 @@ def test_get_clone_after_a_combinator_is_not_the_shared_queryset():
     assert clone is not shared
 
 
-def test_first_queryset_of_an_explicitly_unordered_queryset_is_fetch_raise():
+def test_first_queryset_of_a_queryset_without_ordering_is_fetch_raise():
     # given: Order has no Meta ordering, so a plain QuerySet is unordered with default_ordering on
     shared = filled_in_a_user_fetch_mode(Order.objects.all())
     # when

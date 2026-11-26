@@ -97,9 +97,7 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `aq(Model.objects)` or `AsyncObjects.attach(Model)`. `Model` is never monkeypatched. *Amended
    2026-11-25 (#6, PR #67): `AsyncObjects` is exported from the package root lazily, like `aq`.*
 4. **Fetch mode.** Both `aobjects` and `aq()` apply `FETCH_RAISE` (any other sync fetch mode would
-   do sync I/O on attribute access). *Amended 2026-11-26 (#6, PR #67): the clones `aget` and a
-   querying `afirst` build are `FETCH_RAISE` too, even when the wrapper shares a filled cache (see
-   Decision 2).*
+   do sync I/O on attribute access).
    *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
    the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter
    of a many-to-many related manager, so `aq(tag.books).filter(tags__name=x)` would differ from
@@ -156,6 +154,10 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK
    / M2M managers are evaluated through `aq()`. `afetch()` is explicit and non-recursive; batched
    peer loading returns results aligned with the parents.
+
+   *Amended 2026-11-26 (#6, PR #67): the clones `aget` and a querying `afirst` build are
+   `FETCH_RAISE` too, even when the wrapper shares a filled cache (see Decision 2).*
+
 5. Public names stay aligned with Django core's async work: `async_atomic(using, savepoint,
    durable)`, `on_commit` accepting async callables.
 6. `asyncopation.ConcurrentQueryError(RuntimeError)` is public API (ADR-0001 Decision 3); it lives
@@ -228,3 +230,29 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   side return a plain QuerySet that is not in `FETCH_RAISE`; with an empty left side `&` returns
   a plain QuerySet and `|` and `^` return the wrapper. Nested wrappers in arguments stay an
   undefined-behaviour limit and are not pinned by a test.
+- *Amended 2026-11-26 (#6, PR #67):* differential
+  (`tests/integration/test_read_api_differential.py`): `aget`, `afirst`, `acount` and `aexists`
+  match the sync ORM, for example `test_aget_by_pk_matches_sync`,
+  `test_aget_with_several_matches_raises_the_same_multiple_objects_returned`,
+  `test_afirst_matches_sync`, `test_acount_matches_sync` and `test_aexists_matches_sync`; unit
+  (`tests/unit/engine/test_read.py`):
+  `test_aget_of_a_locking_queryset_asks_the_database_router_once` and
+  `test_a_read_asks_the_database_router_once` (one routing decision per call),
+  `test_async_for_fills_the_result_cache` and
+  `test_async_for_over_a_cached_wrapper_issues_no_further_statement`.
+- *Amended 2026-11-26 (#6, PR #67):* unit (`tests/unit/engine/test_query_clones.py`): the clone of
+  `get_clone` (plain and after a combinator) and the `order_by("pk")` clone of `first_queryset`
+  are `FETCH_RAISE` although the shared QuerySet is filled in a user fetch mode, and an ordered
+  QuerySet or one without default ordering is returned unchanged; integration
+  (`tests/integration/test_alist_prefetched_manager.py`):
+  `test_a_relation_of_an_instance_an_engine_built_clone_loads_is_blocked` and
+  `test_an_instance_an_engine_built_clone_loads_is_fetch_raise` (`aget` and a querying `afirst`
+  over a prefetched manager, an evaluated QuerySet and `none() | evaluated`), and
+  `test_an_instance_read_from_the_shared_cache_keeps_its_fetch_mode` (`alist`, `async for`, an
+  ordered `afirst`).
+- *Amended 2026-11-26 (#6, PR #67):* integration
+  (`tests/integration/test_alist_combination_caches.py`):
+  `test_a_read_of_a_combination_with_a_filled_operand_runs_no_statement` and
+  `test_a_read_of_a_combination_with_a_filled_operand_returns_what_django_does` run `alist`,
+  `acount`, `aexists` and `afirst` over the four filled-operand shapes (`|` both ways, `^`,
+  `union()`): Django and the wrapper run 0 statements and return the same result.

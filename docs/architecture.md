@@ -52,7 +52,7 @@ QuerySet -> compile (sync) CompiledQuery -> execute (async) rows -> materialize 
 ```
 
 Implemented for `alist` (#6, PR #65): `engine.compiled.compile_query` (inside `compile_scope`,
-`as_sql()` once, `ResultKind.MULTI` / `EMPTY`), `engine.execute.execute_multi` (one `fetch_all` on the
+`as_sql()` once on a Query clone, `compile_copy`, so overlapping evaluations of one QuerySet never share it; `ResultKind.MULTI` / `EMPTY`), `engine.execute.execute_multi` (one `fetch_all` on the
 current executor, trimmed to `col_count` for `extra(select=...)`; EMPTY does no I/O),
 `engine.materialize.materialize` (the ported post-execute iterable code over
 `results_iter(results=[rows])`) and `engine.evaluate.evaluate_list`, which resolves the alias once

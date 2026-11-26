@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import Any
 
+import pytest
 from django.db.models import Manager, QuerySet
 
 from harness.catalog.models import Book
@@ -157,6 +158,83 @@ class ForeignModeQuerySet(QuerySet):
 
 def foreign_mode_queryset() -> QuerySet[Book]:
     return ForeignModeQuerySet(model=Book)
+
+
+class StickyForeignQuerySet(QuerySet):
+    """A QuerySet whose user method returns a QuerySet in another fetch mode with a pending sticky
+    filter (`tag.books.all()` of an unsaved tag)."""
+
+    def sticky_other_mode(self) -> QuerySet[Any]:
+        return sticky_tag_books()
+
+
+def sticky_foreign_queryset() -> QuerySet[Book]:
+    return StickyForeignQuerySet(model=Book)
+
+
+class IdentityQuerySet(QuerySet):
+    """User chaining methods that break the 'return a new QuerySet' contract."""
+
+    def same(self) -> QuerySet[Book]:
+        return self
+
+    def echo(self, other: QuerySet[Book]) -> QuerySet[Book]:
+        return other
+
+
+def identity_queryset() -> QuerySet[Book]:
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    return IdentityQuerySet(model=Book).fetch_mode(FETCH_RAISE)
+
+
+def combination_operands() -> tuple[Any, Any, Any, Any]:
+    """Two user-held FETCH_RAISE QuerySets (one empty) and the wrappers `aq()` makes of them."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    from asyncopation import aq
+
+    empty = Book.objects.none().order_by().fetch_mode(FETCH_RAISE)
+    other = Book.objects.filter(published=True).order_by().fetch_mode(FETCH_RAISE)
+    return empty, other, aq(empty), aq(other)
+
+
+def shared_with(result: Any, *operands: Any) -> list[bool]:
+    """For each operand: is it the very QuerySet the wrapper `result` holds?"""
+    return [result.queryset is operand for operand in operands]
+
+
+def _case(name: str, build: Any) -> Any:
+    return pytest.param(build, id=name)
+
+
+# (wrapper of the empty one, wrapper of the other, the empty one, the other) -> combined wrapper.
+# Django returns an operand itself whenever one side is empty.
+COMBINATIONS = [
+    _case("or-empty-wrapped-left", lambda we, wo, e, o: we | wo),
+    _case("or-empty-wrapped-right", lambda we, wo, e, o: wo | we),
+    _case("or-empty-left-plain-right", lambda we, wo, e, o: we | o),
+    _case("or-empty-right-plain-right", lambda we, wo, e, o: wo | e),
+    _case("and-empty-wrapped-left", lambda we, wo, e, o: we & wo),
+    _case("and-empty-wrapped-right", lambda we, wo, e, o: wo & we),
+    _case("and-empty-plain-right", lambda we, wo, e, o: wo & e),
+    _case("xor-empty-wrapped-left", lambda we, wo, e, o: we ^ wo),
+    _case("xor-empty-wrapped-right", lambda we, wo, e, o: wo ^ we),
+    _case("xor-empty-plain-right", lambda we, wo, e, o: wo ^ e),
+    _case("union-empty-receiver", lambda we, wo, e, o: we.union(o)),
+    _case("union-empty-argument", lambda we, wo, e, o: wo.union(e)),
+    _case("intersection-empty-receiver", lambda we, wo, e, o: we.intersection(o)),
+    _case("intersection-empty-argument", lambda we, wo, e, o: wo.intersection(e)),
+    _case("difference-empty-receiver", lambda we, wo, e, o: we.difference(o)),
+    _case("difference-empty-argument", lambda we, wo, e, o: wo.difference(e)),
+]
+
+
+async def user_caches_after_alist_of(build: Any) -> list[Any]:
+    """`alist()` of a combination: the result caches of the two QuerySets the caller holds."""
+    empty, other, wrapped_empty, wrapped_other = combination_operands()
+    await build(wrapped_empty, wrapped_other, empty, other).alist()
+    return [empty._result_cache, other._result_cache]
 
 
 def sticky_tag_books() -> QuerySet[Any]:

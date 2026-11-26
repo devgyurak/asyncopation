@@ -24,6 +24,7 @@ from tests.support.aq_wrapper import (
     prefilled_queryset,
     raise_mode_books,
     raise_mode_manager,
+    sticky_foreign_queryset,
     sticky_tag_books,
     tag_books_manager,
 )
@@ -249,7 +250,16 @@ async def test_all_of_a_prefetched_manager_wrapper_after_alist_still_reads_the_c
     rows = await all_then_alist(wrapper)
     # then
     assert rows == [sentinel]
-    assert wrapper.all().queryset is manager.shared
+
+
+async def test_all_of_a_prefetched_manager_wrapper_shares_the_cache_that_was_already_filled(no_sql):
+    # given
+    manager = prefilled_manager()
+    wrapper = aq(manager)
+    # when
+    again = wrapper.all()
+    # then
+    assert again.queryset is manager.shared
 
 
 def test_filter_after_all_of_a_prefetched_manager_wrapper_queries_a_clone():
@@ -375,3 +385,12 @@ def test_a_class_valued_attribute_is_returned_as_it_is():
     model = class_attribute_of(wrapper)
     # then
     assert model is Book
+
+
+def test_a_queryset_of_another_fetch_mode_returned_by_a_proxied_method_keeps_its_sticky_filter():
+    # given
+    wrapper = aq(sticky_foreign_queryset())
+    # when
+    returned = wrapper.sticky_other_mode()
+    # then
+    assert returned.queryset.query.filter_is_sticky is True

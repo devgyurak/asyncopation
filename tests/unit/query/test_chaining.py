@@ -5,7 +5,13 @@ from django.db.models import FETCH_RAISE, QuerySet  # ty: ignore[missing-module-
 
 from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
-from tests.support.aq_wrapper import fresh_books
+from tests.support.aq_wrapper import (
+    COMBINATIONS,
+    combination_operands,
+    fresh_books,
+    identity_queryset,
+    shared_with,
+)
 
 CHAINS = [
     pytest.param(lambda w: w.filter(published=True), id="filter"),
@@ -70,3 +76,43 @@ def test_chained_wrapper_sql_matches_django():
     assert str(chained.queryset.query) == str(
         fresh_books().filter(published=True).order_by("-pk").query
     )
+
+
+@pytest.mark.parametrize("build", COMBINATIONS)
+def test_a_combination_never_wraps_a_queryset_that_one_of_its_operands_holds(build):
+    # given
+    empty, other, wrapped_empty, wrapped_other = combination_operands()
+    # when
+    combined = build(wrapped_empty, wrapped_other, empty, other)
+    # then
+    operands = (empty, other, wrapped_empty.queryset, wrapped_other.queryset)
+    assert shared_with(combined, *operands) == [False, False, False, False]
+
+
+@pytest.mark.parametrize("build", COMBINATIONS)
+def test_a_combination_is_wrapped_in_fetch_raise(build):
+    # given
+    empty, other, wrapped_empty, wrapped_other = combination_operands()
+    # when
+    combined = build(wrapped_empty, wrapped_other, empty, other)
+    # then
+    assert combined.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_user_method_that_returns_its_receiver_is_wrapped_as_a_clone():
+    # given
+    wrapper = aq(identity_queryset())
+    # when
+    returned = wrapper.same()
+    # then
+    assert returned.queryset is not wrapper.queryset
+
+
+def test_a_user_method_that_returns_an_argument_is_wrapped_as_a_clone():
+    # given
+    argument = identity_queryset()
+    wrapper = aq(identity_queryset())
+    # when
+    returned = wrapper.echo(argument)
+    # then
+    assert returned.queryset is not argument

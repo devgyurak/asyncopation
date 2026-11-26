@@ -72,13 +72,21 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `fetch_mode(FETCH_RAISE)`, so the caller's is never touched and `alist()` never fills its
    cache (a class-attribute QuerySet would otherwise return stale rows to later requests). Only
    the QuerySets Django creates while the wrapper re-wraps its own chaining (`filter()`, `all()`,
-   a slice, copies) skip the clone. The clone is a chain, which consumes the pending sticky
+   a slice, copies) skip the clone, and a result that IS the receiver or one of the arguments is
+   cloned too: Django returns an operand itself when one side is empty (`none() | qs`,
+   `qs ^ none()`, `none().union(qs)`, `qs.intersection(none())`), so `aq(none) | user_qs` would
+   otherwise wrap the caller's QuerySet and `alist()` would fill its cache. User-defined chaining
+   methods must return a new QuerySet (a method that returns an argument or its own receiver is
+   wrapped as a clone). The clone is a chain, which consumes the pending sticky
    filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
    clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
    (which returns `get_queryset()` unchained) does: its sticky filter, and a prefetched result
-   cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement); copies keep
-   the sticky filter and that behaviour. The in-place switch assumes `Manager.get_queryset()`
+   cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement). `all()`
+   shares only the cache that was already filled when the manager was wrapped, never one that
+   `alist()` filled later. Copies (`copy.copy`) keep the sticky filter but not that cache: they
+   are an unevaluated clone, so a copy of a prefetched wrapper queries where its `all()` does
+   not. The in-place switch assumes `Manager.get_queryset()`
    returns a fresh QuerySet, as Django's and related managers do; a custom manager returning a
    shared one that is already `FETCH_RAISE` gets a clone.*
    Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK

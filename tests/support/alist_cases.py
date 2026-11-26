@@ -10,14 +10,13 @@ from typing import Any
 import pytest
 from django.db.models import Count, QuerySet
 
-from harness.catalog.models import Author, Book, Order
+from harness.catalog.models import Author, Book, Order, Tag
 from harness.settings import VENDOR
 from tests.support.aio import wait_until
 from tests.support.alist_probe import recorded_statements
 from tests.support.differential import (
     DifferentialResult,
     Outcome,
-    error_name,
     run_differential,
     run_sync,
 )
@@ -403,14 +402,14 @@ def _sync_prefetched_read(subject: str, name: str) -> tuple[int, Any]:
         try:
             result.append(("ok", sync_call()))
         except Exception as error:
-            result.append(("error", error_name(error)))
+            result.append(("error", type(error).__name__, str(error)))
 
     return _statements_of(run), result[0]
 
 
 async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedReadOutcome:
     """`aq(<prefetched manager>).<read>` against the same read on Django's related manager: the
-    number of statements and the result (or the exception name)."""
+    number of statements and the result (or the exception's type name and message)."""
     from asyncopation import aq
 
     if subject == "orders":
@@ -424,8 +423,83 @@ async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedRea
         try:
             result = ("ok", await run())
         except Exception as error:
-            result = ("error", error_name(error))
+            result = ("error", type(error).__name__, str(error))
     return PrefetchedReadOutcome(len(log), sync_statements, result, sync_result)
+
+
+@dataclass(frozen=True)
+class FetchModeOutcome:
+    """What reading a relation of the instance a read returned does: the exception name or `ok`."""
+
+    relation_access: str
+    instance_mode: str
+
+
+def _filled_orders() -> Any:
+    """A QuerySet of `Order` whose cache was filled by a synchronous evaluation (FETCH_ONE)."""
+    _add_two_orders()
+    evaluated = Order.objects.all()
+    list(evaluated)
+    return evaluated
+
+
+def _prefetched_tag_books() -> Any:
+    """The prefetched `books` manager of a tag that has books (Book.author is not a known related
+    object of a many-to-many manager, so reading it needs a fetch)."""
+    tag: Any = (
+        Tag.objects.prefetch_related("books").filter(books__isnull=False).order_by("pk").first()
+    )
+    assert tag is not None
+    return tag.books
+
+
+def _fetch_mode_subject(subject: str) -> tuple[Any, str, int]:
+    """(what `aq()` wraps, the relation to read on the result, a pk to `aget`)."""
+    if subject == "prefetched-books":
+        manager = _prefetched_tag_books()
+        return manager, "author", manager.all()[0].pk
+    filled = _filled_orders()
+    pk = filled[0].pk
+    return filled, "book", pk
+
+
+def _relation_outcome(instance: Any, relation: str) -> FetchModeOutcome:
+    try:
+        getattr(instance, relation)
+        access = "ok"
+    except Exception as error:
+        access = type(error).__name__
+    return FetchModeOutcome(access, type(instance._state.fetch_mode).__name__)
+
+
+async def fetch_mode_of_a_read_over_a_shared_cache(subject: str, read: str) -> FetchModeOutcome:
+    """Read `read` (`aget`, `afirst`, `alist`, `async for`) over a wrapper that shares a filled
+    cache in a user fetch mode (`prefetched-books`, `evaluated-orders`, `empty-or-evaluated-orders`),
+    then read a relation of the first instance: the engine's own clones are FETCH_RAISE, the
+    instances read from the cache keep their mode."""
+    from asyncopation import aq
+
+    source, relation, pk = await in_sync(lambda: _fetch_mode_subject(subject))
+    wrapper = aq(source)
+    if subject == "empty-or-evaluated-orders":
+        wrapper = aq(Order.objects.none()) | source
+    instance = await {
+        "aget": lambda: wrapper.aget(pk=pk),
+        "afirst": lambda: wrapper.afirst(),
+        "alist": lambda: _first_of(wrapper.alist()),
+        "async for": lambda: _first_of_iteration(wrapper),
+    }[read]()
+    return _relation_outcome(instance, relation)
+
+
+async def _first_of(awaitable: Any) -> Any:
+    return (await awaitable)[0]
+
+
+async def _first_of_iteration(wrapper: Any) -> Any:
+    async for row in wrapper:
+        return row
+    raise AssertionError("the wrapper yielded no row")
 
 
 def _pk_or_none(row: Any) -> int | None:
@@ -500,6 +574,66 @@ async def alist_of_a_combination_with_a_filled_operand(
     return FilledOperandOutcome(
         sync_statements, len(log), [row.pk for row in rows] == sync_pks, len(rows)
     )
+
+
+@dataclass(frozen=True)
+class FilledOperandReadOutcome:
+    sync_statements: int
+    statements: int
+    sync_result: Any
+    async_result: Any
+
+
+_SYNC_OPERATIONS: dict[str, Callable[[Any], Any]] = {
+    "alist": lambda queryset: [row.pk for row in queryset],
+    "acount": lambda queryset: queryset.count(),
+    "aexists": lambda queryset: queryset.exists(),
+    "afirst": lambda queryset: _pk_or_none(queryset.first()),
+}
+
+
+async def _alist_pks(wrapper: Any) -> list[int]:
+    return [row.pk for row in await wrapper.alist()]
+
+
+_ASYNC_OPERATIONS: dict[str, Callable[[Any], Any]] = {
+    "alist": _alist_pks,
+    "acount": lambda wrapper: wrapper.acount(),
+    "aexists": lambda wrapper: wrapper.aexists(),
+    "afirst": _first_pk,
+}
+
+FILLED_OPERAND_READS = [
+    pytest.param(shape.values[0], operation, id=f"{shape.id}-{operation}")
+    for shape in FILLED_OPERAND_SHAPES
+    for operation in _SYNC_OPERATIONS
+]
+
+
+def _sync_filled_operand_read(
+    shape: Callable[[Any, Any], Any], operation: str
+) -> tuple[int, Any, Any]:
+    filled = _filled_operand_books()
+    list(filled)
+    combined = shape(Book.objects.none(), filled)
+    statements = _statements_of(lambda: _SYNC_OPERATIONS[operation](combined))
+    return statements, _SYNC_OPERATIONS[operation](combined), filled
+
+
+async def read_of_a_combination_with_a_filled_operand(
+    shape: Callable[[Any, Any], Any], operation: str
+) -> FilledOperandReadOutcome:
+    """`operation` over `shape(none(), u)` with `u` evaluated synchronously: Django hands back `u`
+    and reads its cache; the wrapper, which shares that cache, runs no statement either."""
+    from asyncopation import aq
+
+    sync_statements, sync_result, filled = await in_sync(
+        lambda: _sync_filled_operand_read(shape, operation)
+    )
+    combined = shape(aq(Book.objects.none()), aq(filled))
+    with recorded_statements() as log:
+        async_result = await _ASYNC_OPERATIONS[operation](combined)
+    return FilledOperandReadOutcome(sync_statements, len(log), sync_result, async_result)
 
 
 def _filled_identity_manager() -> Any:

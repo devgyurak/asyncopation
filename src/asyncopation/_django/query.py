@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any
 
 from django.db import NotSupportedError
+from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
 from django.db.models.query import (
     MAX_GET_RESULTS,  # ty: ignore[missing-module-member] - missing from django-types
     FlatValuesListIterable,
@@ -51,6 +52,7 @@ __all__ = [
     "namedtuple_class",
     "queryset_fetch_mode",
     "queryset_fields",
+    "raise_on_fetch",
     "related_populators",
     "select",
     "select_for_update",
@@ -111,6 +113,16 @@ def queryset_fetch_mode(queryset: Any) -> Any:
 def set_fetch_mode(queryset: Any, mode: Any) -> None:
     """Set the fetch mode in place (``QuerySet.fetch_mode`` would clone and consume a sticky filter)."""
     queryset._fetch_mode = mode
+
+
+def raise_on_fetch(queryset: Any) -> Any:
+    """Make an engine-built clone ``FETCH_RAISE`` in place and return it.
+
+    The wrapper may share a filled-cache QuerySet in a user fetch mode (ADR-0006), and a clone of it
+    inherits that mode; the instances the engine itself loads must never lazy-load synchronously.
+    """
+    set_fetch_mode(queryset, FETCH_RAISE)
+    return queryset
 
 
 def copy_filter_sticky(target: Any, source: Any) -> None:
@@ -207,7 +219,7 @@ def get_clone(queryset: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> A
     clone = queryset.all() if query.combinator else queryset.filter(*args, **kwargs)
     if query.can_filter() and not query.distinct_fields:
         clone = clone.order_by()
-    return clone
+    return raise_on_fetch(clone)
 
 
 def supports_select_for_update_with_limit(wrapper: Any) -> bool:
@@ -230,4 +242,4 @@ def first_queryset(queryset: Any) -> Any:
     if queryset.ordered or not queryset.query.default_ordering:
         return queryset
     queryset._check_ordering_first_last_queryset_aggregation(method="first")
-    return queryset.order_by("pk")
+    return raise_on_fetch(queryset.order_by("pk"))

@@ -12,6 +12,7 @@ from tests.support.alist_cases import (
     alist_of_a_prefetched_manager,
     alist_of_all_of_a_prefetched_manager,
     alist_of_all_of_all_of_a_prefetched_manager,
+    fetch_mode_of_a_read_over_a_shared_cache,
     read_of_a_prefetched_manager,
 )
 from tests.support.backends import XFAIL_UNTIL_ASYNCMY
@@ -79,7 +80,7 @@ _QUERIED = [
 
 
 @pytest.mark.parametrize(("subject", "name", "statements"), _CACHED)
-async def test_read_of_a_prefetched_related_manager_uses_the_cache_as_django_does(
+async def test_read_of_a_prefetched_related_manager_runs_the_statements_django_does_from_the_cache(
     async_env, writable_db, subject, name, statements
 ):
     # when
@@ -87,12 +88,21 @@ async def test_read_of_a_prefetched_related_manager_uses_the_cache_as_django_doe
     # then
     assert outcome.sync_statements == statements
     assert outcome.statements == outcome.sync_statements
+
+
+@pytest.mark.parametrize(("subject", "name", "statements"), _CACHED)
+async def test_read_of_a_prefetched_related_manager_returns_what_django_does_from_the_cache(
+    async_env, writable_db, subject, name, statements
+):
+    # when
+    outcome = await read_of_a_prefetched_manager(subject, name)
+    # then
     assert outcome.async_result == outcome.sync_result
 
 
 @XFAIL_UNTIL_ASYNCMY
 @pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED)
-async def test_read_of_a_prefetched_related_manager_queries_as_django_does(
+async def test_read_of_a_prefetched_related_manager_runs_the_statements_django_does_when_it_queries(
     async_env, writable_db, subject, name, statements
 ):
     # when
@@ -100,4 +110,56 @@ async def test_read_of_a_prefetched_related_manager_queries_as_django_does(
     # then
     assert outcome.sync_statements == statements
     assert outcome.statements == outcome.sync_statements
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED)
+async def test_read_of_a_prefetched_related_manager_returns_what_django_does_when_it_queries(
+    async_env, writable_db, subject, name, statements
+):
+    # when
+    outcome = await read_of_a_prefetched_manager(subject, name)
+    # then
     assert outcome.async_result == outcome.sync_result
+
+
+# (subject, read): the engine builds a clone and queries, so its instances are FETCH_RAISE
+# although the wrapper shares a cache filled in a user fetch mode.
+_ENGINE_CLONES = [
+    ("prefetched-books", "aget"),
+    ("evaluated-orders", "aget"),
+    ("evaluated-orders", "afirst"),
+    ("empty-or-evaluated-orders", "aget"),
+    ("empty-or-evaluated-orders", "afirst"),
+]
+# (subject, read): the instances come out of the shared cache and keep the mode they were loaded in.
+_CACHE_READS = [
+    ("prefetched-books", "alist"),
+    ("prefetched-books", "afirst"),
+    ("prefetched-books", "async for"),
+    ("evaluated-orders", "alist"),
+    ("evaluated-orders", "async for"),
+    ("empty-or-evaluated-orders", "alist"),
+]
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize(("subject", "read"), _ENGINE_CLONES)
+async def test_an_instance_an_engine_built_clone_loads_cannot_fetch_a_relation(
+    async_env, writable_db, subject, read
+):
+    # when
+    outcome = await fetch_mode_of_a_read_over_a_shared_cache(subject, read)
+    # then
+    assert outcome.relation_access == "FieldFetchBlocked"
+    assert outcome.instance_mode == "FetchRaise"
+
+
+@pytest.mark.parametrize(("subject", "read"), _CACHE_READS)
+async def test_an_instance_read_from_the_shared_cache_keeps_its_fetch_mode(
+    async_env, writable_db, subject, read
+):
+    # when
+    outcome = await fetch_mode_of_a_read_over_a_shared_cache(subject, read)
+    # then
+    assert outcome.instance_mode == "FetchOne"

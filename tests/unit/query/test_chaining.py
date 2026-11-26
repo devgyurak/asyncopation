@@ -302,6 +302,16 @@ def test_a_user_method_that_returns_a_stored_queryset_with_a_filled_cache_shares
     assert returned.queryset is shared
 
 
+def test_a_user_method_that_returns_a_filled_stored_queryset_in_another_fetch_mode_shares_it():
+    # given
+    wrapper = stored_raise_mode_wrapper()
+    shared = wrapper.queryset.shared_cached_other_mode()
+    # when
+    returned = wrapper.shared_cached_other_mode()
+    # then
+    assert returned.queryset is shared
+
+
 async def test_a_stored_queryset_with_a_filled_cache_that_a_user_method_returns_makes_no_statement(
     no_sql,
 ):

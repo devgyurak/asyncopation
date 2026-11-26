@@ -227,8 +227,7 @@ def _wrap(value: Any, *operands: Any, own_method: bool = True) -> Any:
     already filled (a prefetched related manager, a wrapper that ``alist()`` filled, a stored
     QuerySet a user method returns): Django returns that same QuerySet and evaluating it makes no
     statement (``cached | none() is cached``), so the result shares it; ``alist()`` only reads that
-    cache. The result is an
-    ordinary wrapper, so its own ``all()`` re-queries as Django's does."""
+    cache. The result is an ordinary wrapper, so its own ``all()`` re-queries as Django's does."""
     if not isinstance(value, QuerySet):
         return value
     operands_held = [operand for operand in operands if value is _unwrap(operand)]

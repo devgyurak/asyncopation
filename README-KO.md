@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=94a2ae0dbb9a -->
+<!-- i18n: source=README.md source-sha256=715457021915 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs).alist()`로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -70,7 +70,7 @@ books = await aq(Book.objects.filter(published=True).order_by("title")).alist()
 titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 ```
 
-`aq()`는 넘겨받은 QuerySet의 복제본을 감싼다(예외는 결과 캐시가 이미 채워진 QuerySet이며, `alist()`는 그 캐시를 읽기만 한다). 따라서 `alist()`는 래퍼 자신의 캐시를 채울 뿐 사용자의 QuerySet은 건드리지 않는다. 클래스 속성에 보관한 QuerySet이 이후 요청에 오래된 행을 돌려주는 일이 없다. 조합에도 같은 규칙이 적용된다(`aq(Book.objects.none()) | qs`, `.union(qs)`는 Django가 `qs` 자체를 돌려주지만 결과는 복제본이다). 사용자 정의 체이닝 메서드는 새 QuerySet을 돌려줘야 한다. `|`, `&`, `^`에서는 래퍼를 왼쪽에 두어야 한다. `QuerySet | aq(...)`는 래퍼에 위임하지 않는 Django 연산자를 그대로 실행하므로 `FETCH_RAISE`가 없는 일반 QuerySet을 돌려준다. Manager가 막 만든 QuerySet은 그대로 사용한다(`Manager.get_queryset()`은 Django의 매니저와 관계 매니저처럼 새 QuerySet을 돌려준다고 가정한다). `aq()`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
+`aq()`는 넘겨받은 QuerySet의 복제본을 감싼다(예외는 결과 캐시가 이미 채워진 QuerySet이며, `alist()`는 그 캐시를 읽기만 한다. prefetch된 관계 매니저나 사용자 정의 메서드가 돌려주는 보관된 QuerySet이 여기에 해당한다). 따라서 `alist()`는 래퍼 자신의 캐시를 채울 뿐 사용자의 QuerySet은 건드리지 않는다. 클래스 속성에 보관한 QuerySet이 이후 요청에 오래된 행을 돌려주는 일이 없다. 조합에도 같은 규칙이 적용된다(`aq(Book.objects.none()) | qs`, `.union(qs)`는 Django가 `qs` 자체를 돌려주지만 결과는 복제본이다). 사용자 정의 체이닝 메서드는 새 QuerySet을 돌려줘야 한다. 인자 안에 중첩된 래퍼(`Prefetch(queryset=aq(...))`, 리스트, `Q`)는 풀리지 않으며 지원하지 않는다. 대신 `.queryset`을 넘긴다. `|`, `&`, `^`에서는 래퍼를 왼쪽에 두어야 한다. `QuerySet | aq(...)`는 래퍼에 위임하지 않는 Django 연산자를 그대로 실행하므로 `FETCH_RAISE`가 없는 일반 QuerySet을 돌려준다. Manager가 막 만든 QuerySet은 그대로 사용한다(`Manager.get_queryset()`은 Django의 매니저와 관계 매니저처럼 새 QuerySet을 돌려준다고 가정한다). `aq()`는 `FETCH_RAISE`를 적용한다. 로드되지 않은 관계나 deferred 필드에 접근하면 동기 쿼리를
 실행하는 대신 `FieldFetchBlocked`가 발생한다. 동기 평가(`list(aq(qs))`, `aq(qs).get()`,
 `len(...)`, `aq(qs).iterator()`, `aq(qs)[::2]` 같은 step 슬라이스)는
 `asyncopation.SyncEvaluationError`를 내고, 아직 구현되지 않은 `a*` 메서드(`aget`, `afirst`,

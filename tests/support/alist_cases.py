@@ -17,6 +17,7 @@ from tests.support.alist_probe import recorded_statements
 from tests.support.differential import (
     DifferentialResult,
     Outcome,
+    error_name,
     run_differential,
     run_sync,
 )
@@ -402,14 +403,14 @@ def _sync_prefetched_read(subject: str, name: str) -> tuple[int, Any]:
         try:
             result.append(("ok", sync_call()))
         except Exception as error:
-            result.append(("error", type(error).__name__, str(error)))
+            result.append(("error", error_name(error), str(error)))
 
     return _statements_of(run), result[0]
 
 
 async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedReadOutcome:
     """`aq(<prefetched manager>).<read>` against the same read on Django's related manager: the
-    number of statements and the result (or the exception's type name and message)."""
+    number of statements and the result (or the exception's qualified type name and message)."""
     from asyncopation import aq
 
     if subject == "orders":
@@ -423,7 +424,7 @@ async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedRea
         try:
             result = ("ok", await run())
         except Exception as error:
-            result = ("error", type(error).__name__, str(error))
+            result = ("error", error_name(error), str(error))
     return PrefetchedReadOutcome(len(log), sync_statements, result, sync_result)
 
 

@@ -7,7 +7,10 @@ from django.db.models import (
 
 from asyncopation._django import query as dq
 from harness.catalog.models import Book, Order
-from tests.support.query_clones import filled_in_a_user_fetch_mode
+from tests.support.query_clones import (
+    filled_in_a_user_fetch_mode,
+    shared_sliced_combinator_with_self_returning_all,
+)
 
 
 def test_get_clone_of_a_queryset_filled_in_a_user_fetch_mode_is_fetch_raise():
@@ -51,6 +54,19 @@ def test_get_clone_after_a_combinator_is_not_the_shared_queryset():
     clone = dq.get_clone(shared, (), {})
     # then
     assert clone is not shared
+
+
+def test_get_clone_after_a_combinator_leaves_a_self_returning_all_queryset_unchanged():
+    # given
+    shared = shared_sliced_combinator_with_self_returning_all()
+    # when
+    dq.get_clone(shared, (), {})
+    # then
+    assert (
+        dq.queryset_fetch_mode(shared),
+        shared.query.high_mark,
+        dq.cached_result(shared),
+    ) == (FETCH_PEERS, 50, [])
 
 
 def test_first_queryset_of_a_queryset_without_ordering_is_fetch_raise():

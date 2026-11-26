@@ -81,47 +81,32 @@ _QUERIED = [
 
 
 @pytest.mark.parametrize(("subject", "name", "statements"), _CACHED)
-async def test_read_of_a_prefetched_related_manager_runs_the_statements_django_does_from_the_cache(
+async def test_read_of_a_prefetched_related_manager_matches_django_from_the_cache(
     async_env, writable_db, subject, name, statements
 ):
     # when
     outcome = await read_of_a_prefetched_manager(subject, name)
     # then
-    assert outcome.sync_statements == statements
-    assert outcome.statements == outcome.sync_statements
-
-
-@pytest.mark.parametrize(("subject", "name", "statements"), _CACHED)
-async def test_read_of_a_prefetched_related_manager_returns_what_django_does_from_the_cache(
-    async_env, writable_db, subject, name, statements
-):
-    # when
-    outcome = await read_of_a_prefetched_manager(subject, name)
-    # then
-    assert outcome.async_result == outcome.sync_result
+    assert (outcome.sync_statements, outcome.statements, outcome.async_result) == (
+        statements,
+        outcome.sync_statements,
+        outcome.sync_result,
+    )
 
 
 @XFAIL_UNTIL_ASYNCMY
 @pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED)
-async def test_read_of_a_prefetched_related_manager_runs_the_statements_django_does_when_it_queries(
+async def test_read_of_a_prefetched_related_manager_matches_django_when_it_queries(
     async_env, writable_db, subject, name, statements
 ):
     # when
     outcome = await read_of_a_prefetched_manager(subject, name)
     # then
-    assert outcome.sync_statements == statements
-    assert outcome.statements == outcome.sync_statements
-
-
-@XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED)
-async def test_read_of_a_prefetched_related_manager_returns_what_django_does_when_it_queries(
-    async_env, writable_db, subject, name, statements
-):
-    # when
-    outcome = await read_of_a_prefetched_manager(subject, name)
-    # then
-    assert outcome.async_result == outcome.sync_result
+    assert (outcome.sync_statements, outcome.statements, outcome.async_result) == (
+        statements,
+        outcome.sync_statements,
+        outcome.sync_result,
+    )
 
 
 # (subject, read): the engine builds a clone and queries, so its instances are FETCH_RAISE

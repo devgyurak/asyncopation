@@ -116,7 +116,8 @@ def set_fetch_mode(queryset: Any, mode: Any) -> None:
 
 
 def raise_on_fetch(queryset: Any) -> Any:
-    """Make an engine-built clone ``FETCH_RAISE`` in place and return it.
+    """Make an engine-built clone ``FETCH_RAISE`` in place (it saves one clone: the clone is ours,
+    never shared) and return it.
 
     The wrapper may share a filled-cache QuerySet in a user fetch mode (ADR-0006), and a clone of it
     inherits that mode; the instances the engine itself loads must never lazy-load synchronously.
@@ -215,8 +216,8 @@ def get_clone(queryset: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> A
         raise NotSupportedError(
             f"Calling QuerySet.get(...) with filters after {query.combinator}() is not supported."
         )
-    # `all()` is `self._chain()` (Django 6.1), which is what `get()` calls here
-    clone = queryset.all() if query.combinator else queryset.filter(*args, **kwargs)
+    # `get()` calls `self._chain()` here, not `all()`: a QuerySet subclass may return itself from `all()`
+    clone = queryset._chain() if query.combinator else queryset.filter(*args, **kwargs)
     if query.can_filter() and not query.distinct_fields:
         clone = clone.order_by()
     return raise_on_fetch(clone)

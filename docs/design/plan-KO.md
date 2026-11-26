@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=2f606bf2eaa1 -->
+<!-- i18n: source=docs/design/plan.md source-sha256=173e29fcbcdc -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -280,6 +280,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] 컴파일 전용 `DatabaseWrapper`(PostgreSQL) + 동기 `compile_scope` 교체 (#3, ADR-0008); MySQL/MariaDB 합성 wrapper(`compile.mysql`, #6, PR #68; asyncmy 드라이버·프로브·엔진 등록 → #7)
 - [x] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입 (PostgreSQL; #5, ADR-0004; MySQL/MariaDB 프로브 → #7)
 - [x] 실행기와 연결 소유권: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, 깨진 트랜잭션 상태, 열린 pin과 스트림을 기다리는 `close()` (#5, ADR-0001; `async_atomic` → #19, 풀 크기 → #8, 훅 → #4)
+- [ ] 드라이버 쿼리 계측 훅 (#4, ADR-0005): 옵저버 - `QueryEvent`, 태스크 트리 범위의 `asyncopation.observe()`, `add_observer()` / `remove_observer()`, 실행기의 `_run`에서 호출, 구독자 0개일 때의 마이크로 벤치(`hooks.*`) - PR #72에서 완료; 인터셉터(`intercept()`)와 크기 제한 큐 옵저버는 #4의 두 번째 PR에서 뒤따른다
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
 - [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6, PR #68 / #7)

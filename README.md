@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`), and `asyncopation.observe()` reports every query to synchronous observers; the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -107,6 +107,35 @@ another task (a `gather` or `TaskGroup` child, a task created inside the block),
 while a statement or stream is in flight, or after the block ended raises
 `asyncopation.ConcurrentQueryError` (a `RuntimeError`, not a `DatabaseError`, so retry loops do
 not swallow it). Run concurrent work outside the transaction.
+
+## Observing queries
+
+`asyncopation.observe(fn)` calls a synchronous `fn(event)` for every statement, stream and
+transaction-control call the current task (and the tasks it starts, such as `gather` children)
+runs until the block exits (ADR-0005; a task that outlives the block stops reporting to it then). Each call gives a `query_started` event right before the
+driver call and a `query_finished` event when it returns, fails or is cancelled (a stream: when it
+closes), with `alias`, `kind` (`query`, or `transaction` for BEGIN/COMMIT/ROLLBACK), `sql`,
+`params`, `many`, `rowcount`, `error`, `queue_time`, `query_time` and `total_time` (seconds).
+Parameters are only included for an observer registered with `params=True`, or for all while
+`settings.DEBUG` is true. An observer that raises is logged and never fails the query. Observers
+run inline on the event loop for every query, so they must not block (no file or network I/O);
+async consumers must not be observers (a bounded-queue observer follows). Process-wide observers use
+`asyncopation.connection.add_observer(fn)` / `remove_observer(fn)`.
+
+```python
+import asyncopation
+
+slow = []
+
+
+def record_slow(event):
+    if event.name == "query_finished" and event.total_time > 0.1:
+        slow.append((event.sql, event.total_time, event.error))
+
+
+with asyncopation.observe(record_slow):
+    books = await Book.aobjects.filter(published=True).alist()
+```
 
 ## Testing upper layers without a database
 

@@ -4,6 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
+- Amended: 2026-11-26 (#4, PR #72) - Decision preamble (subscribers live in `connection.hooks`, not the `(alias, loop)` registry), Decision 1 (event type `QueryEvent`; `query_started` fires after the connection is acquired, right before the driver call, a call that never reaches the driver emits nothing, pinned `queue_time` is 0; subscribers snapshotted at call start and `query_finished` delivered to that snapshot; rowcount per call; descriptive SQL of transaction control; `many` only for `execute_many`; failing observers logged with the event name while a `BaseException` from an observer propagates after the other observers got the event (one from `query_started` stops the call and still delivers `query_finished`; it never breaks a pinned transaction; on a failed call it becomes a note on the original); an observer returning an awaitable is logged and never awaited; `query_time` excludes the time of `query_started` observers), Decision 2 (SAVEPOINT event text is descriptive), Decision 3 (what a stream `error` is; `GeneratorExit` and consumer errors are a normal close; stream `query_time` runs from open to close), Decision 5 (parameters per observer opt-in `observe(fn, params=True)` or `settings.DEBUG`, unconfigured settings counting as off; never to observers that did not opt in), Decision 6 (`observe()` is a single-use context manager - re-entry raises `RuntimeError`, a coroutine function `TypeError` (also from `add_observer`) - whose exit removes its registration by identity and marks it exited instead of a token reset, so a task started inside the block reports to it only until the block exits; global `add_observer` / `remove_observer` in `asyncopation.connection`, a startup-time call) Validation (scope of "a failing observer": raising an `Exception`; an exception an observer raises never breaks a transaction) and new Validation items (snapshot, params opt-in, pool timeout, scope isolation, bench-micro `hooks.*` cases with 0 observers); approved by: maintainer (@devgyurak), 2026-11-26 (the three clarifications of Decisions 1 and 5: start timing, snapshot, params opt-in; all other items - rowcount and the other details from the architect design check, the preamble relocation, the `BaseException` semantics (including a `query_started` observer stopping the call), `query_time` excluding observer time, the awaitable-returning observer, `DEBUG` off for unconfigured settings and the Decision 6 exit semantics (no token reset; a task started inside the block stops reporting when it exits) - to be confirmed in the PR #72 review); architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26): add the unconfigured-settings rule to the Decision 5 mark and the header; add an Amended mark on the Validation item "a failing observer does not fail the query" (failing = raising an Exception; a BaseException propagates per Decision 1); widen the header's "to be confirmed" list to the post-design-check semantics; replace the PENDING verdict placeholder (changes applied)
 
 ## Context
 `asyncopation.testing` (top layer) needs to capture executed SQL (`assert_num_queries`, issue
@@ -32,26 +33,75 @@ Prior art:
 - two mechanisms to document.
 
 ## Decision
-**C**, registered on the registry (`asyncopation.connection`, ADR-0004) and fired by the executors:
+**C**, registered on the registry (`asyncopation.connection`, ADR-0004) and fired by the executors
+(*Amended 2026-11-26 (#4, PR #72):* the subscribers are held by `asyncopation.connection.hooks` -
+a process-wide immutable tuple and a contextvar - not by the `(alias, loop)` registry of ADR-0004,
+since an observer is not tied to an alias or a loop):
 
 1. **Observers** are synchronous callables only (awaiting them would add latency and cancellation
    points; not awaiting them would be fire-and-forget, forbidden by async-correctness rule 6).
    Events: `query_started` / `query_finished` with `alias, kind (query | transaction), sql, params,
    many, rowcount, error, queue_time, query_time, total_time`. Exceptions in observers are logged,
    never propagated. Async consumers use a provided bounded-queue observer they drain themselves.
+   *Amended 2026-11-26 (#4, PR #72):* both events are one frozen `QueryEvent` (field `name` is
+   `query_started` or `query_finished`; times in seconds from `time.perf_counter`; a started event
+   has `rowcount`, `error`, `query_time` and `total_time` set to `None`). `query_started` fires
+   after the connection is acquired, right before the driver call: a call that never reaches the
+   driver (a pool timeout) emits no event, and `queue_time` (the wait for a pooled connection) is 0
+   on a pinned connection; `total_time = queue_time + query_time`. The executor snapshots the
+   subscribers (global, then scoped) when the call starts, and `query_finished` goes to that same
+   snapshot, also when a stream is closed by a finalizer in another task or context. `rowcount`:
+   `fetch_all` the number of rows returned, `execute` / `execute_many` `ExecResult.rowcount` as is
+   (`-1` = unknown), a stream the rows read until it closed (also when left early), transaction
+   control and any failed call `None`; `many` is true only for `execute_many` (`params` is the
+   batch). Transaction-control events carry a descriptive, backend-neutral `sql` (`BEGIN`,
+   `COMMIT`, `ROLLBACK`, `SAVEPOINT <sid>`, `RELEASE SAVEPOINT <sid>`, `ROLLBACK TO SAVEPOINT
+   <sid>`; the driver API takes no SQL for them) and no `params`. An observer that raises an
+   `Exception` is logged on `asyncopation.connection` with the event name, the other observers
+   still run and the query goes on; a `BaseException` is never swallowed: it is raised once the
+   other observers got the event, and when it comes from a `query_started` observer the call does
+   not reach the driver and `query_finished` is still delivered, with it as `error`. An exception
+   an observer raises never marks a pinned transaction broken (the connection never saw it), and
+   one a `query_finished` observer raises while the call already failed is attached to the
+   original exception as a note instead of replacing it. An observer that returns
+   an awaitable is logged (a coroutine is closed, never awaited). `query_time` starts after the
+   `query_started` observers returned, so their own time is in neither `queue_time` nor
+   `query_time`.
 2. **Counting semantics** match `CaptureQueriesContext`: SAVEPOINT statements have `kind=query`;
-   connection-level BEGIN/COMMIT/ROLLBACK have `kind=transaction`.
+   connection-level BEGIN/COMMIT/ROLLBACK have `kind=transaction`. *Amended 2026-11-26 (#4, PR
+   #72):* the `sql` of a SAVEPOINT event is the descriptive text of Decision 1, not the quoted
+   statement the backend ran.
 3. **Streams:** `query_started` fires when the stream opens; `query_finished` when it closes, with
-   the total number of rows read as `rowcount`.
+   the total number of rows read as `rowcount`. *Amended 2026-11-26 (#4, PR #72):* a stream's
+   `error` is a failure of the driver (opening, reading a chunk, closing) or a cancellation; an
+   exception raised by the consuming code inside the block, and `GeneratorExit` (an async generator
+   closed early), are a normal close (`error` is `None`). Its `query_time` runs from open to close,
+   so it includes the consumer's time between chunks.
 4. **Interceptors** are an async chain with Django's signature `wrapper(execute, sql, params, many,
    context)`; `execute` returns the driver result (`list[tuple]` or `ExecResult`). Returning without
    calling `execute` suppresses the query with a supplied result (test doubles). Streams are not
    interceptable in v1.
 5. **Parameters** are included in events only when `settings.DEBUG` is true or capture explicitly
-   requests them (secrets in logs).
+   requests them (secrets in logs). *Amended 2026-11-26 (#4, PR #72):* the request is per observer,
+   `observe(fn, params=True)` (or `add_observer(fn, params=True)`); an observer that did not opt in
+   gets `params=None` even when another observer of the same query opted in, unless
+   `settings.DEBUG` is true; settings that are not configured or not loaded yet count as `DEBUG`
+   off.
 6. **Scoped registration:** `with asyncopation.observe(fn):` / `intercept(fn)` store an immutable
    tuple in a contextvar (set/reset with a token), so capture is per task tree; global registration
-   is also available.
+   is also available. *Amended 2026-11-26 (#4, PR #72):* `observe()` returns a single-use
+   synchronous context manager (entering it twice raises `RuntimeError`; a coroutine function is
+   rejected with `TypeError`, by `add_observer` too). Entering sets the contextvar to a new tuple; exiting does not reset
+   the token (that would bring back a block exited out of order, and fails when the block exits in
+   another Context, as an async generator finalized by another task does) but removes its own
+   registration by identity from the current tuple and marks it exited, so a Context that still
+   holds it stops reporting to it: a task started inside the block (which copied the context)
+   reports to it only until the block exits; calls already started keep their snapshot. Global
+   registration is `add_observer(fn, *, params=False)` / `remove_observer(fn)` in
+   `asyncopation.connection`: a startup-time call, like `configure`, that replaces an immutable
+   module-level tuple without a lock (`remove_observer` matches the function by equality, most
+   recent registration first). Only `observe` (and `intercept`) are re-exported at the package
+   root.
 7. `asyncopation.testing` is built only on these APIs. Materialization (`decode`) timing is not part
    of v1 events.
 
@@ -62,8 +112,18 @@ and scoped), benchmarked.
 
 ## Validation
 - unit: observer sees every statement of an `alist` with correct SQL; a failing observer does not
-  fail the query.
+  fail the query. *Amended 2026-11-26 (#4, PR #72):* "failing" means raising an `Exception`; a
+  `BaseException` is raised after the other observers got the event (Decision 1), and an
+  exception an observer raises never marks a pinned transaction broken (the connection never saw
+  it; `rollback()` still sends ROLLBACK).
 - unit: interceptor suppression returns the supplied rows and the driver is never called.
 - integration: `assert_num_queries` counts equal Django's `assertNumQueries` for an atomic block
   with savepoints.
 - bench-micro: `alist` overhead with zero subscribers within noise of the hook-free baseline.
+- *Amended 2026-11-26 (#4, PR #72), added:* unit: a borrowed call whose connection is never
+  acquired (pool timeout) emits no event; a stream opened inside `observe()` and closed after the
+  block exited, or from another task, delivers `query_finished` to the observers snapshotted at its
+  start; parameters reach only observers that opted in (all of them under `settings.DEBUG`);
+  scoped observers reach `gather` children, and an `observe()` inside a child reaches neither the
+  parent nor a sibling. bench-micro: the `hooks.*` executor cases on a `RecordingDriver` with 0
+  observers are within noise of the hook-free baseline.

@@ -39,6 +39,21 @@ named `driver.<group>.<impl>.t<N>` with `N` = 1, 8 or 64 concurrent tasks:
   `note` column (error or skip reason). A case without samples has status `no-samples`. The baselines of a
   selected case always run too, so its ratio can be computed.
 
+### Hook cases (ADR-0005)
+`bench/hooks_micro.py` adds `hooks.<executor>_<call>.s<N>` (`--only pinned_fetch.s0`): executors
+`borrowed` / `pinned` and the baseline `connection` (the `RecordingConnection` method called
+directly), calls `fetch` (`fetch_all`) / `stream` (open, read one chunk, close), with `s0` (nobody
+observes: the zero-overhead path) or `s1` (one scoped no-op observer). The driver is a
+`RecordingDriver` (no server), so the numbers resolve the executor's and the hooks' own cost per
+call; each round times a batch (`--hooks-calls`, default 2000) per case, interleaved over
+`--hooks-rounds` (default 15). `p50` is the median of the per-round means, `p95` / `p99` are
+percentiles of those means (not of single calls), and the `note` column gives the overhead vs the
+`connection` case of the same call. For a hook change, run the current `bench/` against the base
+commit's `src/` (a detached worktree of the base with the current `bench/` copied in and
+`PYTHONPATH=<base>/src`) and against the change, alternating runs, and compare the `s0` overheads
+(within noise is the target, ADR-0005 Validation) and `asyncopation.list20`; `s1` cases are
+skipped where `asyncopation.observe` does not exist.
+
 Compare ratios, not absolute times, and rerun when the load is high. Real-DB ratios within about
 +-5% are noise. Driver overhead (driver minus `getconn`), as ranges: `noio` (plain fake) about
 0.5-0.7 us/op, `noio-yield` about 0.6-1.4 us/op (the IQR reaches about 2.4 us under load, so

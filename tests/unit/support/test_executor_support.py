@@ -154,6 +154,65 @@ async def test_a_held_stream_close_waits_until_released():
     assert (waiting, chunks) == (False, [[(1,)]])
 
 
+async def test_a_held_chunk_read_waits_until_released():
+    # given
+    driver = await opened_gated_driver()
+    driver.queue([(1,), (2,)])
+    hold = driver.hold_chunks()
+    async with driver.connection() as connection:
+        task = asyncio.create_task(call_with(connection, "stream", "SELECT 1", None))
+        # when
+        await hold.wait_entered()
+        waiting = task.done()
+        hold.release()
+        chunks = await task
+    # then
+    assert (waiting, chunks) == (False, [[(1,), (2,)]])
+
+
+async def test_a_held_control_call_waits_until_released():
+    # given
+    driver = await opened_gated_driver()
+    hold = driver.hold_controls()
+    async with driver.connection() as connection:
+        task = asyncio.create_task(connection.savepoint("sp"))
+        # when
+        await hold.wait_entered()
+        waiting = task.done()
+        hold.release()
+        await task
+    # then
+    assert (waiting, driver.kinds()) == (False, ["savepoint"])
+
+
+async def test_a_statement_held_by_its_sql_waits_while_other_sql_runs():
+    # given
+    driver = await opened_gated_driver()
+    hold = driver.hold_sql("SELECT 'held'")
+    async with driver.connection() as first, driver.connection() as second:
+        task = asyncio.create_task(first.fetch_all("SELECT 'held'", None))
+        # when
+        await hold.wait_entered()
+        other = await second.fetch_all("SELECT 'free'", None)
+        waiting = task.done()
+        hold.release()
+        await task
+    # then
+    assert (waiting, other) == (False, [(1,)])
+
+
+async def test_a_result_by_sql_is_returned_for_that_sql_only():
+    # given
+    driver = await opened_gated_driver()
+    driver.results_by_sql["SELECT 'mine'"] = [(7,), (8,)]
+    async with driver.connection() as connection:
+        # when
+        mine = await connection.fetch_all("SELECT 'mine'", None)
+        other = await connection.fetch_all("SELECT 'other'", None)
+    # then
+    assert (mine, other) == ([(7,), (8,)], [(1,)])
+
+
 async def test_a_borrow_error_is_raised_before_a_connection_is_handed_out():
     # given
     driver = await opened_gated_driver()

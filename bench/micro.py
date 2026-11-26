@@ -7,6 +7,9 @@ Asyncopation cases are reported as skipped until the API exists.
 ``driver.*`` cases (see ``bench/driver_micro.py``) compare the PostgreSQL driver with the raw
 psycopg_pool calls it wraps at 1/8/64 tasks and report client CPU per operation and the paired
 ratio vs the baseline.
+
+``hooks.*`` cases (see ``bench/hooks_micro.py``) time the executors on a ``RecordingDriver`` with 0
+and 1 observers: the ADR-0005 hook overhead without database noise.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from bench import driver_micro
+from bench import driver_micro, hooks_micro
 from bench.db import BENCH_DB, ROOT, ensure_bench_db
 from bench.stats import summarize
 
@@ -135,15 +138,20 @@ async def main_async(
     driver: tuple[Any, Any] | None,
     driver_seconds: float,
     driver_rounds: int,
+    hooks_calls: int = 2000,
+    hooks_rounds: int = 15,
 ) -> dict[str, Any]:
     cases = build_cases(pk, pg_version, settings_dict)
     selected = {k: v for k, v in cases.items() if not only or k.split(".", 1)[1] in only}
+    hooks = hooks_micro.selected(only)
     import asyncopation
 
     # Open the pools before timing: the `asyncopation.*` cases measure queries, not the first open.
     await asyncopation.setup()
     try:
         results = {name: await measure(case, iterations, warmup) for name, case in selected.items()}
+        if hooks:
+            results |= await hooks_micro.run(hooks, hooks_calls, hooks_rounds)
     finally:
         await asyncopation.close()
     if driver is not None:
@@ -165,14 +173,16 @@ def main() -> None:
         default="",
         help=(
             "comma separated case suffixes: aget,gather3,list20,compile_scope,as_sql_scoped,"
-            "as_sql_unscoped or driver cases such as select1.driver.t8 (the baselines of a "
-            "selected driver case are added automatically)"
+            "as_sql_unscoped, hooks cases such as pinned_fetch.s0, or driver cases such as "
+            "select1.driver.t8 (the baselines of a selected driver case are added automatically)"
         ),
     )
     parser.add_argument(
         "--driver-seconds", type=float, default=1.0, help="seconds per driver.* round"
     )
     parser.add_argument("--driver-rounds", type=int, default=7, help="interleaved driver.* rounds")
+    parser.add_argument("--hooks-calls", type=int, default=2000, help="calls per hooks.* batch")
+    parser.add_argument("--hooks-rounds", type=int, default=15, help="interleaved hooks.* rounds")
     parser.add_argument("--skip-seed", action="store_true")
     args = parser.parse_args()
 
@@ -191,7 +201,7 @@ def main() -> None:
     pg_version = connection.pg_version if connection.vendor == "postgresql" else None  # sync probe
     only = {s for s in args.only.split(",") if s}
     known = {"aget", "gather3", "list20", "compile_scope", "as_sql_scoped", "as_sql_unscoped"}
-    unknown = sorted(only - known - driver_micro.known_suffixes())
+    unknown = sorted(only - known - driver_micro.known_suffixes() - hooks_micro.known_suffixes())
     if unknown:
         parser.error(f"--only matches no case: {', '.join(unknown)}")
     driver = build_driver(only)  # before the loop starts: resolving time zones reads from disk
@@ -206,6 +216,8 @@ def main() -> None:
             driver,
             args.driver_seconds,
             args.driver_rounds,
+            args.hooks_calls,
+            args.hooks_rounds,
         )
     )
     payload = {
@@ -272,10 +284,16 @@ def render(payload: dict[str, Any]) -> str:
             else "-"
         )
         lines.append(
-            f"| {row['case']} | ok | {row['p50_us']:.0f} | {row['p95_us']:.0f} | {row['p99_us']:.0f} "
-            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {diff} | {load} | |"
+            f"| {row['case']} | ok | {_us(row['p50_us'])} | {_us(row['p95_us'])} | {_us(row['p99_us'])} "
+            f"| {row['ops_per_s']:.0f} | {cpu} | {'; '.join(ratios) or '-'} | {diff} | {load} "
+            f"| {row.get('note', '')} |"
         )
     return "\n".join(lines)
+
+
+def _us(value: float) -> str:
+    """Microseconds, with two decimals below 10 µs (the in-process ``hooks.*`` cases)."""
+    return f"{value:.2f}" if value < 10 else f"{value:.0f}"
 
 
 if __name__ == "__main__":

@@ -126,13 +126,15 @@ class AsyncQuerySet:
     def all(self) -> AsyncQuerySet:
         """A new wrapper over a clone. Straight from a manager it behaves as ``Manager.all()``,
         which returns ``get_queryset()`` unchained: the pending sticky filter is kept, and a
-        prefetched cache is returned as it is (``aq(t.books).all().alist()`` makes no statement). A
-        cache that ``alist()`` filled is not shared: ``all()`` is always a new unevaluated QuerySet.
+        prefetched cache is returned as it is (``aq(t.books).all().alist()`` makes no statement),
+        but only once: the result is an ordinary wrapper, so its own ``all()`` is a new unevaluated
+        QuerySet, as Django's ``t.books.all().all()`` is. A cache that ``alist()`` filled is not
+        shared: ``all()`` is always a new unevaluated QuerySet.
 
         ``copy.copy`` differs on purpose: it is an unevaluated clone that drops a prefetched cache,
         so a copy of a prefetched wrapper queries where its ``all()`` reads the cache."""
         if self._prefetched:
-            return AsyncQuerySet(self._queryset, fresh=True, prefetched=True)
+            return AsyncQuerySet(self._queryset)
         wrapped = _wrap(self._queryset.all())
         if self._fresh:
             dq.copy_filter_sticky(wrapped.queryset, self._queryset)
@@ -185,16 +187,25 @@ class AsyncQuerySet:
         return attribute
 
 
+# The functions Django defines on QuerySet: a bound method whose function is one of them is not an
+# override or a user-defined method.
+_DJANGO_FUNCTIONS = frozenset(vars(QuerySet).values())
+
+
 def _proxy(method: Any, owner: AsyncQuerySet) -> Any:
+    # Only Django's own methods are known to return a fresh clone; a user-defined one (an override
+    # included) may return any QuerySet, such as one it stores.
+    own = getattr(method, "__func__", None) in _DJANGO_FUNCTIONS
+
     @functools.wraps(method)
     def call(*args: Any, **kwargs: Any) -> Any:
         # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
         # it would hand the wrapper back as if it were a QuerySet.
         result = method(
             *(_unwrap(value) for value in args),
-            **{name: _unwrap(value) for name, value in kwargs.items()},
+            **{key: _unwrap(value) for key, value in kwargs.items()},
         )
-        return _wrap(result, owner, *args, *kwargs.values())
+        return _wrap(result, owner, *args, *kwargs.values(), own_method=own)
 
     return call
 
@@ -203,23 +214,26 @@ def _unwrap(value: Any) -> Any:
     return value._queryset if isinstance(value, AsyncQuerySet) else value
 
 
-def _wrap(value: Any, *operands: Any) -> Any:
+def _wrap(value: Any, *operands: Any, own_method: bool = True) -> Any:
     """Re-wrap what a proxied method returned. Django's chaining methods hand back a fresh clone,
-    so a ``FETCH_RAISE`` result is wrapped as it is; any other QuerySet is cloned into that mode.
+    so a ``FETCH_RAISE`` result is wrapped as it is; any other QuerySet is cloned into that mode,
+    and so is anything a user-defined method (``own_method=False``) returned: it may be a QuerySet
+    that the method stores.
 
     A result that IS one of ``operands`` (wrappers or QuerySets: the receiver or an argument) is
     cloned whatever its mode: ``none() | qs`` and ``none().union(qs)`` return ``qs`` itself, and a
     user-defined method may return its receiver or an argument, so wrapping it as it is would let
-    ``alist()`` fill a QuerySet someone else holds. The one exception is an operand that is a
-    wrapper of a prefetched related manager: Django returns that same cached QuerySet
-    (``cached | none() is cached``, no statement), so the result shares it as ``all()`` does. A
-    cache that ``alist()`` filled is never shared."""
+    ``alist()`` fill a QuerySet someone else holds. The one exception is an operand whose result
+    cache is already filled (a prefetched related manager, or a wrapper that ``alist()`` filled):
+    Django returns that same QuerySet and evaluating it makes no statement (``cached | none() is
+    cached``), so the result shares it; ``alist()`` only reads that cache. The result is an
+    ordinary wrapper, so its own ``all()`` re-queries as Django's does."""
     if not isinstance(value, QuerySet):
         return value
     operands_held = [operand for operand in operands if value is _unwrap(operand)]
-    if any(isinstance(operand, AsyncQuerySet) and operand._prefetched for operand in operands_held):
-        return AsyncQuerySet(value, fresh=True, prefetched=True)
-    if operands_held or dq.queryset_fetch_mode(value) is not FETCH_RAISE:
+    if operands_held and dq.cached_result(value) is not None:
+        return AsyncQuerySet(value)
+    if operands_held or not own_method or dq.queryset_fetch_mode(value) is not FETCH_RAISE:
         return AsyncQuerySet(_raise_clone(value))
     return AsyncQuerySet(value)
 

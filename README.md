@@ -80,7 +80,7 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 
 `aq()` wraps a clone of the QuerySet you pass (the one exception is a QuerySet whose result cache is
 already filled, which `alist()` only reads), so `alist()` fills the wrapper's own cache and never
-yours: a QuerySet kept in a class attribute does not return stale rows to later requests. This holds for combinations too (`aq(Book.objects.none()) | qs`, `.union(qs)`, where Django returns `qs` itself): the result is a clone, and a user-defined chaining method must return a new QuerySet. A
+yours: a QuerySet kept in a class attribute does not return stale rows to later requests. This holds for combinations too (`aq(Book.objects.none()) | qs`, `.union(qs)`, where Django returns `qs` itself): the result is a clone, and a user-defined chaining method must return a new QuerySet. Keep the wrapper on the left of `|`, `&` and `^`: `QuerySet | aq(...)` runs Django's operator, which never defers to the wrapper, and returns a plain QuerySet without `FETCH_RAISE`. A
 Manager's own fresh QuerySet is used directly (`Manager.get_queryset()` is assumed to return a
 fresh QuerySet, as Django's and related managers do). `aq()` applies `FETCH_RAISE`: touching an
 unloaded relation or a deferred field raises

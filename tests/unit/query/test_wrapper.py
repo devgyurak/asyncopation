@@ -7,6 +7,7 @@ from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
 from harness.catalog.models import Book
 from tests.support.aq_wrapper import (
+    CACHED_ROW,
     SHARED_OTHER_MODE,
     NotAQuerySetDuckSource,
     NotAQuerySetManager,
@@ -209,13 +210,14 @@ def test_all_of_a_manager_wrapper_with_a_prefetch_cache_returns_that_queryset():
     assert again.queryset is manager.shared
 
 
-def test_all_of_a_manager_wrapper_with_a_prefetch_cache_stays_a_manager_wrapper():
+def test_all_of_all_of_a_manager_wrapper_with_a_prefetch_cache_gives_a_new_queryset():
     # given
     manager = prefilled_manager()
     # when
     again = aq(manager).all().all()
     # then
-    assert again.queryset is manager.shared
+    assert again.queryset is not manager.shared
+    assert again.queryset._result_cache is None
 
 
 def test_all_of_a_manager_wrapper_whose_cache_alist_filled_gives_a_new_queryset():
@@ -242,17 +244,14 @@ def test_all_of_a_manager_wrapper_over_a_fetch_raise_queryset_gives_a_new_querys
 
 async def test_all_of_a_prefetched_manager_wrapper_after_alist_still_reads_the_cache(no_sql):
     # given
-    manager = prefilled_manager()
-    sentinel = object()
-    manager.shared._result_cache = [sentinel]
-    wrapper = aq(manager)
+    wrapper = aq(prefilled_manager())
     # when
     rows = await all_then_alist(wrapper)
     # then
-    assert rows == [sentinel]
+    assert rows == [CACHED_ROW]
 
 
-async def test_all_of_a_prefetched_manager_wrapper_shares_the_cache_that_was_already_filled(no_sql):
+def test_all_of_a_prefetched_manager_wrapper_shares_the_cache_that_was_already_filled():
     # given
     manager = prefilled_manager()
     wrapper = aq(manager)
@@ -278,7 +277,7 @@ def test_filter_after_all_of_a_prefetched_manager_wrapper_leaves_the_cached_quer
     # when
     all_then_filter(aq(manager))
     # then
-    assert manager.shared._result_cache == []
+    assert manager.shared._result_cache == [CACHED_ROW]
     assert manager.shared.query.where.children == []
 
 

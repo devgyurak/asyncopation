@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
 from django.db.models import QuerySet
 
 from harness.catalog.models import Author, Book
@@ -324,6 +325,79 @@ async def alist_of_all_of_a_prefetched_manager() -> PrefetchedAllOutcome:
         [row is cached for row, cached in zip(rows, expected, strict=True)],
         len(expected),
     )
+
+
+@dataclass(frozen=True)
+class PrefetchedAllAllOutcome:
+    statements: int
+    sync_statements: int
+
+
+async def alist_of_all_of_all_of_a_prefetched_manager() -> PrefetchedAllAllOutcome:
+    """`aq(author.books).all().all().alist()` after `prefetch_related("books")`: as Django's
+    `author.books.all().all()`, a new unevaluated QuerySet, so one statement."""
+    from asyncopation import aq
+
+    author = await in_sync(_author_with_prefetched_books)
+    sync_log = await in_sync(lambda: _statements_of(lambda: list(author.books.all().all())))
+    with recorded_statements() as log:
+        await aq(author.books).all().all().alist()
+    return PrefetchedAllAllOutcome(len(log), sync_log)
+
+
+def _statements_of(run: Callable[[], Any]) -> int:
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    with CaptureQueriesContext(connection) as captured:
+        run()
+    return len(captured.captured_queries)
+
+
+# (an empty QuerySet, a QuerySet whose cache is filled) -> the combination; Django returns the second
+# one itself, or its first when the empty one is the argument.
+FILLED_OPERAND_SHAPES = [
+    pytest.param(lambda empty, filled: empty | filled, id="empty-or-filled"),
+    pytest.param(lambda empty, filled: filled | empty, id="filled-or-empty"),
+    pytest.param(lambda empty, filled: empty ^ filled, id="empty-xor-filled"),
+    pytest.param(lambda empty, filled: empty.union(filled), id="empty-union-filled"),
+]
+
+
+@dataclass(frozen=True)
+class FilledOperandOutcome:
+    sync_statements: int
+    statements: int
+    same_pks: bool
+
+
+def _filled_operand_books() -> QuerySet[Book]:
+    return Book.objects.filter(pages__gt=300).order_by("-pk")
+
+
+def _sync_filled_operand(shape: Callable[[Any, Any], Any]) -> tuple[int, list[int]]:
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    filled = _filled_operand_books()
+    list(filled)
+    with CaptureQueriesContext(connection) as captured:
+        rows = list(shape(Book.objects.none(), filled))
+    return len(captured.captured_queries), [row.pk for row in rows]
+
+
+async def alist_of_a_combination_with_a_filled_operand(
+    shape: Callable[[Any, Any], Any],
+) -> FilledOperandOutcome:
+    """`shape(none(), u)` after `u` was evaluated: statements run and rows, sync against async."""
+    from asyncopation import aq
+
+    sync_statements, sync_pks = await in_sync(lambda: _sync_filled_operand(shape))
+    filled = aq(_filled_operand_books())
+    await filled.alist()
+    with recorded_statements() as log:
+        rows = await shape(aq(Book.objects.none()), filled).alist()
+    return FilledOperandOutcome(sync_statements, len(log), [row.pk for row in rows] == sync_pks)
 
 
 @dataclass(frozen=True)

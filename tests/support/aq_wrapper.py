@@ -114,11 +114,14 @@ class SharedQuerysetManager(Manager):
         return self.shared
 
 
+CACHED_ROW = object()
+
+
 def prefilled_manager() -> SharedQuerysetManager:
-    """A real Manager whose QuerySet already has its result cache (a related manager after
-    `prefetch_related`)."""
+    """A real Manager whose QuerySet already has its result cache, holding the one `CACHED_ROW` (a
+    related manager after `prefetch_related`)."""
     manager = SharedQuerysetManager()
-    manager.shared._result_cache = []
+    manager.shared._result_cache = [CACHED_ROW]
     return manager
 
 
@@ -146,14 +149,36 @@ def prefilled_duck_source() -> Any:
     return source
 
 
+def raise_mode_books() -> QuerySet[Book]:
+    """A Book QuerySet that already carries FETCH_RAISE."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    return Book.objects.all().fetch_mode(FETCH_RAISE)
+
+
 SHARED_OTHER_MODE = Book.objects.all()
+SHARED_RAISE_MODE = raise_mode_books()
+SHARED_CACHED = raise_mode_books()
+SHARED_CACHED._result_cache = [object()]
 
 
 class ForeignModeQuerySet(QuerySet):
-    """A QuerySet with a user method that returns a shared QuerySet in another fetch mode."""
+    """A QuerySet with user methods that return a shared QuerySet (one in another fetch mode, one in
+    FETCH_RAISE): a user method is not a Django chaining method, so neither is a fresh clone."""
 
     def shared_other_mode(self) -> QuerySet[Book]:
         return SHARED_OTHER_MODE
+
+    def shared_raise_mode(self) -> QuerySet[Book]:
+        return SHARED_RAISE_MODE
+
+    def shared_cached(self) -> QuerySet[Book]:
+        return SHARED_CACHED
+
+
+def stored_raise_mode_wrapper() -> Any:
+    """A wrapper whose user method returns a stored FETCH_RAISE QuerySet."""
+    return aq_of(ForeignModeQuerySet(model=Book))
 
 
 def foreign_mode_queryset() -> QuerySet[Book]:
@@ -180,6 +205,9 @@ class IdentityQuerySet(QuerySet):
 
     def echo(self, other: QuerySet[Book]) -> QuerySet[Book]:
         return other
+
+    def echo_second(self, first: QuerySet[Book], second: QuerySet[Book]) -> QuerySet[Book]:
+        return second
 
     def echo_keyword(self, *, first: QuerySet[Book], other: QuerySet[Book]) -> QuerySet[Book]:
         return other
@@ -226,6 +254,8 @@ COMBINATIONS = [
     _case("xor-empty-wrapped-right", lambda we, wo, e, o: wo ^ we),
     _case("xor-empty-plain-right", lambda we, wo, e, o: wo ^ e),
     _case("union-empty-receiver", lambda we, wo, e, o: we.union(o)),
+    _case("union-empty-receiver-second-argument", lambda we, wo, e, o: we.union(e, o)),
+    _case("union-empty-receiver-wrapped-second-argument", lambda we, wo, e, o: we.union(we, wo)),
     _case("union-empty-receiver-wrapped-argument", lambda we, wo, e, o: we.union(wo)),
     _case("union-empty-argument-wrapped", lambda we, wo, e, o: wo.union(we)),
     _case("union-empty-argument", lambda we, wo, e, o: wo.union(e)),
@@ -237,10 +267,16 @@ COMBINATIONS = [
 
 
 async def user_caches_after_alist_of(build: Any) -> list[Any]:
-    """`alist()` of a combination: the result caches of the two QuerySets the caller holds."""
+    """`alist()` of a combination: the result caches of the two QuerySets the caller holds and of
+    the two QuerySets the operand wrappers hold."""
     empty, other, wrapped_empty, wrapped_other = combination_operands()
     await build(wrapped_empty, wrapped_other, empty, other).alist()
-    return [empty._result_cache, other._result_cache]
+    return [
+        empty._result_cache,
+        other._result_cache,
+        wrapped_empty.queryset._result_cache,
+        wrapped_other.queryset._result_cache,
+    ]
 
 
 def sticky_tag_books() -> QuerySet[Any]:
@@ -309,13 +345,6 @@ def class_attribute_of(wrapper: Any) -> Any:
     return wrapper.model
 
 
-def raise_mode_books() -> QuerySet[Book]:
-    """A Book QuerySet that already carries FETCH_RAISE."""
-    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
-
-    return Book.objects.all().fetch_mode(FETCH_RAISE)
-
-
 async def all_then_alist(wrapper: Any) -> list[Any]:
     """`all()` then `alist()` on a wrapper: the rows."""
     return await wrapper.all().alist()
@@ -379,3 +408,11 @@ PREFETCHED_COMBINATIONS = [
 def filled_by_alist_wrapper() -> Any:
     """A wrapper over a plain QuerySet whose cache `alist()` filled (no statement)."""
     return fill_cache(aq_of(fresh_books()))
+
+
+def prefetched_identity_manager() -> SharedQuerysetManager:
+    """A real Manager whose QuerySet has a filled cache and a user method returning its receiver."""
+    manager = SharedQuerysetManager()
+    manager.shared = IdentityQuerySet(model=Book)
+    manager.shared._result_cache = [CACHED_ROW]
+    return manager

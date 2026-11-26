@@ -74,10 +74,14 @@ def _hold(env: ExecEnv, where: str) -> Any:
         return driver.hold_statements()
     if where == "stream-read":
         return driver.hold_chunks()
-    return driver.hold_stream_closes()
+    if where == "stream-close":
+        return driver.hold_stream_closes()
+    raise ValueError(f"unknown hold point {where!r}; expected one of {HELD_AT}")
 
 
 async def _held_call(executor: Any, where: str) -> Any:
+    if where not in HELD_AT:
+        raise ValueError(f"unknown hold point {where!r}; expected one of {HELD_AT}")
     if where == "fetch_all":
         return await executor.fetch_all("SELECT 1", None)
     async with executor.stream(SQL, None, CHUNK) as chunks:

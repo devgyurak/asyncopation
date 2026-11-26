@@ -32,7 +32,7 @@ def executor_module() -> Any:
     return executor
 
 
-_executors = executor_module
+_executors = executor_module  # transitional alias: older support modules still import it
 
 
 def _registry() -> Any:

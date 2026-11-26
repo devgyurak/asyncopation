@@ -13,6 +13,7 @@ from tests.support.hooks.aborts import notes_of
 from tests.support.hooks.events import BOTH, FINISHED, STARTED, Failing, Recorder
 from tests.support.hooks.transactions import (
     EVERY_CALL,
+    HELD_AT,
     Reraiser,
     another_observer_note,
     cancel_after_observed_control,
@@ -32,9 +33,7 @@ from tests.support.hooks.transactions import (
 PINNED = pytest.mark.parametrize("pinned", [False, True], ids=["borrowed", "pinned"])
 OPS = pytest.mark.parametrize("op", ["fetch_all", "stream"])
 ON = pytest.mark.parametrize("on", [STARTED, FINISHED])
-REAL_CANCEL_POINTS = pytest.mark.parametrize(
-    "where", ["fetch_all", "stream-open", "stream-read", "stream-close"]
-)
+REAL_CANCEL_POINTS = pytest.mark.parametrize("where", HELD_AT)
 OBSERVERS = pytest.mark.parametrize(
     "observer_type",
     [pytest.param(Recorder, id="recorder"), pytest.param(Reraiser, id="reraiser")],

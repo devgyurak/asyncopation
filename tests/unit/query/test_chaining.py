@@ -149,6 +149,29 @@ def test_django_own_method_on_a_fetch_raise_queryset_is_wrapped_without_another_
     assert calls == []
 
 
+def test_a_user_defined_method_on_a_fetch_raise_queryset_records_one_fetch_mode_call():
+    # given
+    queryset, calls = counting_queryset()
+    wrapper = aq(queryset)
+    calls.clear()
+    # when
+    wrapper.same()
+    # then
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(("method", "reach"), OVERRIDE_CASES)
+async def test_an_overriding_method_that_returns_a_cached_stored_queryset_only_reads_its_cache(
+    method, reach, no_sql
+):
+    # given
+    queryset, stored = overriding_queryset(method, cached=True)
+    # when
+    await reach(aq(queryset)).alist()
+    # then
+    assert stored._result_cache == [CACHED_ROW]
+
+
 def test_a_user_defined_method_that_returns_its_receiver_gets_a_clone():
     # given
     wrapper = aq(identity_queryset())

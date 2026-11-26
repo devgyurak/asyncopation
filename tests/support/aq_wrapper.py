@@ -434,6 +434,9 @@ def counting_queryset() -> tuple[Any, list[int]]:
     calls: list[int] = []
 
     class CountingQuerySet(QuerySet):
+        def same(self) -> QuerySet[Book]:
+            return self
+
         def fetch_mode(self, mode: Any) -> Any:
             calls.append(1)
             return super().fetch_mode(mode)

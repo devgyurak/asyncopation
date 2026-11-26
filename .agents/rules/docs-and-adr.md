@@ -26,5 +26,16 @@ paths:
   - an inline mark `*Amended <date> (#N, PR #M): ...*` on **every** Decision or Validation
     sentence, code block and Option pro/con that is changed or contradicted (an "Implementation
     note" section may hold detail, but the affected places still carry the mark).
+- **Partially superseding an ADR.** When a new ADR replaces some Decisions of an Accepted ADR
+  while the others still hold (so neither an amendment nor a whole supersession fits), the new ADR
+  carries `- Supersedes in part: [ADR-NNNN](...) <which Decisions / Consequences / Validation
+  items>` and the old one keeps `Status: Accepted` and gains one header line
+  `- Partially superseded: <date> (#N, PR #M) - <every superseded item> are superseded by
+  [ADR-XXXX](...); <what stays Accepted>`. Every superseded Decision, Consequences bullet and
+  Validation item of the old ADR carries an inline mark `*Superseded <date> by ADR-XXXX (#N,
+  PR #M): ...*` (`*Superseded in part ...*` when only part of it is); a still-valid item whose
+  meaning the new ADR narrows gets `*Clarified <date> by ADR-XXXX (#N, PR #M): ...*`. The marks
+  merge only together with the new ADR in `Accepted` status (the maintainer accepts it in that PR's
+  review), never while it is `Proposed`.
 - Roadmap progress is tracked by ticking checklists in `docs/design/plan.md` (and its
   translations - see the language rule).

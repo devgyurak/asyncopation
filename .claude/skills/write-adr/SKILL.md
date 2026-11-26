@@ -27,3 +27,18 @@ An amendment may add or tighten Validation items but never drop or contradict on
 3. Mark every changed or contradicted Decision/Validation sentence, code block and Option pro/con
    inline with `*Amended <date> (#N, PR #M): ...*`; detail may live in an "Implementation note".
 4. Update `docs/architecture.md` and the docs-sync targets as for any ADR change.
+
+# Supersede part of an ADR
+Use this when a new ADR replaces some Decisions of an Accepted ADR and the others still hold (an
+amendment is not allowed because a Validation item becomes invalid or the direction changes).
+1. Write the new ADR (steps above) with a `- Supersedes in part:` header naming the replaced
+   Decisions, Consequences bullets and Validation items; its Validation replaces every invalidated
+   item explicitly.
+2. In the old ADR keep `Status: Accepted` and add one header line `- Partially superseded: <date>
+   (#N, PR #M) - <every superseded item> are superseded by [ADR-XXXX](...); <what stays
+   Accepted>`.
+3. Mark every superseded Decision, Consequences bullet and Validation item inline with
+   `*Superseded <date> by ADR-XXXX (#N, PR #M): ...*` (`*Superseded in part ...*` for part of one);
+   a still-valid item whose meaning narrows gets `*Clarified <date> by ADR-XXXX (#N, PR #M): ...*`.
+4. Ask **architect** to review both, and merge the marks only with the new ADR `Accepted` by the
+   maintainer in that PR's review.

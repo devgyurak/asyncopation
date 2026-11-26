@@ -181,7 +181,9 @@ async def run(plan, executor):          # the only async part, ~10 lines, shared
   return a QuerySet) are proxied and re-wrapped; only evaluation methods (`alist`, `aget`, ...)
   are ours. `aobjects` is a plain descriptor (`AsyncObjects`, not a `Manager`) returning
   `aq(owner._default_manager.get_queryset())`, so a model's custom QuerySet methods are available
-  on `aobjects` too (ADR-0006).
+  on `aobjects` too (ADR-0006). *Superseded in part 2026-11-26 by ADR-0009: `aobjects` returns a
+  manager-level object over the default manager (manager methods proxied, async manager methods on
+  an `AsyncObjects` subclass); custom QuerySet methods stay available.*
 - Relation loading: Django 6.1's RAISE fetch mode is the `NotLoaded` sentinel (Ecto, Tortoise
   `NoValuesFetched`); `afetch` is explicit and non-recursive (Hibernate Reactive), peers batched
   and aligned to parents (SeaORM loader).
@@ -236,6 +238,7 @@ facade. The facade sits at the top because evaluation runs prefetch and `adelete
 | 0005 | Hooks: observers vs interceptors | #9 |
 | 0006 | Public API attachment (`aq` composition, `aobjects` descriptor) | Phase 1 `aobjects` |
 | 0007 | Sans-I/O cores for ported orchestration; `_django` boundary + drift tests | Phase 4/5 |
+| 0009 | Manager-level `aobjects` (async manager methods + manager proxy); supersedes 0006 Decision 3 | Phase 1 `aobjects` (#72) |
 
 ## 7. Sources
 

@@ -25,7 +25,9 @@ pytest-django creates `test_asyncopation` and keeps it between runs (`--reuse-db
 `uv run pytest --create-db` after model changes.
 
 MySQL/MariaDB sync side needs `mysqlclient` (`uv sync --group mysql-sync`, plus
-`brew install mysql-client pkg-config` on macOS).
+`brew install mysql-client pkg-config` on macOS). With it installed, also run
+`ASYNCOPATION_REQUIRE_MYSQLDB=1 uv run pytest tests/unit/django_drift tests/unit/compile` (the MySQL
+wrapper drift suite and the "no `MySQLdb` loaded" subprocess checks; CI: integration and Django-main jobs).
 
 ## Troubleshooting
 - `connection refused` -> `docker compose ps`; ports clash -> stop local DBs or change the

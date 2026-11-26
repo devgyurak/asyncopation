@@ -6,7 +6,9 @@ Codes
     A101  banned module import (sync bridges, threads, sync drivers, sync transaction API - except
           ``from django.db.transaction import TransactionManagementError`` in ``_django/transaction.py`` -,
           dynamic-import helpers: ``importlib`` / ``importlib.util`` / ``importlib.machinery`` /
-          ``importlib.abc`` / ``pkgutil`` / ``runpy`` / ``pydoc`` / ``builtins``)
+          ``importlib.abc`` / ``pkgutil`` / ``runpy`` / ``pydoc`` / ``builtins`` / ``django.utils.module_loading``), and the Django
+          backend modules that import ``MySQLdb`` (``django.db.backends.mysql.base`` /
+          ``.introspection``, also the gis ones; ``BANNED_BACKEND_MODULES``)
     A102  Django's thread-local connection handlers or sync transaction API, however reached;
           the single exception and the importer restriction are described in ``connlint``
     A103  banned blocking / loop-management call, ``__import__`` / ``eval`` / ``exec`` /
@@ -98,6 +100,18 @@ BANNED_MODULES = {
     "runpy": "dynamic imports bypass the import guards",
     "pydoc": "pydoc.locate imports by name and bypasses the import guards",
     "builtins": "reaching __import__ through builtins bypasses the import guards",
+    "django.utils.module_loading": "import_string imports by dotted name and bypasses the import guards",
+}
+# Django backend modules that import a sync driver at module level: importing one loads MySQLdb
+# (mysqlclient), which asyncopation does not need (ADR-0008 Decision 5). The compile-only MySQL
+# wrapper ports what it needs from them (`compile/mysql.py`); the backend-neutral base classes
+# stand in. Django's PostgreSQL ``postgresql.base`` is not here: psycopg is a dependency, and
+# `_django/postgresql.py` imports it on purpose.
+BANNED_BACKEND_MODULES = {
+    "django.db.backends.mysql.base": "imports MySQLdb; port what is needed (ADR-0008)",
+    "django.db.backends.mysql.introspection": "imports MySQLdb; use the base introspection",
+    "django.contrib.gis.db.backends.mysql.base": "imports MySQLdb through the MySQL backend",
+    "django.contrib.gis.db.backends.mysql.introspection": "imports MySQLdb through the MySQL backend",
 }
 # `importlib` itself and its code-loading submodules; `importlib.metadata` / `.resources` are fine.
 BANNED_IMPORTLIB = {"importlib", "importlib.util", "importlib.machinery", "importlib.abc"}
@@ -431,6 +445,21 @@ def check(path: str, source: str, ledger: Ledger | None = None) -> list[Violatio
                         path, line, "A101", f"`{module}` is banned in src: {BANNED_MODULES[hit]}"
                     )
                 )
+            elif hit := _banned_submodule_name(module, names):
+                out.append(
+                    Violation(
+                        path, line, "A101", f"`{hit}` is banned in src: {BANNED_MODULES[hit]}"
+                    )
+                )
+            if hit := _banned_backend_module(module, names):
+                out.append(
+                    Violation(
+                        path,
+                        line,
+                        "A101",
+                        f"`{hit}` is banned in src: {BANNED_BACKEND_MODULES[hit]}",
+                    )
+                )
             if _banned_importlib(module, names):
                 out.append(
                     Violation(
@@ -705,6 +734,30 @@ def _allowed_banned_import(path: str, module: str, names: list[str], node: ast.A
         isinstance(node, ast.ImportFrom)
         and bool(names)
         and all((module, name) in allowed for name in names)
+    )
+
+
+def _banned_backend_module(module: str, names: list[str]) -> str | None:
+    """The banned backend module that ``import M`` / ``from M import n`` / ``from P import M`` loads."""
+    candidates = [module, *(f"{module}.{n}" for n in names)]
+    return next(
+        (b for c in candidates for b in BANNED_BACKEND_MODULES if c == b or c.startswith(b + ".")),
+        None,
+    )
+
+
+def _banned_submodule_name(module: str, names: list[str]) -> str | None:
+    """The banned module that ``from P import M`` loads (``from django.utils import module_loading``).
+
+    ``django.db.transaction`` is left to A102, which reports every form of it.
+    """
+    return next(
+        (
+            hit
+            for name in names
+            if (hit := _banned_module(f"{module}.{name}")) and hit != "django.db.transaction"
+        ),
+        None,
     )
 
 

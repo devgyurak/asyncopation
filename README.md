@@ -139,7 +139,10 @@ asyncio.run(main())
 
 Requirements: [uv](https://docs.astral.sh/uv/), Docker. MySQL differential tests also need the
 `mysqlclient` build dependencies (`brew install mysql-client pkg-config` or
-`apt install libmysqlclient-dev`) and `uv sync --group mysql-sync`.
+`apt install libmysqlclient-dev`) and `uv sync --group mysql-sync`. With mysqlclient installed also
+run `ASYNCOPATION_REQUIRE_MYSQLDB=1 uv run pytest tests/unit/django_drift tests/unit/compile`: the
+MySQL wrapper drift suite and the "no `MySQLdb` is loaded" checks only mean something there (CI runs
+them in the integration and Django-main jobs).
 
 ```bash
 uv sync                     # install dev + e2e dependency groups

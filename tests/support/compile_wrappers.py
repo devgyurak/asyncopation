@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from asyncopation._django.postgresql import BaseWrapper
+from asyncopation.compile import mysql, postgresql
 from asyncopation.compile.postgresql import PostgreSQLCompileWrapper, wrapper_for
 from asyncopation.compile.server_info import PostgreSQLServerInfo
 from tests.support import connection_entry as boundary
@@ -34,9 +35,17 @@ def unique_alias() -> str:
     return f"asyncopation_unit_{next(_COUNTER)}"
 
 
+def forget_compile_wrapper(alias: str) -> None:
+    """Drop the registered compile-only wrapper of `alias` (every backend's registry), so the next
+    ``wrapper_for`` builds it anew and nothing an earlier test cached on it survives."""
+    postgresql._WRAPPERS.pop(alias, None)
+    mysql._WRAPPERS.pop(alias, None)
+
+
 def clear_alias(alias: str) -> None:
     if boundary.peek(alias) is not None:
         boundary.remove(alias)
+    forget_compile_wrapper(alias)
 
 
 def pg_info(version: int = PG_VERSION) -> PostgreSQLServerInfo:

@@ -158,3 +158,17 @@ def reader_with(*lines: str) -> str:
     """A `configured_databases` reader whose body is `lines` after the `connections` import."""
     head = "def configured_databases():\n    from django.db import connections\n\n"
     return head + "".join(f"    {x}\n" for x in lines)
+
+
+def real_module_codes(path: str) -> list[str]:
+    """Guard codes the repository's own module at `path` triggers under the real ledger."""
+    from pathlib import Path
+
+    source = (Path(__file__).parents[2] / path).read_text()
+    return lint_src_module(source, path=path, ledger=archlint.Ledger.load())
+
+
+def with_mysqlclient_ban(codes: list[str], module: str) -> list[str]:
+    """`codes` plus A101 when `module` is a Django MySQL backend module (it imports MySQLdb)."""
+    banned = ("backends.mysql.base", "backends.mysql.introspection")
+    return sorted({*codes, "A101"}) if any(b in module for b in banned) else codes

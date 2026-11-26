@@ -5,7 +5,8 @@
 #   [public]      modules we treat as stable public API - no entry needed per symbol.
 #   [[internal]]  anything else: private helpers, internal modules, ported code we depend on.
 #                 These are what break when Django changes; the CI "django-main canary" job (it runs
-#                 `tests/unit/django_drift` without the `django_pin` tests, then the integration suite) and
+#                 `tests/unit/django_drift` and `tests/unit/compile` without the `django_pin` tests, with
+#                 mysqlclient installed and `ASYNCOPATION_REQUIRE_MYSQLDB=1`, then the integration suite) and
 #                 the `verified_against` field tell us when to re-check them. Optional
 #                 `signatures = { "Query.get_compiler" = "<str(inspect.signature(obj))>" }` pins
 #                 callables; keys are dotted paths below the module and MUST be quoted when dotted;
@@ -191,8 +192,8 @@ signatures = { "DatabaseOperations.compose_sql" = "(self, sql, params)" }
 [[internal]]
 module = "django.db.backends.base.base"
 names = ["BaseDatabaseWrapper"]
-used_by = ["src/asyncopation/_django/postgresql.py"]
-reason = """`CompileOnlyMixin` (compile/wrapper.py) overrides these methods to make the wrapper incapable of I/O \
+used_by = ["src/asyncopation/_django/postgresql.py", "src/asyncopation/_django/mysql.py"]
+reason = """`CompileOnlyMixin` (compile/wrapper.py) (also the backend-neutral base of the MySQL / MariaDB compile-only wrapper, `_django/mysql.py`) overrides these methods to make the wrapper incapable of I/O \
 (SQLCompiler.as_sql reaches `get_autocommit` -> `ensure_connection` -> `connect` for \
 select_for_update); the signatures are pinned so a changed upstream signature fails the drift \
 test instead of silently diverging. (`ensure_connection` is not pinned: pytest-django's DB \
@@ -515,6 +516,71 @@ names = ["peers"]
 used_by = ["src/asyncopation/_django/query.py"]
 reason = "The shared peers list FETCH_PEERS evaluation attaches to each instance (ModelIterable)"
 verified_against = "6.1.3"
+
+# --------------------------------------------------------------------------- MySQL / MariaDB compile-only wrapper (#6)
+# Reused (imported at runtime through _django.mysql). None of these modules imports MySQLdb in
+# Django 6.1.3 (tests/unit/django_drift checks it in a subprocess); mysql.base and mysql.introspection do.
+[[internal]]
+module = "django.db.backends.mysql.features"
+names = ["DatabaseFeatures"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "Features of the composed MySQL / MariaDB compile-only wrapper (SQL shape decisions; it reads the injected server data lazily)"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.backends.mysql.operations"
+names = ["DatabaseOperations"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "Operations of the composed wrapper (quoting, lookups, `for_update_sql`, `compiler_module` = django.db.backends.mysql.compiler, loaded by name)"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.backends.mysql.client"
+names = ["DatabaseClient"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "BaseDatabaseWrapper.__init__ instantiates `client_class`; the MySQL one does not import MySQLdb (Django 6.1.3)"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.backends.mysql.creation"
+names = ["DatabaseCreation"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "BaseDatabaseWrapper.__init__ instantiates `creation_class`; the MySQL one does not import MySQLdb (Django 6.1.3)"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.backends.base.introspection"
+names = ["BaseDatabaseIntrospection"]
+used_by = ["src/asyncopation/_django/mysql.py"]
+reason = "Stand-in for `mysql.introspection.DatabaseIntrospection` (which imports MySQLdb). SQL generation reads only `identifier_converter` from it (`RawQuery` and the raw-query column names), which MySQL does not override, so the base one is equivalent; the signature is pinned so a change upstream fails the drift test"
+verified_against = "6.1.3"
+signatures = { "BaseDatabaseIntrospection.identifier_converter" = "(self, name)" }
+
+[[internal]]
+module = "django.db.backends.mysql.base"
+names = [
+    "DatabaseWrapper.vendor",
+    "DatabaseWrapper._data_types",
+    "DatabaseWrapper.data_types",
+    "DatabaseWrapper._limited_data_types",
+    "DatabaseWrapper.operators",
+    "DatabaseWrapper.pattern_esc",
+    "DatabaseWrapper.pattern_ops",
+    "DatabaseWrapper.isolation_levels",
+    "DatabaseWrapper.get_database_version",
+    "DatabaseWrapper.display_name",
+    "DatabaseWrapper.data_type_check_constraints",
+    "DatabaseWrapper.mysql_server_data",
+    "DatabaseWrapper.mysql_server_info",
+    "DatabaseWrapper.mysql_version",
+    "DatabaseWrapper.mysql_is_mariadb",
+    "DatabaseWrapper.sql_mode",
+    "server_version_re",
+]
+used_by = ["src/asyncopation/compile/mysql.py"]
+reason = "Ported (mysql.base imports MySQLdb, so it is never imported): the DatabaseWrapper attributes SQL generation reads; `mysql_server_data` is injected from MySQLServerInfo instead of queried, `server_version_re` is a plain re.compile and `cached_property` is functools' (Django's django.utils.functional one is deprecated on main) (ADR-0008 Decision 5)"
+verified_against = "6.1.3"
+ported = true
 
 # --------------------------------------------------------------------------- Runtime dependencies (#49)
 [[dependency]]

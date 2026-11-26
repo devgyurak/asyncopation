@@ -62,7 +62,7 @@ async def test_filter_by_title_matches_sync(readonly_db, differential, title, ex
 ## Markers
 `integration`/`e2e` are automatic by directory. Add `@pytest.mark.django_pin` only to a test that
 asserts the pinned Django version (it fails by design on Django main); the `django-main` canary
-runs `tests/unit/django_drift -m "not django_pin"`. Ledger and dependency drift checks stay unmarked.
+runs `tests/unit/django_drift tests/unit/compile -m "not django_pin"`. Ledger and dependency drift checks stay unmarked.
 
 ## Checklist before handing off
 1. `uv run python -m tools.guards tests/...` clean.

@@ -26,7 +26,10 @@ def test_the_compile_only_wrapper_is_among_the_classes_that_are_checked():
     found = wrapper_classes_found()
     # then
     # a new backend wrapper is added to this list on purpose
-    assert found == ["asyncopation.compile.postgresql.PostgreSQLCompileWrapper"]
+    assert found == [
+        "asyncopation.compile.mysql.MySQLCompileWrapper",
+        "asyncopation.compile.postgresql.PostgreSQLCompileWrapper",
+    ]
 
 
 def test_the_check_reports_direct_and_indirect_subclasses_without_the_mixin_first():

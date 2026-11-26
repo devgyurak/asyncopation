@@ -63,14 +63,20 @@ deviating needs a superseding ADR.
 - Sync drivers (`psycopg2`, `MySQLdb`, `pymysql`).
 - Dynamic imports and code evaluation that bypass the import guards: `importlib` (except
   `from importlib import metadata|resources`), `pkgutil`, `runpy`, `pydoc`, `builtins`,
-  `__import__`, `__builtins__`, `eval` / `exec` / `compile`, and the introspection attributes
+  `django.utils.module_loading` (`import_string`), `__import__`, `__builtins__`, `eval` / `exec` / `compile`, and the introspection attributes
   `__globals__`, `__closure__`, `__wrapped__`, `__self__`, `__import__`, `__builtins__` (A101 / A103).
 - A Django *module* object used as a value (`x = models.base`, `f(models)`, `getattr(models,
   "base")`): it can re-export `connections`; use attribute access only. Django aliases of the
   connection machinery are tracked (A102, `tools/guards/connlint.py`).
-- `BaseWrapper` (Django's real PostgreSQL wrapper class) outside `compile/` and `_django/`
-  (Django's `DatabaseWrapper` is imported, as `BaseWrapper`, only by `_django/postgresql.py` /
-  `_django/mysql.py`; gis backends too); `BaseWrapper` is never renamed on import
+- `django.db.backends.mysql.base` and `.introspection` (also the gis MySQL ones) anywhere in
+  `src/` (A101): they import `MySQLdb`; port what is needed into `compile/mysql.py` (ADR-0008
+  Decision 5).
+- `BaseWrapper` (the base class of the compile-only wrapper: Django's real PostgreSQL
+  `DatabaseWrapper`, but for MySQL / MariaDB the backend-neutral `BaseDatabaseWrapper`, because
+  `mysql.base` imports `MySQLdb`) outside `compile/` and `_django/` (the real `DatabaseWrapper`
+  is imported, as `BaseWrapper`, only by `_django/postgresql.py`; `_django/mysql.py` exports
+  `BaseDatabaseWrapper` under the same name; gis backends too);
+  `BaseWrapper` is never renamed on import
   (`BaseWrapper as X`) or rebound (`X = BaseWrapper`), subclassed without `CompileOnlyMixin` first
   or called; the private swap `_django.connections.swapped` outside `compile/scope.py`;
   `ConnectionHandler` / `ConnectionRouter` / `load_backend` anywhere (A102).

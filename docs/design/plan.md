@@ -272,16 +272,16 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 
 ### Phase 1 checklist (first spike)
 
-- [x] `alist` working with `as_sql()` + the async driver: `aq(qs).alist()` on PostgreSQL (#6, PR #65; the differential suite on MySQL/MariaDB follows with the MySQL wrapper, #6 PR C / #7)
+- [x] `alist` working with `as_sql()` + the async driver: `aq(qs).alist()` on PostgreSQL (#6, PR #65; the differential suite on MySQL/MariaDB follows with the MySQL wrapper, #6, PR #68 / #7)
 - [x] Port `ModelIterable` logic (converters -> `Model.from_db`), plus the values / values_list / flat / named iterables (`engine.materialize`, #6, PR #65)
 - [x] Detect paths that open a sync connection during `as_sql()` (record where `SynchronousOnlyOperation` is raised) - spike results in ADR-0008 (#29, ADR-0008 Accepted)
-- [x] Compile-only `DatabaseWrapper` (PostgreSQL) + synchronous `compile_scope` swap (#3, ADR-0008); MySQL/MariaDB composed wrapper -> #6
+- [x] Compile-only `DatabaseWrapper` (PostgreSQL) + synchronous `compile_scope` swap (#3, ADR-0008); MySQL/MariaDB composed wrapper (`compile.mysql`, #6, PR #68; asyncmy driver, probe and engine registration -> #7)
 - [x] Preload server info asynchronously -> inject into the compile-only connection (PostgreSQL; #5, ADR-0004; MySQL/MariaDB probe -> #7)
 - [x] Executors and connection ownership: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, broken-transaction state, `close()` waiting for pins and streams (#5, ADR-0001; `async_atomic` -> #19, pool sizing -> #8, hooks -> #4)
 - [x] hstore/citext type registration in the PostgreSQL driver when `django.contrib.postgres` is installed (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] Pin the asgiref version and `Local(thread_critical=True)` semantics `compile_scope` relies on in the drift suite (ledger `[[dependency]]` row, `asgiref>=3.13`; #49, ADR-0008)
-- [x] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`) on PostgreSQL, with `aget` / `afirst` / `acount` / `aexists` / `async for`, the `aobjects` descriptor and the sans-I/O runner with the `get_aggregation` / `has_results` cores (#6, PR #67; MySQL/MariaDB with the MySQL wrapper, #6 PR C / #7)
-- [ ] Reproduce the same flow on asyncmy
+- [x] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`) on PostgreSQL, with `aget` / `afirst` / `acount` / `aexists` / `async for`, the `aobjects` descriptor and the sans-I/O runner with the `get_aggregation` / `has_results` cores (#6, PR #67; MySQL/MariaDB with the MySQL wrapper, #6, PR #68 / #7)
+- [ ] Reproduce the same flow on asyncmy; acceptance (#7): the server-info probe builds `MySQLServerInfo(*row)` from the exact `SELECT` whose column order matches Django's `row[n]` contract (ADR-0008 Decision 5; the source drift test pins the field order)
 
 ---
 

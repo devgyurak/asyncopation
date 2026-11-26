@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=f85ecf8dff4e -->
+<!-- i18n: source=docs/workflow.md source-sha256=85064850f4cb -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -92,12 +92,12 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 포맷, 린트 | ruff | 편집 훅, `make lint`, pre-commit, CI |
 | 타입 | ty | `make typecheck`, CI |
 | 레이어 | import-linter | `make guard`, pre-commit, CI |
-| 아키텍처 규칙 (A1xx/A2xx, A102 포함: `django.db.connections`는 `_django/connections.py`의 `swapped` 교체로만 쓰고 `compile/scope.py`만 import하고, 같은 모듈의 읽기 전용 `configured_databases()`는 `connection/lifecycle.py`만 import; A103: 동적 import와 introspection 속성; A104: psycopg와 Django 모듈이 재노출하는 psycopg 이름은 `drivers/`에서만 (표: `tools/guards/reexports.py`; 어댑터 헬퍼는 `_django/postgresql_adapters.py` 경유이며 이 모듈은 `drivers/postgresql`만 import; Django 모듈의 `mogrify`는 어디서도 금지); A203: 비공개 Django import는 `asyncopation._django`에서만; ledger의 `[[dependency]]` 행(예: asgiref)은 guard가 형식만 검사하고 A202가 아니라 drift 테스트가 고정) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
+| 아키텍처 규칙 (A1xx/A2xx, A102 포함: `django.db.connections`는 `_django/connections.py`의 `swapped` 교체로만 쓰고 `compile/scope.py`만 import하고, 같은 모듈의 읽기 전용 `configured_databases()`는 `connection/lifecycle.py`만 import; A103: 동적 import와 introspection 속성; A101: `MySQLdb`를 import하는 Django 모듈(`mysql.base`, `mysql.introspection`)과 `django.utils.module_loading`은 `import M`, `from M import n`, `from P import M` 형태 모두 금지; A104: psycopg와 Django 모듈이 재노출하는 psycopg 이름은 `drivers/`에서만 (표: `tools/guards/reexports.py`; 어댑터 헬퍼는 `_django/postgresql_adapters.py` 경유이며 이 모듈은 `drivers/postgresql`만 import; Django 모듈의 `mogrify`는 어디서도 금지); A203: 비공개 Django import는 `asyncopation._django`에서만; ledger의 `[[dependency]]` 행(예: asgiref)은 guard가 형식만 검사하고 A202가 아니라 drift 테스트가 고정) | `tools/guards` | 편집 훅, `make guard`, pre-commit, CI |
 | 테스트 규칙: GWT, 제어문 0개 (T1xx-T3xx) | `tools/guards` | 위와 동일 |
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
-| 정합성 | 3개 백엔드에서 pytest 차등 테스트, `compose_sql`은 순수 Python psycopg로도 | `make test-int`, `make test-compose-python`, CI 매트릭스 |
-| 업스트림 drift | `tests/unit/django_drift` (ledger, asgiref 핀) | `make test-unit`, CI; `django-main` canary job이 `django_pin` 테스트를 제외하고 이를 실행하고, `tests/integration`도 Django main에서 실행 |
+| 정합성 | 3개 백엔드에서 pytest 차등 테스트, `compose_sql`은 순수 Python psycopg로도, drift 스위트(`tests/unit/django_drift`)와 MySQL wrapper 단위 테스트(`tests/unit/compile`, "`MySQLdb`가 로드되지 않음"을 확인하는 subprocess 검사 포함)는 mysqlclient가 설치된 integration job에서도 실행하며 `ASYNCOPATION_REQUIRE_MYSQLDB=1`이면 건너뛰던 MySQL wrapper drift 테스트가 실패로 바뀐다 | `make test-int`, `make test-compose-python`, CI 매트릭스 |
+| 업스트림 drift | `tests/unit/django_drift` (ledger, asgiref 핀) | `make test-unit`, CI; `django-main` canary job이 `django_pin` 테스트를 제외하고 이를 `tests/unit/compile`(mysqlclient 설치, `ASYNCOPATION_REQUIRE_MYSQLDB=1`)과 함께 실행하고, `tests/integration`도 Django main에서 실행 |
 | E2E | uvicorn + httpx | `make test-e2e`, CI |
 | 성능 | micro + k6 하네스 | `make bench-micro` / `make bench`, CI (수동 / 야간) |
 | 브랜치 흐름 | GitHub ruleset + `branch-policy.yml` + `CODEOWNERS` | `develop`, `main`으로의 모든 푸시 / PR |

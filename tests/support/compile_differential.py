@@ -13,10 +13,11 @@ from django.db.models import Count
 from django.db.models.sql import Query
 from django.db.models.sql.compiler import SQLCompiler
 
-from asyncopation.compile.postgresql import wrapper_for
+from asyncopation.compile import mysql, postgresql
 from asyncopation.compile.scope import compile_scope
-from asyncopation.compile.server_info import PostgreSQLServerInfo
+from asyncopation.compile.server_info import MySQLServerInfo, PostgreSQLServerInfo, ServerInfo
 from harness.catalog.models import Book
+from harness.settings import VENDOR
 from tests.support.connect_counter import count_sync_connection_attempts
 from tests.support.strategies import build_queryset
 
@@ -65,10 +66,49 @@ def count_outer_query(build: Callable[[], Any]) -> Any:
 
 def outcome(query: Any, alias: str) -> Outcome:
     try:
-        sql, params = query.get_compiler(using=alias).as_sql()
+        result = query.get_compiler(using=alias).as_sql()
     except Exception as exc:
         return ("raises", type(exc).__name__)
-    return ("sql", sql, tuple(params))
+    return _sql_outcome(result)
+
+
+def _sql_outcome(result: Any) -> Outcome:
+    """``("sql", sql, params, types)``; an insert compiler returns a list of such pairs.
+
+    ``types`` are the exact classes of the parameters: ``1 == True`` and ``b"x" == bytearray(b"x")``,
+    so comparing the values alone would not notice a wrapper that adapts a parameter differently.
+    """
+    if isinstance(result, list):
+        return ("sql", *((sql, _comparable(params), _types(params)) for sql, params in result))
+    sql, params = result
+    return ("sql", sql, _comparable(params), _types(params))
+
+
+def _types(params: Any) -> tuple[type, ...]:
+    return tuple(type(param) for param in params)
+
+
+def _comparable(params: Any) -> tuple[Any, ...]:
+    """The params with identity-compared objects (a psycopg ``Jsonb``) replaced by their repr."""
+    return tuple(
+        param if type(param).__eq__ is not object.__eq__ else (type(param).__name__, repr(param))
+        for param in params
+    )
+
+
+def server_info_of(real_wrapper: Any) -> ServerInfo:
+    """The server facts Django's own wrapper learned from the live server (backend-aware)."""
+    if VENDOR == "postgresql":
+        return PostgreSQLServerInfo(pg_version=real_wrapper.pg_version)
+    return MySQLServerInfo(**real_wrapper.mysql_server_data)
+
+
+def compile_wrapper_of(real_wrapper: Any, alias: str) -> Any:
+    """The compile-only wrapper the registry builds for `real_wrapper`'s settings and server."""
+    info = server_info_of(real_wrapper)
+    if VENDOR == "postgresql":
+        return postgresql.wrapper_for(alias, real_wrapper.settings_dict, info)  # ty: ignore[invalid-argument-type]
+    return mysql.wrapper_for(alias, real_wrapper.settings_dict, info)  # ty: ignore[invalid-argument-type]
 
 
 def compare_compilation(
@@ -77,8 +117,7 @@ def compare_compilation(
     """Compile `build_query()` on the real wrapper and on the compile-only wrapper in a scope."""
     real_query, only_query = build_query(), build_query()
     real_wrapper = connections[alias]
-    info = PostgreSQLServerInfo(pg_version=real_wrapper.pg_version)  # ty: ignore[missing-attribute]
-    wrapper = wrapper_for(alias, real_wrapper.settings_dict, info)
+    wrapper = compile_wrapper_of(real_wrapper, alias)
     guard = contextlib.nullcontext() if autocommit else transaction.atomic(using=alias)
     with guard:
         real = outcome(real_query, alias)
@@ -148,3 +187,19 @@ def for_update_of_query() -> Any:
 
 def filtered_books() -> Any:
     return Book.objects.filter(published=True, pages__gte=100)
+
+
+def for_update_skip_locked_query() -> Any:
+    return Book.objects.select_for_update(skip_locked=True).order_by("pk").query
+
+
+def for_update_of_skip_locked_query() -> Any:
+    return Book.objects.select_for_update(of=("self",), skip_locked=True).order_by("pk").query
+
+
+def for_update_sliced_query() -> Any:
+    return Book.objects.select_for_update().order_by("pk")[:3].query
+
+
+def for_update_of_related_query() -> Any:
+    return Book.objects.select_related("author").select_for_update(of=("self", "author")).query

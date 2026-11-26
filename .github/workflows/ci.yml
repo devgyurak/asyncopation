@@ -48,6 +48,10 @@ jobs:
             *) make db-up SERVICES=${{ matrix.db }} ;;
           esac
       - run: make test-int
+      - name: ported MySQL wrapper drift and "no MySQLdb loaded" checks (need mysqlclient to mean something, so they run here as well as in `check`)
+        env:
+          ASYNCOPATION_REQUIRE_MYSQLDB: "1"
+        run: uv run pytest tests/unit/django_drift tests/unit/compile
       - name: compose_sql against the pure-Python psycopg (needs the system libpq)
         if: matrix.db == 'postgresql'
         run: |
@@ -75,10 +79,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
-      - run: uv sync --locked
+      - run: sudo apt-get update && sudo apt-get install -y libmysqlclient-dev pkg-config
+      - run: uv sync --locked --group mysql-sync
       - run: uv pip install "django @ git+https://github.com/django/django@main"
       # --no-sync on every uv run: a plain `uv run` (or a make target) would re-sync the locked Django.
-      - run: uv run --no-sync pytest tests/unit/django_drift -m "not django_pin"
+      - env:
+          ASYNCOPATION_REQUIRE_MYSQLDB: "1"
+        run: uv run --no-sync pytest tests/unit/django_drift tests/unit/compile -m "not django_pin"
       # The steps below run even when the drift step fails, so integration results are not hidden.
       - if: ${{ !cancelled() }}
         run: make db-up SERVICES=postgres

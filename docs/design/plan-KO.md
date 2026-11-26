@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=95401555efbe -->
+<!-- i18n: source=docs/design/plan.md source-sha256=02836662b44d -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -272,16 +272,16 @@ books = await aq(author.book_set.filter(published=True)).alist()
 
 ### Phase 1 체크리스트 (첫 스파이크)
 
-- [x] `as_sql()` + async 드라이버로 `alist` 동작 확인: PostgreSQL의 `aq(qs).alist()` (#6, PR #65; MySQL/MariaDB 차등 테스트는 MySQL wrapper와 함께, #6 PR C / #7)
+- [x] `as_sql()` + async 드라이버로 `alist` 동작 확인: PostgreSQL의 `aq(qs).alist()` (#6, PR #65; MySQL/MariaDB 차등 테스트는 MySQL wrapper와 함께, #6, PR #68 / #7)
 - [x] `ModelIterable` 로직 이식 (converters → `Model.from_db`)과 values / values_list / flat / named 이터러블 (`engine.materialize`, #6, PR #65)
 - [x] `as_sql()` 도중 sync 커넥션이 열리는 경로 탐지 (`SynchronousOnlyOperation` 발생 지점 기록) - 스파이크 결과는 ADR-0008에 있음 (#29, ADR-0008 Accepted)
-- [x] 컴파일 전용 `DatabaseWrapper`(PostgreSQL) + 동기 `compile_scope` 교체 (#3, ADR-0008); MySQL/MariaDB 합성 wrapper → #6
+- [x] 컴파일 전용 `DatabaseWrapper`(PostgreSQL) + 동기 `compile_scope` 교체 (#3, ADR-0008); MySQL/MariaDB 합성 wrapper(`compile.mysql`, #6, PR #68; asyncmy 드라이버·프로브·엔진 등록 → #7)
 - [x] 서버 정보 async 프리로드 → 컴파일 전용 커넥션에 주입 (PostgreSQL; #5, ADR-0004; MySQL/MariaDB 프로브 → #7)
 - [x] 실행기와 연결 소유권: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, 깨진 트랜잭션 상태, 열린 pin과 스트림을 기다리는 `close()` (#5, ADR-0001; `async_atomic` → #19, 풀 크기 → #8, 훅 → #4)
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
-- [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6 PR C / #7)
-- [ ] asyncmy로 같은 흐름 재현
+- [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6, PR #68 / #7)
+- [ ] asyncmy로 같은 흐름 재현; 인수 조건(#7): 서버 정보 프로브는 열 순서가 Django의 `row[n]` 계약과 일치하는 정확한 `SELECT`에서 `MySQLServerInfo(*row)`를 만든다 (ADR-0008 결정 5; 소스 drift 테스트가 필드 순서를 고정한다)
 
 ---
 

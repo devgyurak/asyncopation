@@ -17,6 +17,18 @@ TRIVIAL_BEFORE_ASYNCMY = pytest.mark.skipif(
     VENDOR != "postgresql",
     reason="before asyncmy (#7) nothing opens or compiles on MySQL/MariaDB: the assertion is vacuous",
 )
+POSTGRESQL_SQL_ONLY = pytest.mark.skipif(
+    VENDOR != "postgresql", reason="PostgreSQL-only SQL (django.contrib.postgres full-text search)"
+)
+
+MYSQL_FAMILY_ONLY = pytest.mark.skipif(VENDOR == "postgresql", reason="MySQL/MariaDB-specific SQL")
+MYSQL_ONLY = pytest.mark.skipif(VENDOR != "mysql", reason="MySQL-specific SQL")
+MARIADB_ONLY = pytest.mark.skipif(VENDOR != "mariadb", reason="MariaDB-specific SQL")
+# MySQL cannot select from the table it updates (`update_can_self_select`): Django runs the
+# sub-select of an UPDATE through a join while compiling, which needs a connection.
+SELF_SELECT_UPDATE_ONLY = pytest.mark.skipif(
+    VENDOR == "mysql", reason="MySQL runs a pre-select query while compiling a joined UPDATE"
+)
 
 # MySQL/MariaDB execution lands with #7; strict so the marker is removed when it does.
 # Until then the registry has no engine for those backends, so the first open raises

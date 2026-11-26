@@ -80,15 +80,15 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    again when it evaluates; the router answers the same alias both times, so this is an
    intentional difference (a router that answered differently on the two calls would make Django's
    `get()` use two aliases, which `aget` cannot: one routing decision serves the whole call).*
-   *Amended 2026-11-26 (#6, PR #67): the clone `aget` builds and the `order_by("pk")` clone a querying
-   `afirst` builds are `FETCH_RAISE` even when the wrapper shares a QuerySet whose result cache is
-   filled in a user fetch mode (a prefetched manager, a synchronously evaluated QuerySet), whose own
-   clones would inherit that mode; the instances read from that cache (`alist()`, `async for`, an
-   ordered `afirst`) keep the mode they were loaded in, as in Django. An ordered `afirst` that
-   queries is `FETCH_RAISE` only through the Decision 4 invariant (an unfilled wrapper QuerySet is
-   always `FETCH_RAISE`), not through a clone of its own. Django's `get()` clones with `filter()`
-   and the clone keeps the receiver's fetch mode; `aget` deliberately returns `FETCH_RAISE`
-   instances (see Decision 4).*
+   *Amended 2026-11-26 (#6, PR #67): the clone `aget` builds and the `order_by("pk")` clone a
+   querying `afirst` builds are `FETCH_RAISE` even when the wrapper shares a QuerySet whose result
+   cache is filled in a user fetch mode (a prefetched manager, a synchronously evaluated
+   QuerySet), whose own clones would inherit that mode; the instances read from that cache
+   (`alist()`, `async for`, an ordered `afirst`) keep the mode they were loaded in, as in Django.
+   An ordered `afirst` that queries is `FETCH_RAISE` only through the Decision 4 invariant (an
+   unfilled wrapper QuerySet is always `FETCH_RAISE`), not through a clone of its own. Django's
+   `get()` clones with `filter()` and the clone keeps the receiver's fetch mode; `aget`
+   deliberately returns `FETCH_RAISE` instances (see Decision 4).*
 3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and

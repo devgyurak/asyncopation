@@ -186,7 +186,7 @@ setup) and translates exceptions to `django.db`; SQL shape stays with Django's `
    - `get_or_create`, `update_or_create`
    - `prefetch_related_objects`
    - Written as sans-I/O generator cores driven by one async runner, not `async def` copies (ADR-0007).
-   - When a second core needs a conversion outside compile_scope, generalize Convert to carry its own callable so engine/runner.py no longer imports _django.aggregation (ADR-0007, Decision 1).
+   - When a second core needs a conversion outside `compile_scope`, generalize `Convert` to carry its own callable so `engine/runner.py` no longer imports `_django.aggregation` (ADR-0007, Decision 1).
 
 ### 4.5 Lazy loading
 

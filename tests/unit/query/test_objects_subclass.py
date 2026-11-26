@@ -5,9 +5,10 @@ import pytest
 
 from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
-from tests.support.aq_wrapper import read_attribute
+from tests.support.aq_wrapper import call_named, read_attribute
 from tests.support.manager_models import (
     AbstractRootChild,
+    DbItem,
     DelegatingItem,
     FaultyItem,
     MarkingItem,
@@ -27,6 +28,7 @@ from tests.support.manager_models import (
     record_evaluators,
 )
 from tests.support.object_models import where_conditions
+from tests.support.same_name_objects import SameNameItem
 
 
 @pytest.fixture
@@ -149,17 +151,66 @@ def test_a_subclass_reusing_a_private_name_keeps_copies_working(attribute):
 
 def test_a_bound_object_carries_a_slot_its_subclass_set_in_init():
     # when
-    tag = SlottedItem.aobjects.tag
+    plain = SlottedItem.aobjects.plain
     # then
-    assert tag == "tagged"
+    assert plain == "tagged"
 
 
-def test_a_subclass_property_raising_attribute_error_is_not_proxied_to_the_manager():
+def test_a_bound_object_carries_a_private_slot_its_subclass_set_in_init():
+    # when
+    secret = SlottedItem.aobjects.secret()
+    # then
+    assert secret == "hidden"
+
+
+def test_a_subclass_property_raising_attribute_error_falls_back_to_the_manager():
+    # when
+    label = call_named(FaultyItem.aobjects, "label")
+    # then
+    assert label == "manager label"
+
+
+def test_a_subclass_property_raising_attribute_error_names_it_when_the_manager_lacks_it():
     # given
     bound = FaultyItem.aobjects
     # when / then
-    with pytest.raises(AttributeError, match=r"label"):
-        read_attribute(bound, "label")
+    with pytest.raises(
+        AttributeError, match=r"FaultyPropertyAsyncObjects\.missing raised AttributeError"
+    ):
+        read_attribute(bound, "missing")
+
+
+def test_a_subclass_property_reaches_the_manager_value_through_super_getattr():
+    # when
+    alias = DbItem.aobjects.db
+    # then
+    assert alias == "via:default"
+
+
+# -- a subclass named AsyncObjects with its own private attribute --------------------------------
+
+
+def test_a_same_named_subclass_with_a_private_attribute_binds_the_model():
+    # when
+    bound = SameNameItem.aobjects
+    # then
+    assert bound.model is SameNameItem
+    assert bound.helper_value() == "helper"
+
+
+def test_a_same_named_subclass_with_a_private_attribute_keeps_aq_working():
+    # when
+    wrapper = aq(SameNameItem.aobjects)
+    # then
+    assert wrapper.model is SameNameItem
+
+
+def test_a_same_named_subclass_with_a_private_attribute_keeps_copies_working():
+    # when
+    chained = SameNameItem.aobjects.filter(name="x")
+    # then
+    assert isinstance(chained, AsyncQuerySet)
+    assert chained.model is SameNameItem
 
 
 # -- overriding an evaluator ----------------------------------------------------------------------

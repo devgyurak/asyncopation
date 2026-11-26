@@ -190,6 +190,7 @@ def test_a_coroutine_stored_as_a_manager_attribute_is_refused(
     refusal = refusal_of(lambda: read_attribute(bound, "pending"), "_pending")
     # then
     assert refusal.message is not None
+    assert "is an awaitable or an async generator" in refusal.message
     assert refusal.thread_starts == 0
 
 

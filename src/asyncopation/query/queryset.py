@@ -33,7 +33,7 @@ __all__ = [
 
 # The method a manager-level object (`AsyncObjects`, ADR-0009 Decision 7) defines on its type to
 # hand `aq()` its bound manager; `query/objects.py` imports this module, not the other way round.
-AQ_MANAGER_HOOK = "_AsyncObjects__aq_manager"
+AQ_MANAGER_HOOK = "_asyncopation_aq_manager"
 
 # Django's own coroutine methods (alist-like evaluators, aget, acreate, ...): ours replace them one by
 # one; until then they must not reach `sync_to_async`. The scan is over the class, so a Django

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from types import MemberDescriptorType
 from typing import Any, NoReturn, Self, overload
 
 from django.db.models import QuerySet
@@ -35,12 +36,13 @@ __all__ = ["AsyncObjects"]
 EVALUATORS = ("alist", "aget", "afirst", "acount", "aexists")
 
 # Names a subclass may not shadow (ADR-0009 Decision 3, step 1). The machinery the binding and
-# `aq()` rely on is name-mangled (`__manager`, `__bind`, ...), so a subclass cannot shadow it.
+# `aq()` rely on uses the reserved prefix `_asyncopation_` instead (documented, not checked): name
+# mangling would not separate it from a subclass that is also called `AsyncObjects`.
 _PROTECTED = ("model", "name")
 
 # Never proxied to the manager (ADR-0009 Decision 1): the binding slots, and
 # `contribute_to_class`, which Django calls on any class-body or `add_to_class` value that has it.
-_NOT_PROXIED = frozenset({"_AsyncObjects__model", "_AsyncObjects__manager", "contribute_to_class"})
+_NOT_PROXIED = frozenset({"_asyncopation_model", "_asyncopation_manager", "contribute_to_class"})
 
 
 class AsyncObjects:
@@ -50,7 +52,7 @@ class AsyncObjects:
     ``self`` (``await self.filter(...).aget(...)``) and read the bound model as ``self.model``.
     A subclass must be constructible without arguments (``attach`` calls ``cls()``); its
     ``__init__`` runs once, and every bound object copies the declared object's ``__dict__`` and
-    slots.
+    slots. Names starting with ``_asyncopation_`` are reserved for the binding.
 
     Unlike Django's manager descriptor it does not refuse a swapped-out model (``AUTH_USER_MODEL``
     replacing ``auth.User``): guard A102 reserves the ``swapped`` name for ``compile/scope.py``, so
@@ -59,8 +61,8 @@ class AsyncObjects:
 
     name: str = "aobjects"
     # The binding: None on the declared (unbound) object.
-    __model: Any = None
-    __manager: Any = None
+    _asyncopation_model: Any = None
+    _asyncopation_manager: Any = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -88,7 +90,7 @@ class AsyncObjects:
             raise AttributeError(f"{self.name} needs the model class")
         if owner._meta.abstract:
             raise AttributeError(f"{self.name} isn't available; {owner.__name__} is abstract")
-        return self.__bind(owner, dm.default_manager(owner))
+        return self._asyncopation_bind(owner, dm.default_manager(owner))
 
     @classmethod
     def attach(cls, model: type, name: str = "aobjects") -> None:
@@ -97,7 +99,7 @@ class AsyncObjects:
         descriptor.name = name
         setattr(model, name, descriptor)
 
-    def __bind(self, model: Any, manager: Any) -> Self:
+    def _asyncopation_bind(self, model: Any, manager: Any) -> Self:
         # Not copy.copy: binding must not run a `__copy__` a subclass defines.
         bound = object.__new__(type(self))
         bound.__dict__.update(self.__dict__)
@@ -107,17 +109,17 @@ class AsyncObjects:
             except AttributeError:
                 continue
             object.__setattr__(bound, slot, value)
-        bound.__model = model
-        bound.__manager = manager
+        bound._asyncopation_model = model
+        bound._asyncopation_manager = manager
         return bound
 
-    def __aq_manager(self, what: str = "aq()") -> Any:
+    def _asyncopation_aq_manager(self, what: str = "aq()") -> Any:
         """The bound manager, for ``aq(Model.aobjects)`` (ADR-0009 Decision 7) and the evaluators."""
-        if self.__manager is None:
-            raise self.__unbound(what)
-        return self.__manager
+        if self._asyncopation_manager is None:
+            raise self._asyncopation_unbound(what)
+        return self._asyncopation_manager
 
-    def __unbound(self, what: str) -> AttributeError:
+    def _asyncopation_unbound(self, what: str) -> AttributeError:
         return AttributeError(
             f"{self.name} is not bound to a model; read {what} from the model class "
             f"(Model.{self.name})"
@@ -126,36 +128,36 @@ class AsyncObjects:
     @property
     def model(self) -> Any:
         """The bound model: the class ``aobjects`` was read from."""
-        if self.__model is None:
-            raise self.__unbound("model")
-        return self.__model
+        if self._asyncopation_model is None:
+            raise self._asyncopation_unbound("model")
+        return self._asyncopation_model
 
     # -- evaluators (step 3) ---------------------------------------------------------------------
     async def alist(self) -> list[Any]:
         """``await Model.aobjects.alist()``: the rows of a fresh QuerySet (never cached here)."""
-        return await aq(self.__aq_manager("alist()")).alist()
+        return await aq(self._asyncopation_aq_manager("alist()")).alist()
 
     async def aget(self, *args: Any, **kwargs: Any) -> Any:
         """The one object matching the arguments, as ``Model.objects.get()``."""
-        return await aq(self.__aq_manager("aget()")).aget(*args, **kwargs)
+        return await aq(self._asyncopation_aq_manager("aget()")).aget(*args, **kwargs)
 
     async def afirst(self) -> Any:
         """The first object (ordered by ``pk`` when the QuerySet has no ordering), or ``None``."""
-        return await aq(self.__aq_manager("afirst()")).afirst()
+        return await aq(self._asyncopation_aq_manager("afirst()")).afirst()
 
     async def acount(self) -> int:
         """The number of rows (``COUNT(*)``)."""
-        return await aq(self.__aq_manager("acount()")).acount()
+        return await aq(self._asyncopation_aq_manager("acount()")).acount()
 
     async def aexists(self) -> bool:
         """Whether there is any row (a ``LIMIT 1`` query)."""
-        return await aq(self.__aq_manager("aexists()")).aexists()
+        return await aq(self._asyncopation_aq_manager("aexists()")).aexists()
 
     def __repr__(self) -> str:
         # Never touches the database (a Manager's repr does not either).
-        if self.__model is None:
+        if self._asyncopation_model is None:
             return f"<{type(self).__name__} {self.name!r} (unbound)>"
-        return f"<{type(self).__name__} of {self.__model._meta.label}>"
+        return f"<{type(self).__name__} of {self._asyncopation_model._meta.label}>"
 
     # -- steps 4 and 5 ---------------------------------------------------------------------------
     def __getattr__(self, name: str) -> Any:
@@ -163,16 +165,9 @@ class AsyncObjects:
             # Protocol lookups (copy, pickle, async for) and the binding slots never reach the
             # manager; nor does contribute_to_class (ADR-0009 Decision 1).
             raise AttributeError(name)
-        manager = self.__manager
+        manager = self._asyncopation_manager
         if manager is None:
-            raise self.__unbound(name)
-        if _is_class_data_descriptor(type(self), name):
-            # A property or slot of the class that raised: never the manager's. A plain method is
-            # only reached here through `super().__getattr__(name)`, which asks for the manager's.
-            raise AttributeError(
-                f"{type(self).__name__}.{name} raised AttributeError; it is defined on the class, "
-                f"so it is not looked up on the manager"
-            )
+            raise self._asyncopation_unbound(name)
         refuse_blocked(name)
         if dm.is_queryset_copy(manager, name):
             # `manager_method` is `getattr(self.get_queryset(), name)(...)` at call time: the
@@ -182,14 +177,24 @@ class AsyncObjects:
 
             copied.__name__ = name
             return copied
-        attribute = getattr(manager, name)
+        try:
+            attribute = getattr(manager, name)
+        except AttributeError:
+            if _is_class_data_descriptor(type(self), name):
+                # A property or slot of the class raised and the lookup fell through to here
+                # (ADR-0009 Decision 3): say so instead of blaming the manager.
+                raise AttributeError(
+                    f"{type(self).__name__}.{name} raised AttributeError, and the manager has no "
+                    f"attribute {name!r} either"
+                ) from None
+            raise
         if inspect.iscoroutinefunction(attribute) or inspect.isasyncgenfunction(attribute):
             raise _refused(manager, name, "is a coroutine or an async generator")
         if not callable(attribute) or isinstance(attribute, type):
             if _is_async_value(attribute):
                 # The manager owns it: refused, never closed or cancelled here.
                 raise _refused(manager, name, "is an awaitable or an async generator")
-            return self.__adapt(attribute, manager, django_source=False)
+            return self._asyncopation_adapt(attribute, manager, django_source=False)
         django_source = (
             name not in vars(manager)
             and getattr(attribute, "__func__", None) in dm.DJANGO_QUERYSET_SOURCES
@@ -200,19 +205,22 @@ class AsyncObjects:
             if _is_async_value(value):
                 _discard(value)
                 raise _refused(manager, name, "returned an awaitable or an async generator")
-            return self.__adapt(value, manager, django_source)
+            return self._asyncopation_adapt(value, manager, django_source)
 
         call.__name__ = name
         call.__doc__ = getattr(attribute, "__doc__", None)
         return call
 
-    def __adapt(self, value: Any, manager: Any, django_source: bool) -> Any:
+    def _asyncopation_adapt(self, value: Any, manager: Any, django_source: bool) -> Any:
         """Re-wrap what the manager handed out (ADR-0009 Decision 4): nothing sync leaks."""
         if isinstance(value, dm.BaseManager):
-            if value.model is self.__model:
-                return self.__bind(value.model, value)
-            # Another model's manager: this subclass's methods were written for our model.
-            return AsyncObjects().__bind(value.model, value)
+            if value.model is None:
+                raise TypeError(
+                    f"{type(manager).__name__} returned a manager that is not attached to a model; "
+                    f"aobjects can only re-bind a model's manager"
+                )
+            # `db_manager()`, or any manager a manager method returns (ADR-0009 Decision 4).
+            return self._asyncopation_bind(value.model, value)
         if isinstance(value, QuerySet):
             if django_source:
                 return manager_queryset(value)
@@ -221,11 +229,13 @@ class AsyncObjects:
 
 
 def _slots(cls: type) -> list[str]:
-    names: list[str] = []
-    for klass in cls.__mro__:
-        declared = vars(klass).get("__slots__", ())
-        names.extend([declared] if isinstance(declared, str) else declared)
-    return [slot for slot in names if slot not in ("__dict__", "__weakref__")]
+    """The slot names (as stored, so private ones are mangled) every class of the MRO declares."""
+    return [
+        name
+        for klass in cls.__mro__
+        for name, value in vars(klass).items()
+        if isinstance(value, MemberDescriptorType)
+    ]
 
 
 def _is_class_data_descriptor(cls: type, name: str) -> bool:

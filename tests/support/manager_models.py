@@ -80,6 +80,10 @@ class PublishedManager(ItemManager):
         """The default manager of another model."""
         return Plain._default_manager
 
+    def loose_manager(self) -> Any:
+        """A manager that was never attached to a model (its ``model`` is None)."""
+        return models.Manager()
+
 
 class AliasManager(models.Manager):
     """`published` is Django's copy of `filter` under another name (it keeps `__name__ == "filter"`)."""
@@ -234,21 +238,38 @@ class PassThroughAsyncObjects(AsyncObjects):
 
 
 class SlottedAsyncObjects(AsyncObjects):
-    """Keeps `__init__` state in a slot, not in `__dict__`."""
+    """Keeps `__init__` state in slots, not in `__dict__`: a private (mangled) one and a plain one."""
 
-    __slots__ = ("tag",)
+    __slots__ = ("__secret", "plain")
 
     def __init__(self) -> None:
         super().__init__()
-        self.tag = "tagged"
+        self.__secret = "hidden"
+        self.plain = "tagged"
+
+    def secret(self) -> str:
+        return self.__secret
 
 
 class FaultyPropertyAsyncObjects(AsyncObjects):
-    """A property whose body raises `AttributeError`; the manager has a `label` of its own."""
+    """Properties whose body raises `AttributeError`: the manager has a `label` of its own, but no
+    `missing`."""
 
     @property
     def label(self) -> str:
         raise AttributeError("internal failure")
+
+    @property
+    def missing(self) -> str:
+        raise AttributeError("internal failure")
+
+
+class DbPropertyAsyncObjects(AsyncObjects):
+    """A property over the manager's `db`, reaching it through `super().__getattr__`."""
+
+    @property
+    def db(self) -> str:
+        return "via:" + super().__getattr__("db")
 
 
 class OwnNamesAsyncObjects(AsyncObjects):
@@ -401,6 +422,12 @@ class SlottedItem(Fields):
 class FaultyItem(Fields):
     objects = PublishedManager()
     aobjects = FaultyPropertyAsyncObjects()
+
+    Meta = _meta()
+
+
+class DbItem(Fields):
+    aobjects = DbPropertyAsyncObjects()
 
     Meta = _meta()
 
@@ -579,7 +606,7 @@ async def discard_handed_out() -> None:
 
 async def cancelled_after_a_turn(future: Any) -> bool:
     """Let the loop process a cancellation, report it, then make sure the future is done."""
-    await asyncio.wait([future], timeout=1.0)
+    await asyncio.wait([future], timeout=0.1)
     cancelled = future.cancelled()
     future.cancel()
     await asyncio.gather(future, return_exceptions=True)
@@ -622,7 +649,7 @@ async def collected(obj: Any) -> list[Any]:
 
 def shares_manager(first: Any, second: Any) -> bool:
     """Whether two bound objects hold the very same manager (the private binding slot)."""
-    return first._AsyncObjects__manager is second._AsyncObjects__manager
+    return first._asyncopation_manager is second._asyncopation_manager
 
 
 def get_queryset_calls_during(call: Callable[[], Any]) -> int:

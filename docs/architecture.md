@@ -82,7 +82,7 @@ wrapper's `features`). `asyncopation.query.AsyncObjects` is the `aobjects` descr
 methods, then the evaluators, then the blocking tables of `query/queryset.py`, then the manager. A
 QuerySet method Django copied onto the manager goes straight to `aq(manager)` (recognised by the
 shared `manager_method` code object, `_django.managers`); a name the manager defines is proxied,
-its QuerySets re-wrapped, a returned `Manager` re-bound, and coroutines, async generators and
+its QuerySets re-wrapped, a returned manager (any `BaseManager`) re-bound, and coroutines, async generators and
 awaitables it defines or returns refused (`NotImplementedError`).
 
 Stage contracts: [ADR-0002](adr/0002-pipeline-contracts.md). Ported orchestration (prefetch,

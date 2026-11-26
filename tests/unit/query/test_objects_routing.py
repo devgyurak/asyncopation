@@ -297,6 +297,13 @@ def test_each_call_of_a_copied_method_runs_get_queryset_once():
     assert calls == 2
 
 
+def test_all_builds_no_queryset_clone():
+    # when
+    chains = chains_during(lambda: Plain.aobjects.all())
+    # then
+    assert chains == 0
+
+
 def test_a_copied_method_builds_one_queryset_clone():
     # when
     chains = chains_during(lambda: Plain.aobjects.filter(name="x"))
@@ -387,20 +394,25 @@ def test_db_manager_of_a_base_manager_default_is_rebound():
     assert queryset_db(rebound.all()) == "other"
 
 
-def test_a_manager_of_another_model_is_rebound_as_a_plain_async_objects():
+def test_a_manager_of_another_model_is_rebound_as_the_same_subclass():
     # when
     rebound = OwnedItem.aobjects.other_manager()
     # then
-    assert type(rebound) is AsyncObjects
+    assert type(rebound) is type(OwnedItem.aobjects)
     assert rebound.model is Plain
+
+
+def test_a_manager_attached_to_no_model_is_refused():
+    # when / then
+    with pytest.raises(TypeError, match=r"not attached to a model"):
+        OwnedItem.aobjects.loose_manager()
 
 
 # -- the aq() hook ---------------------------------------------------------------------------------
 
 
-def test_the_aq_manager_hook_is_the_name_mangled_method():
+def test_async_objects_defines_the_aq_manager_hook():
     # when
-    hook = aq_manager_hook()
+    found = has_attribute(AsyncObjects, aq_manager_hook())
     # then
-    assert hook == "_AsyncObjects__aq_manager"
-    assert has_attribute(AsyncObjects, hook) is True
+    assert found is True

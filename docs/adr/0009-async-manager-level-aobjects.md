@@ -9,6 +9,7 @@
   applied; re-review 2026-11-26: APPROVE WITH CHANGES, 4 remaining changes applied; final check
   2026-11-26 at 7eac090: APPROVE; PR #73 review changes re-reviewed 2026-11-26: APPROVE WITH
   CHANGES, 1 change applied; final: APPROVE)
+- Amended: 2026-11-26 (#72, PR #TBD) - Decision 1 (the binding helper and the binding state use the prefix `_asyncopation_`, and every `_asyncopation_` name is reserved; slots are copied by their stored names) and Decision 4 (a copied method's QuerySet is built when it is called, not when it is read; any `BaseManager` a proxied method returns is re-bound, not only a `Manager`; an awaitable or async generator stored on the manager is refused without being closed, and a returned future or task is cancelled, best effort; a manager attached to no model raises `TypeError`), new Validation items; approved by: to be confirmed in the PR review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26, changes applied; final: APPROVE)
 - Supersedes in part: [ADR-0006](0006-public-api-attachment.md) Decision 3 (the `aobjects` shape),
   the first half of its Consequences bullet on manager-only methods and its last Validation item
   (the `AsyncQuerySet` return type); ADR-0006 Decisions 1, 2, 4, 5 and 6 stay in force
@@ -126,7 +127,14 @@ class). The new requirement (async manager methods) does not change any of these
    object is made by a private `_bind(model, manager)` that copies the declared object's instance
    state (`__dict__` / slots) shallowly and sets the binding, so state a subclass sets in `__init__`
    is carried over and binding never runs `__copy__`; a `db_manager()` re-bind (Decision 4) is a
-   `_bind` of the bound object with the new manager. The declared object itself is unbound: its evaluators and
+   `_bind` of the bound object with the new manager. *Amended 2026-11-26 (#72, PR #TBD): the helper is
+   `_asyncopation_bind` and the binding state `_asyncopation_model` / `_asyncopation_manager`:
+   names with the reserved prefix `_asyncopation_`, so a subclass's own `_bind` or `_manager` (or a
+   subclass that is also called `AsyncObjects`, which name mangling would not separate) never
+   reaches the machinery; every name starting with `_asyncopation_` (the `aq()` hook
+   `_asyncopation_aq_manager` included) is reserved for the binding machinery, which is documented,
+   not checked at class creation; slots are copied by the names they are stored under, so a
+   private (`__secret`) slot is carried over too.* The declared object itself is unbound: its evaluators and
    every proxied name raise `AttributeError` ("... is not bound to a model; read it from the model
    class") without recursing; its `__getattr__` refuses dunder names and the binding slots the same
    way `AsyncQuerySet.__getattr__` does, so protocol lookups (`copy`, `pickle`) never reach the
@@ -205,7 +213,11 @@ class). The new requirement (async manager methods) does not change any of these
      `FETCH_RAISE` in place (ADR-0006 Decision 4), so `Model.aobjects.filter(...)` builds one clone,
      not the two of today's `aq(get_queryset())` path, and none more than Django's
      `Model.objects.filter(...)`. For every copied name `Model.aobjects.<name>` therefore behaves as
-     `aq(Model._default_manager).<name>` (a user QuerySet method included, chaining or not). This
+     `aq(Model._default_manager).<name>` (a user QuerySet method included, chaining or not).
+     *Amended 2026-11-26 (#72, PR #TBD): the name reads as a callable that builds `aq(manager)` each time it is called, as
+     `manager_method` calls `get_queryset()` each time: a saved `f = Model.aobjects.filter` follows
+     a `get_queryset()` that depends on the call-time context, and reading it (or `hasattr`) builds
+     no QuerySet.* This
      means the default-manager path no longer clones what `get_queryset()` returns: ADR-0006
      Decision 4's assumption that a real `Manager.get_queryset()` returns a fresh QuerySet (a
      shared one that is not `FETCH_RAISE` gets `FETCH_RAISE` set on it in place) now applies to
@@ -220,7 +232,13 @@ class). The new requirement (async manager methods) does not change any of these
      Otherwise it is proxied, and its result is handled as follows:
      - an awaitable (a sync method returning `self.filter(...).acount()`, Django's `sync_to_async`
        coroutine) is closed when it has `close()` (it has not started, so no thread has) and
-       `NotImplementedError` is raised;
+       `NotImplementedError` is raised; *Amended 2026-11-26 (#72, PR #TBD): a returned `asyncio`
+       future or task is cancelled, best effort: a task the call just created has not run a step,
+       but work already handed to an executor, or a task the method shares, may already have run,
+       and a shared one is cancelled for its other awaiters too (a thread started that way is
+       started by user code, not by `src/`); a call result is treated as the caller's, while an
+       awaitable or async generator that is an attribute of the manager (not a call result) is
+       refused without being closed, because the manager owns it;*
      - an async generator (`inspect.isasyncgen`; a sync method returning
        `self.get_queryset().aiterator()`, Django's `sync_to_async` iteration) is not an awaitable
        but is refused the same way: `NotImplementedError` is raised without iterating it (it has
@@ -231,7 +249,9 @@ class). The new requirement (async manager methods) does not change any of these
        method, an `all()` override included, is a clone unless its result cache is filled;
      - a `Manager` (`db_manager()`) is re-bound: a copy of the manager-level object (Decision 1)
        bound to that manager and its model, so `Model.aobjects.db_manager("other")` keeps the
-       subclass methods;
+       subclass methods; *Amended 2026-11-26 (#72, PR #TBD): this covers every `BaseManager`, so a default manager built
+       with `BaseManager.from_queryset(...)`, which is not a `Manager`, is re-bound too; a manager
+       attached to no model (`model is None`) cannot be bound and raises `TypeError`;*
      - anything else (`db`, `deconstruct()`, `check()`, a `RawQuerySet` a user method returns) is
        returned as it is.
    No sync `Manager`, unwrapped `QuerySet` or Django coroutine leaks through the proxy. Routing
@@ -416,3 +436,16 @@ Implemented in the follow-up issue to #69 (PR 2); every item below is a test the
 - e2e: the existing `/aopt` scenarios pass unchanged.
 - bench: `make bench-micro` on the `asyncopation.*` cases that use `aobjects` shows the expected
   gain (one QuerySet clone fewer per read) and no regression.
+- *Amended 2026-11-26 (#72, PR #TBD):* unit (`tests/unit/query/test_objects_routing.py`,
+  `test_objects_refusals.py`, `test_objects_subclass.py`): copies are lazy
+  (`test_reading_a_copied_method_runs_no_get_queryset`,
+  `test_hasattr_of_a_copied_method_runs_no_get_queryset`,
+  `test_each_call_of_a_copied_method_runs_get_queryset_once`); any `BaseManager` is re-bound
+  (`test_db_manager_of_a_base_manager_default_is_rebound`,
+  `test_a_manager_of_another_model_is_rebound_as_the_same_subclass`) and one attached to no model
+  is refused (`test_a_manager_attached_to_no_model_is_refused`); a stored async value is refused
+  without being closed and a returned one is discarded
+  (`test_a_coroutine_stored_as_a_manager_attribute_is_not_closed`,
+  `test_a_future_returned_by_a_sync_manager_method_is_cancelled`); private names and slots
+  (`test_a_subclass_reusing_a_private_name_*`, `test_a_same_named_subclass_with_a_private_attribute_*`,
+  `test_a_bound_object_carries_a_private_slot_its_subclass_set_in_init`).

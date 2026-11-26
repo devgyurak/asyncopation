@@ -156,44 +156,130 @@ def test_a_drift_step_without_a_key_is_a_problem(tmp_path, key):
     assert is_single_problem(problems, f"jobs.django-main.django-drift: {key} is '<missing>'")
 
 
+_PG = ["postgresql"]
+
+
 @pytest.mark.parametrize(
-    ("job", "key", "value"),
+    ("job", "key", "value", "label"),
     [
-        ("integration", "if", "${{ false }}"),
-        ("integration", "defaults", {"run": {"shell": "true {0}"}}),
-        ("integration", "continue-on-error", True),
-        ("integration", "needs", "other"),
-        ("integration", "strategy", {"fail-fast": True, "matrix": {"db": ["postgresql"]}}),
-        ("integration", "strategy", {"fail-fast": False, "matrix": {"include": [{"db": "x"}]}}),
-        ("integration", "strategy", {"fail-fast": False, "matrix": {"exclude": [{"db": "x"}]}}),
-        ("django-main", "if", "${{ false }}"),
-        ("django-main", "defaults", {"run": {"shell": "true {0}"}}),
-        ("django-main", "continue-on-error", False),
-        ("django-main", "needs", "other"),
-        ("django-main", "strategy", {"fail-fast": False}),
-    ],
-    ids=[
-        "integration-if",
-        "integration-defaults",
-        "integration-continue-on-error",
-        "integration-needs",
-        "integration-fail-fast",
-        "integration-matrix-include",
-        "integration-matrix-exclude",
-        "canary-if",
-        "canary-defaults",
-        "canary-continue-on-error-false",
-        "canary-needs",
-        "canary-strategy",
+        pytest.param("integration", "if", "${{ false }}", "if", id="integration-if"),
+        pytest.param(
+            "integration",
+            "defaults",
+            {"run": {"shell": "true {0}"}},
+            "defaults",
+            id="integration-defaults",
+        ),
+        pytest.param(
+            "integration",
+            "continue-on-error",
+            True,
+            "continue-on-error",
+            id="integration-continue-on-error",
+        ),
+        pytest.param("integration", "needs", "other", "needs", id="integration-needs"),
+        pytest.param(
+            "integration",
+            "strategy",
+            {"fail-fast": True, "matrix": {"db": _PG}},
+            "strategy.fail-fast",
+            id="integration-fail-fast",
+        ),
+        pytest.param(
+            "integration",
+            "strategy",
+            {"fail-fast": False, "matrix": {"db": _PG, "include": [{"db": "x"}]}},
+            "strategy.matrix.include",
+            id="integration-matrix-include",
+        ),
+        pytest.param(
+            "integration",
+            "strategy",
+            {"fail-fast": False, "matrix": {"db": _PG, "exclude": [{"db": "x"}]}},
+            "strategy.matrix.exclude",
+            id="integration-matrix-exclude",
+        ),
+        pytest.param(
+            "integration",
+            "strategy",
+            {"fail-fast": False, "matrix": {"db": ["mysql", "mariadb"]}},
+            "strategy.matrix.db has postgresql",
+            id="integration-matrix-without-postgresql",
+        ),
+        pytest.param(
+            "integration",
+            "strategy",
+            {"fail-fast": False, "matrix": {"python": ["3.12"]}},
+            "strategy.matrix.db has postgresql",
+            id="integration-matrix-without-db",
+        ),
+        pytest.param(
+            "integration",
+            "env",
+            {"PYTEST_ADDOPTS": "-k nothing"},
+            "env.PYTEST_ADDOPTS",
+            id="integration-pytest-addopts",
+        ),
+        pytest.param("django-main", "if", "${{ false }}", "if", id="canary-if"),
+        pytest.param(
+            "django-main",
+            "defaults",
+            {"run": {"shell": "true {0}"}},
+            "defaults",
+            id="canary-defaults",
+        ),
+        pytest.param(
+            "django-main",
+            "continue-on-error",
+            False,
+            "continue-on-error",
+            id="canary-continue-on-error",
+        ),
+        pytest.param("django-main", "needs", "other", "needs", id="canary-needs"),
+        pytest.param(
+            "django-main",
+            "strategy",
+            {"fail-fast": False},
+            "strategy.fail-fast",
+            id="canary-strategy",
+        ),
+        pytest.param(
+            "django-main",
+            "env",
+            {"PYTEST_ADDOPTS": "-k nothing"},
+            "env.PYTEST_ADDOPTS",
+            id="canary-pytest-addopts",
+        ),
     ],
 )
-def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value):
+def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value, label):
     # given
     workflow = write_workflow(tmp_path / "ci.yml", jobs={job: {key: value}})
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert is_single_problem(problems, f"jobs.{job}: ")
+    assert is_single_problem(problems, f"jobs.{job}: {label} is ")
+
+
+def test_a_matrix_without_postgresql_is_a_problem(tmp_path):
+    # given
+    matrix = {"fail-fast": False, "matrix": {"db": ["mysql"], "python": ["3.12"]}}
+    workflow = write_workflow(tmp_path / "ci.yml", jobs={"integration": {"strategy": matrix}})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert is_single_problem(
+        problems, "jobs.integration: strategy.matrix.db has postgresql is False"
+    )
+
+
+def test_pytest_addopts_in_the_workflow_env_is_a_problem(tmp_path):
+    # given
+    workflow = write_workflow(tmp_path / "ci.yml", top={"env": {"PYTEST_ADDOPTS": "-k nothing"}})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert is_single_problem(problems, "workflow env.PYTEST_ADDOPTS is ")
 
 
 @pytest.mark.parametrize(
@@ -218,7 +304,10 @@ def test_a_dropped_drift_job_key_is_a_problem(tmp_path, job, key):
         (
             "integration",
             "strategy",
-            {"fail-fast": False, "matrix": {"db": ["postgresql"], "python": ["3.12", "3.15"]}},
+            {
+                "fail-fast": False,
+                "matrix": {"db": ["postgresql", "mysql"], "python": ["3.12", "3.15"], "x": [1]},
+            },
         ),
         ("django-main", "name", "another"),
         ("django-main", "env", {"X": "y"}),

@@ -46,8 +46,8 @@ CANARY_STEP: dict[str, Any] = {
     "env": _REQUIRE_MYSQLDB,
     "run": f'uv run --no-sync pytest {DRIFT_DIR} tests/unit/compile -m "not django_pin"',
 }
-# (job, expected step, the `run:` of the step right before it or None, expected job keys besides
-# `name` and `steps`). The canary's premise is that the drift step runs right after Django main is
+# (job, expected step, the `run:` of the step right before it or None, expected job keys (only those
+# in `_guarded_job_keys` are compared)). The canary's premise is that the drift step runs right after Django main is
 # installed; its job is allowed to fail (`continue-on-error`), the integration job is not.
 DRIFT_STEPS: tuple[tuple[str, dict[str, Any], str | None, dict[str, Any]], ...] = (
     (
@@ -127,8 +127,10 @@ _GUARDED_JOB_KEYS = ("if", "defaults", "continue-on-error", "needs")
 
 def _guarded_job_keys(job: dict[str, Any]) -> dict[str, Any]:
     """The job keys that can skip or neuter the drift step: ``if``, ``defaults``,
-    ``continue-on-error``, ``needs``, ``strategy.fail-fast`` and ``strategy.matrix.include`` /
-    ``exclude`` (the rest of the job, such as the matrix values and ``env``, is not looked at)."""
+    ``continue-on-error``, ``needs``, ``strategy.fail-fast``, ``strategy.matrix.include`` /
+    ``exclude``, a derived ``strategy.matrix.db has postgresql`` (the integration drift step runs
+    only for ``matrix.db == 'postgresql'``) and ``env.PYTEST_ADDOPTS`` (pytest merges it). The rest
+    of the job, such as the other matrix values and ``env`` variables, is not looked at."""
     strategy = job.get("strategy")
     strategy = strategy if isinstance(strategy, dict) else {}
     matrix = strategy.get("matrix")
@@ -138,6 +140,14 @@ def _guarded_job_keys(job: dict[str, Any]) -> dict[str, Any]:
     guarded |= {
         f"strategy.matrix.{key}": matrix[key] for key in ("include", "exclude") if key in matrix
     }
+    if "db" in matrix:
+        databases = matrix["db"]
+        guarded["strategy.matrix.db has postgresql"] = (
+            isinstance(databases, list) and "postgresql" in databases
+        )
+    env = job.get("env")
+    if isinstance(env, dict) and "PYTEST_ADDOPTS" in env:
+        guarded["env.PYTEST_ADDOPTS"] = env["PYTEST_ADDOPTS"]
     return guarded
 
 
@@ -148,7 +158,7 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
     any other key (``if``, ``continue-on-error``, ``working-directory``, ``shell``, ``with``, ...)
     must be exactly as expected, so no shell parsing is needed. Of the job only the keys that can skip
     or neuter the step are compared (see ``_guarded_job_keys``; adding a matrix value or a job
-    ``env`` variable is benign), a workflow-level ``defaults`` is a problem, and the canary's drift
+    ``env`` variable is benign), a workflow-level ``defaults`` or ``env.PYTEST_ADDOPTS`` is a problem, and the canary's drift
     step must follow the Django main install step directly (intended: the canary's premise is that
     Django main is installed right before). Steps after the drift step and other top-level keys are
     free. Empty when nothing differs.
@@ -157,6 +167,11 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
     problems: list[str] = []
     if isinstance(document, dict) and "defaults" in document:
         problems.append(f"workflow defaults is {document['defaults']!r}, expected {_MISSING!r}")
+    top_env = document.get("env") if isinstance(document, dict) else None
+    if isinstance(top_env, dict) and "PYTEST_ADDOPTS" in top_env:
+        problems.append(
+            f"workflow env.PYTEST_ADDOPTS is {top_env['PYTEST_ADDOPTS']!r}, expected {_MISSING!r}"
+        )
     for job, expected_step, previous_run, expected_job in DRIFT_STEPS:
         step = find_step(workflow, job, expected_step["id"])
         steps = document["jobs"][job]["steps"]

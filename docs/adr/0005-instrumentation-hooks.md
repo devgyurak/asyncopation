@@ -5,6 +5,7 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-26 (#4, PR #74) - Decision preamble (subscribers live in `connection.hooks`, not the `(alias, loop)` registry), Decision 1 (event type `QueryEvent`; `query_started` fires after the connection is acquired, right before the driver call, a call that never reaches the driver emits nothing, pinned `queue_time` is 0; subscribers snapshotted at call start and `query_finished` delivered to that snapshot; rowcount per call; descriptive SQL of transaction control; `many` only for `execute_many`; failing observers logged with the event name while a `BaseException` from an observer propagates after the other observers got the event (one from `query_started` stops the call and still delivers `query_finished`; it never breaks a pinned transaction (except a cancellation leaving the block of an open pinned stream, which reaches the driver), which learns what the driver itself did from a per-call `Outcome`, and a control call it stopped before the driver changes no transaction state; on a failed call it becomes a note on the original, and further `BaseException`s of the same event become notes on the first); an observer returning an awaitable is logged and never awaited; `query_time` excludes the time of `query_started` observers), Decision 2 (SAVEPOINT event text is descriptive), Decision 3 (what a stream `error` is; `GeneratorExit` and consumer errors are a normal close; stream `query_time` runs from open to close), Decision 5 (parameters per observer opt-in `observe(fn, params=True)` or `settings.DEBUG`, unconfigured settings counting as off; never to observers that did not opt in), Decision 6 (`observe()` is a single-use context manager - re-entry raises `RuntimeError`, a coroutine function `TypeError` (also from `add_observer`) - whose exit removes its registration by identity and marks it exited instead of a token reset, so a task started inside the block reports to it only until the block exits; global `add_observer` / `remove_observer` in `asyncopation.connection`, a startup-time call); Validation (scope of "a failing observer": raising an `Exception`; an exception an observer raises never breaks a transaction) and new Validation items (snapshot, params opt-in, pool timeout, scope isolation, bench-micro `hooks.*` cases with 0 observers); approved by: maintainer (@devgyurak), 2026-11-26 (the three clarifications of Decisions 1 and 5: start timing, snapshot, params opt-in; all other items - rowcount and the other details from the architect design check, the preamble relocation, the `BaseException` semantics (including a `query_started` observer stopping the call), `query_time` excluding observer time, the awaitable-returning observer, `DEBUG` off for unconfigured settings, the Decision 6 exit semantics (no token reset; a task started inside the block stops reporting when it exits) and the per-call `Outcome` semantics (an observer's exception never breaks a pinned transaction; a BEGIN / COMMIT / ROLLBACK an observer stopped before the driver changes no transaction state; later `BaseException`s of the same event, and those raised on a failed call, become notes) - to be confirmed in the PR #74 review); architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26, final PR #74 text, replacing the earlier verdict whose changes were applied): Decision 2 mark PR #72 -> #74; add the Outcome semantics (observer exceptions never break a pinned transaction, a stopped control call changes no transaction state, later BaseExceptions become notes) to the "to be confirmed" list (changes applied)
+- Amended: 2026-11-26 (#4, PR #75) - Decision 1 (the bounded-queue observer is `QueueObserver(maxsize=1000)`: drops the incoming event when full and counts it, bound to the loop it was created in), Decision 4 (dispatch on `context["method"]`, context keys `alias` / `method` / `pinned`; order: global outside scoped, first registered outermost; streams and transaction control including savepoints not interceptable; observers wrap the chain - original SQL, times include the interceptors, rowcount from the returned result; the connection is acquired before the chain runs; `TypeError` for a `many` / method mismatch, a non-awaitable interceptor result or a wrong result type; `ConcurrentQueryError` for an `execute` call from another task, `RuntimeError` for one after the query, a sequential retry allowed; a `context["method"]` change only between `execute` and `execute_many`, refused before the driver; an interceptor's exception or cancellation never breaks a pinned transaction, while a driver failure an interceptor swallowed still does), Decision 6 (`intercept()` and `add_interceptor` / `remove_interceptor` follow `observe()` / `add_observer`; observers and interceptors share the tuples, so the fast path stays two checks) and a new Validation item (interceptor cancellation before / after `execute` inside a transaction); approved by: maintainer (@devgyurak), 2026-11-26 (scope: interceptors and the bounded-queue observer in this second PR of #4; the details listed here to be confirmed in the PR #75 review); architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26): the innermost execute is confined to the task running the query (ConcurrentQueryError from another task, test added) and Decision 4 / header / Validation say so, sequential retry allowed; QueueObserver async-for never ends (changes applied)
 
 ## Context
 `asyncopation.testing` (top layer) needs to capture executed SQL (`assert_num_queries`, issue
@@ -43,6 +44,12 @@ since an observer is not tied to an alias or a loop):
    Events: `query_started` / `query_finished` with `alias, kind (query | transaction), sql, params,
    many, rowcount, error, queue_time, query_time, total_time`. Exceptions in observers are logged,
    never propagated. Async consumers use a provided bounded-queue observer they drain themselves.
+   *Amended 2026-11-26 (#4, PR #75):* `asyncopation.connection.QueueObserver(maxsize=1000)`,
+   registered like any observer; when its queue is full the incoming event is dropped and counted
+   in `dropped` (it never blocks or schedules); it is bound to the event loop it was created in
+   (created inside the running loop), and an event delivered from another loop is dropped and
+   counted. It has `get()`, `get_nowait()` and `async for` (which never ends by itself: break out
+   or cancel the consumer).
    *Amended 2026-11-26 (#4, PR #74):* both events are one frozen `QueryEvent` (field `name` is
    `query_started` or `query_finished`; times in seconds from `time.perf_counter`; a started event
    has `rowcount`, `error`, `query_time` and `total_time` set to `None`). `query_started` fires
@@ -84,7 +91,27 @@ since an observer is not tied to an alias or a loop):
 4. **Interceptors** are an async chain with Django's signature `wrapper(execute, sql, params, many,
    context)`; `execute` returns the driver result (`list[tuple]` or `ExecResult`). Returning without
    calling `execute` suppresses the query with a supplied result (test doubles). Streams are not
-   interceptable in v1.
+   interceptable in v1. *Amended 2026-11-26 (#4, PR #75):* they wrap `fetch_all`, `execute` and
+   `execute_many`; streams and transaction control, savepoints included (the driver API takes no SQL
+   for them), are not interceptable in v1. `context` is `{"alias", "method", "pinned"}` and the
+   innermost `execute(sql, params, many, context)` runs the driver method named in
+   `context["method"]`: a `many` that does not match it, a method that is not interceptable, an
+   interceptor that returns a non-awaitable, and a chain result that is not a `list` (`fetch_all`)
+   / `ExecResult` raise `TypeError`. The innermost `execute` must be awaited in the task running
+   the query: a call from another task (which is also the only way two calls could overlap) raises
+   `ConcurrentQueryError` (ADR-0001 owner rule; the connection never outlives the chain), and a
+   call after the query is over raises `RuntimeError`; a sequential retry is allowed (a driver
+   failure of an earlier attempt still breaks a pinned transaction). An interceptor may change
+   `context["method"]` only to a method with the caller's result type (`execute` <->
+   `execute_many`); any other change raises `TypeError` before the driver is called. Global interceptors run outside scoped ones; within each, the first
+   registered is the outermost (Django's `execute_wrappers` order). The connection is acquired
+   before the chain runs (as in Django), so an interceptor that awaits holds it, and test doubles
+   still need a driver (`RecordingDriver`). Observers wrap the whole chain: a suppressed or
+   rewritten query still emits both events with the caller's SQL, `queue_time` / `query_time`
+   include the interceptors' time and `rowcount` follows the result the chain returned. An
+   exception or cancellation raised by an interceptor while the driver is not running never marks
+   a pinned transaction broken (the per-call `Outcome` of Decision 1 records only the driver's own
+   failure); a driver failure an interceptor catches and replaces with a result still does.
 5. **Parameters** are included in events only when `settings.DEBUG` is true or capture explicitly
    requests them (secrets in logs). *Amended 2026-11-26 (#4, PR #74):* the request is per observer,
    `observe(fn, params=True)` (or `add_observer(fn, params=True)`); an observer that did not opt in
@@ -105,7 +132,10 @@ since an observer is not tied to an alias or a loop):
    `asyncopation.connection`: a startup-time call, like `configure`, that replaces an immutable
    module-level tuple without a lock (`remove_observer` matches the function by equality, most
    recent registration first). Only `observe` (and `intercept`) are re-exported at the package
-   root.
+   root. *Amended 2026-11-26 (#4, PR #75):* `intercept(fn)` is the same single-use context manager
+   and `add_interceptor(fn)` / `remove_interceptor(fn)` the same global registration (in
+   `asyncopation.connection`); observers and interceptors share the two tuples, so the
+   zero-subscriber path stays two empty-tuple checks.
 7. `asyncopation.testing` is built only on these APIs. Materialization (`decode`) timing is not part
    of v1 events.
 
@@ -132,3 +162,9 @@ and scoped), benchmarked.
   scoped observers reach `gather` children, and an `observe()` inside a child reaches neither the
   parent nor a sibling. bench-micro: the `hooks.*` executor cases on a `RecordingDriver` with 0
   observers are within noise of the hook-free baseline.
+- *Amended 2026-11-26 (#4, PR #75), added:* unit: inside `pin` + `begin()`, an interceptor that
+  raises or is cancelled before calling `execute`, and one cancelled after `execute` returned, leave
+  the transaction unbroken and `rollback()` sends ROLLBACK; a driver cancellation inside the chain
+  still breaks it, also when an interceptor swallows it; an interceptor that runs `execute` in
+  another task gets `ConcurrentQueryError` and the connection is not used after the chain
+  returned.

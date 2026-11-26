@@ -268,7 +268,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 - [x] Test model set (FK, O2O, M2M, reverse FK, GenericForeignKey, composite pk, many field types) - `harness/catalog`
 - [x] Differential test runner: run the same QuerySet sync / async and compare results (instance fields, order, types) - `tests/support/differential.py`
 - [x] Hypothesis QuerySet strategies (filter / exclude / order_by / select_related / slicing / annotate / reverse-FK editions / only() and defer()) - `tests/support/strategies.py`
-- [ ] Async query capture utility (async `assertNumQueries`, executed SQL log) - needs the driver instrumentation hook from Phase 1 (#9, blocked by #4)
+- [ ] Async query capture utility (async `assertNumQueries`, executed SQL log) - built on the driver instrumentation hook from Phase 1 (#9; the hook is #4, PR #74 / #75)
 - [x] CI matrix: PostgreSQL / MySQL / MariaDB x supported Django versions (+ Django main canary)
 - [x] E2E harness (uvicorn + harness site) and benchmark harness (micro + k6)
 
@@ -280,7 +280,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 - [x] Compile-only `DatabaseWrapper` (PostgreSQL) + synchronous `compile_scope` swap (#3, ADR-0008); MySQL/MariaDB composed wrapper (`compile.mysql`, #6, PR #68; asyncmy driver, probe and engine registration -> #7)
 - [x] Preload server info asynchronously -> inject into the compile-only connection (PostgreSQL; #5, ADR-0004; MySQL/MariaDB probe -> #7)
 - [x] Executors and connection ownership: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, broken-transaction state, `close()` waiting for pins and streams (#5, ADR-0001; `async_atomic` -> #19, pool sizing -> #8, hooks -> #4)
-- [ ] Driver query instrumentation hook (#4, ADR-0005): observers - `QueryEvent`, `asyncopation.observe()` scoped to a task tree, `add_observer()` / `remove_observer()`, fired at the executors' `_run`, zero-subscriber micro-bench (`hooks.*`) - done in PR #74; interceptors (`intercept()`) and the bounded-queue observer follow in the second PR of #4
+- [x] Driver query instrumentation hook (#4, ADR-0005): observers - `QueryEvent`, `asyncopation.observe()` scoped to a task tree, `add_observer()` / `remove_observer()`, fired at the executors' `_run`, zero-subscriber micro-bench (`hooks.*`) - PR #74; interceptors (`asyncopation.intercept()`, `add_interceptor()` / `remove_interceptor()`) and the bounded-queue `QueueObserver` - PR #75
 - [x] hstore/citext type registration in the PostgreSQL driver when `django.contrib.postgres` is installed (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] Pin the asgiref version and `Local(thread_critical=True)` semantics `compile_scope` relies on in the drift suite (ledger `[[dependency]]` row, `asgiref>=3.13`; #49, ADR-0008)
 - [x] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`) on PostgreSQL, with `aget` / `afirst` / `acount` / `aexists` / `async for`, the `aobjects` descriptor and the sans-I/O runner with the `get_aggregation` / `has_results` cores (#6, PR #67; MySQL/MariaDB with the MySQL wrapper, #6, PR #68 / #7)

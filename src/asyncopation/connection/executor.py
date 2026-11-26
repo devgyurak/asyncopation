@@ -397,12 +397,17 @@ class PinnedExecutor:
         subscribers = hooks.active()
         outcome = hooks.Outcome() if subscribers else None
         try:
-            return await _run(
+            result = await _run(
                 connection, subscribers, self._alias, None, kind, sql, params, outcome=outcome
             )
         except BaseException as exc:
             self._driver_failed(exc, outcome)
             raise
+        else:
+            if outcome is not None and outcome.failure is not None:
+                # An interceptor swallowed the driver's failure: the connection still saw it.
+                self._statement_failed(outcome.failure)
+            return result
         finally:
             self._busy = False
 

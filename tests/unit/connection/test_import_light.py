@@ -26,6 +26,11 @@ from tests.support.lifecycle_scripts import (
         pytest.param("import asyncopation.connection.lifecycle", id="lifecycle"),
         pytest.param("import asyncopation.connection.hooks", id="hooks"),
         pytest.param("import asyncopation; asyncopation.observe", id="lazy-observe"),
+        pytest.param("import asyncopation; asyncopation.intercept", id="lazy-intercept"),
+        pytest.param(
+            "import asyncopation.connection as c; c.intercept; c.QueueObserver",
+            id="interceptor-reexports",
+        ),
         pytest.param("import asyncopation; asyncopation.setup; asyncopation.close", id="lazy-api"),
         pytest.param(
             "import asyncopation.connection as c; c.setup; c.close; c.configure", id="reexports"
@@ -142,6 +147,28 @@ def test_observe_is_listed_in_the_package_all_without_loading_the_hooks_module()
     # when
     ran = run_isolated(
         asyncopation_modules_script("import asyncopation; assert 'observe' in asyncopation.__all__")
+    )
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "['asyncopation', 'asyncopation.errors']")
+
+
+def test_accessing_intercept_on_the_package_loads_the_hooks_module():
+    # when
+    ran = run_isolated(
+        module_loaded_script(
+            "import asyncopation; asyncopation.intercept", "asyncopation.connection.hooks"
+        )
+    )
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "True")
+
+
+def test_intercept_is_listed_in_the_package_all_without_loading_the_hooks_module():
+    # when
+    ran = run_isolated(
+        asyncopation_modules_script(
+            "import asyncopation; assert 'intercept' in asyncopation.__all__"
+        )
     )
     # then
     assert (ran.returncode, ran.stdout) == (0, "['asyncopation', 'asyncopation.errors']")

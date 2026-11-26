@@ -4,7 +4,7 @@ Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
 the recording driver, and so are the executors (borrowed/pinned connection ownership, #5), the first read path
 (`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6) and the
-query observers (`observe`, `add_observer`; #4, ADR-0005); the
+query observers and interceptors (`observe`, `intercept`, `QueueObserver`; #4, ADR-0005); the
 MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0005, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
@@ -236,6 +236,19 @@ observer stopped before the driver changes no transaction state. `params` is in 
 registered with `params=True`, or for all while `settings.DEBUG` is true. `bench/hooks_micro.py`
 (the `hooks.*` cases of `make bench-micro`) times the executors on a `RecordingDriver` with 0 and 1
 observers.
+
+Interceptors (`with asyncopation.intercept(fn):`, `add_interceptor` / `remove_interceptor`) share
+the subscriber tuples with the observers, so the zero-subscriber path is unchanged. For an
+interceptable call (`fetch_all`, `execute`, `execute_many`; not streams or transaction control)
+`hooks.observed_call` builds an async chain in Django's `execute_wrapper` shape - global
+interceptors outside scoped ones, the first registered outermost - whose innermost `execute`
+(`_Chain`) runs the driver method named in `context["method"]`, rejects a concurrent or late call
+and records the driver's own failure in the `Outcome`. Observers wrap the chain, so a suppressed
+or rewritten query still emits both events with the caller's SQL. An interceptor's exception or
+cancellation never breaks a pinned transaction; a driver failure an interceptor swallowed still
+does (the pinned executor checks the `Outcome` after a successful return too).
+`hooks.QueueObserver` is the bounded-queue observer for async consumers: bound to the loop it was
+created in, it drops (and counts) events when full instead of blocking.
 
 ## Lifecycle
 

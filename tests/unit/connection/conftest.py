@@ -162,8 +162,8 @@ async def held_close(execenv: ExecEnv) -> AsyncIterator[ClosingScenario]:
 
 @pytest.fixture(autouse=True)
 def no_global_observer_left() -> Iterator[None]:
-    """A test must remove every global observer it added (ADR-0005); leftovers are cleared and
-    fail the test, so they cannot leak into later tests."""
+    """A test must remove every global observer and interceptor it added (ADR-0005; both share the
+    global tuple); leftovers are cleared and fail the test, so they cannot leak into later tests."""
     yield
     left = global_observers_left()
-    assert left == (), f"global observers left registered by the test: {left}"
+    assert left == (), f"global observers or interceptors left registered by the test: {left}"

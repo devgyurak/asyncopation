@@ -413,7 +413,7 @@ signatures = { _check_ordering_first_last_queryset_aggregation = "(self, method)
 owner = "django.db.models.query.QuerySet"
 names = ["_chain"]
 used_by = ["src/asyncopation/_django/query.py"]
-reason = "Called by `get_clone` for a combinator, exactly where QuerySet.get() calls it (not `all()`, which a QuerySet subclass may override to return itself): the clone `aget` limits and makes FETCH_RAISE must never be the wrapper's own QuerySet"
+reason = "Called by `get_clone` for a combinator, exactly where QuerySet.get() calls it (not `all()`, which a QuerySet subclass may override to return itself): the clone `aget` limits and makes FETCH_RAISE must never be the wrapper's own QuerySet. Also the fallback of `_own_clone`, which `get_clone` (after `filter()`) and `first_queryset` (after `order_by('pk')`) use when a subclass returns the shared QuerySet itself"
 verified_against = "6.1.3"
 signatures = { _chain = "(self)" }
 

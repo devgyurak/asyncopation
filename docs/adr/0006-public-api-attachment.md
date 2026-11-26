@@ -246,8 +246,9 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   QuerySet or one without default ordering is returned unchanged; integration
   (`tests/integration/test_alist_prefetched_manager.py`):
   `test_a_relation_of_an_instance_an_engine_built_clone_loads_is_blocked` and
-  `test_an_instance_an_engine_built_clone_loads_is_fetch_raise` (`aget` and a querying `afirst`
-  over a prefetched manager, an evaluated QuerySet and `none() | evaluated`), and
+  `test_an_instance_an_engine_built_clone_loads_is_fetch_raise` (`aget` over a prefetched
+  manager, an evaluated QuerySet and `none() | evaluated`, and a querying `afirst` over the last
+  two), and
   `test_an_instance_read_from_the_shared_cache_keeps_its_fetch_mode` (`alist`, `async for`, an
   ordered `afirst`).
 - *Amended 2026-11-26 (#6, PR #67):* integration

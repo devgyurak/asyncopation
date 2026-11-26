@@ -6,8 +6,6 @@ Also reads the canary's drift step out of ``.github/workflows/ci.yml``.
 from __future__ import annotations
 
 import os
-import re
-import shlex
 import subprocess
 import sys
 from functools import cache
@@ -28,127 +26,24 @@ PIN_TESTS = frozenset(
 ASGIREF_VERSION_TEST = (
     f"{LEDGER_MODULE}::test_installed_dependency_is_the_version_the_ledger_was_verified_against"
 )
-CANARY_JOB = "django-main"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
-
-
-_COMMENT = re.compile(r"(^|\s)#.*")
-# A lone ``&`` is a separator; the ``&`` of ``2>&1`` and ``&>`` is a redirection.
-_SEPARATORS = re.compile(r"(&&|\|\||\|&|[;|]|(?<!>)&(?!>))")
-_SEPARATOR_TOKENS = frozenset({"&&", "||", "|&", ";", "|", "&"})
-# A redirection operator on its own (``>``, ``>>``, ``2>``, ``&>``, ``>&``, ``<``): the next token is
-# a file, not an argument.
-_REDIRECTION = re.compile(r"^(\d*|&)?[<>]{1,2}&?$")
-
-
-def _strip_comment(line: str) -> str:
-    """The line without a trailing comment: a ``#`` that starts a word outside quotes cuts the rest.
-
-    Known limit: a line with an unterminated quote (an apostrophe in an ``echo``) is not scanned
-    for quotes, so a quoted `` #`` on that same line is taken as a comment.
-    """
-    quote = ""
-    escaped = False
-    for index, char in enumerate(line):
-        if escaped:
-            escaped = False
-        elif char == "\\" and quote != "'":
-            escaped = True
-        elif quote:
-            quote = "" if char == quote else quote
-        elif char in "'\"":
-            quote = char
-        elif char == "#" and (index == 0 or line[index - 1].isspace()):
-            return line[:index]
-    return _COMMENT.sub("", line) if quote else line
-
-
-def _logical_lines(command: str) -> list[str]:
-    """The lines of a command with backslash continuations joined and comments cut.
-
-    A comment ends at its newline: a backslash at the end of a comment does not continue it. The
-    comment cut sees the joined line, so ``#`` right after a continuation is part of a word.
-    """
-    lines: list[str] = []
-    carry = ""
-    for raw in command.splitlines():
-        line = _strip_comment(carry + raw)
-        trailing = len(line) - len(line.rstrip("\\"))
-        if trailing % 2 == 1:
-            carry = line[:-1]
-            continue
-        lines.append(line)
-        carry = ""
-    return [*lines, carry] if carry else lines
-
-
-def _line_tokens(line: str) -> list[str]:
-    try:
-        lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        return list(lexer)
-    except ValueError:
-        return _SEPARATORS.sub(r" \1 ", line).split()
-
-
-def _tokens(command: str) -> list[str]:
-    """Shell-like tokens of a command, with ``&&``, ``;``, ``|`` ... and a newline as tokens of
-    their own (a newline ends a command like ``;`` does).
-
-    A ``#`` that starts a word and is not quoted cuts the rest of its line, on both paths (a line
-    with unbalanced quotes falls back to a plain split), so a commented-out ``pytest`` line is never
-    a drift step, ``-k 'a #b'`` keeps its argument and ``a#b`` is one word.
-    """
-    tokens: list[str] = []
-    for line in _logical_lines(command):
-        tokens += [*_line_tokens(line), ";"]
-    return tokens
-
-
-def _is_drift_folder(token: str) -> bool:
-    return token.rstrip("/").removeprefix("./") == DRIFT_DIR
-
-
-def _arguments(segment: list[str]) -> list[str]:
-    """The tokens after ``pytest`` in a segment, without redirection operators and their files."""
-    after = segment[segment.index("pytest") + 1 :]
-    return [
-        token
-        for index, token in enumerate(after)
-        if not _REDIRECTION.match(token) and not (index and _REDIRECTION.match(after[index - 1]))
-    ]
-
-
-def _pytest_segments(tokens: list[str]) -> list[list[str]]:
-    """The arguments after ``pytest`` in each command segment that runs it."""
-    segments: list[list[str]] = [[]]
-    for token in tokens:
-        if token in _SEPARATOR_TOKENS:
-            segments.append([])
-        else:
-            segments[-1].append(token)
-    return [_arguments(segment) for segment in segments if "pytest" in segment]
-
-
-def runs_drift_folder(command: str) -> bool:
-    """Whether a shell command runs ``pytest`` with the drift folder as one of its arguments.
-
-    Token based and scoped to the command segment (split on ``&&``, ``||``, ``;``, ``|``, ``|&``,
-    ``&`` and a newline) that contains a ``pytest`` token: options between ``pytest`` and the path
-    (``pytest -q tests/unit/django_drift``), a trailing slash and a ``./`` prefix match, while a
-    longer folder name (``..._x``), a path outside the repository (``../...``, ``/abs/...``), a
-    comment, a redirection target and a path in another segment do not.
-
-    Known limits, kept simple on purpose (each is pinned by a ``known-limit`` test): lines are
-    processed one at a time, so text inside a multi-line quoted string or a heredoc is read as
-    commands; any ``pytest`` token counts, so ``echo pytest <folder>`` matches; a quoted ``#`` on a
-    line with an unterminated quote is read as a comment.
-    """
-    return any(
-        any(_is_drift_folder(token) for token in arguments)
-        for arguments in _pytest_segments(_tokens(command))
-    )
+# (job, step id, exact `run:` text, exact `env:`) of the two CI steps that run the MySQL wrapper
+# drift suite; the ids are set in .github/workflows/ci.yml.
+_REQUIRE_MYSQLDB = {"ASYNCOPATION_REQUIRE_MYSQLDB": "1"}
+DRIFT_STEPS = (
+    (
+        "integration",
+        "integration-drift",
+        f"uv run pytest {DRIFT_DIR} tests/unit/compile",
+        _REQUIRE_MYSQLDB,
+    ),
+    (
+        "django-main",
+        "django-drift",
+        f'uv run --no-sync pytest {DRIFT_DIR} tests/unit/compile -m "not django_pin"',
+        _REQUIRE_MYSQLDB,
+    ),
+)
 
 
 @cache
@@ -166,73 +61,64 @@ def collected_test_names(marker_expression: str) -> frozenset[str]:
     return frozenset(node_id.split("[")[0] for node_id in node_ids)
 
 
-def canary_drift_command(workflow: Path = CI_WORKFLOW) -> str:
-    """The ``run:`` command of the canary's drift step: exactly one in the ``django-main`` job.
+def find_step(workflow: Path, job: str, step_id: str) -> dict[str, object]:
+    """The step with ``id: step_id`` of ``job``: exactly one, or a ``RuntimeError``.
 
-    Other jobs (the integration job runs the drift folder too) are not looked at.
+    A malformed workflow (no such job, ``steps`` not a list) raises instead of reading as empty.
     """
     document = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
-    steps = _steps_of(document, workflow)
+    jobs = document.get("jobs") if isinstance(document, dict) else None
+    mapping = jobs.get(job) if isinstance(jobs, dict) else None
+    if not isinstance(mapping, dict):
+        message = f"{workflow.name} has no mapping at jobs.{job}"
+        raise RuntimeError(message)
+    steps = mapping.get("steps")
     matches = [
-        str(step["run"]).strip()
-        for step in steps
-        if isinstance(step, dict) and runs_drift_folder(str(step.get("run", "")))
+        step
+        for step in (steps if isinstance(steps, list) else [])
+        if isinstance(step, dict) and step.get("id") == step_id
     ]
     if len(matches) != 1:
-        message = f"expected exactly one drift step in {CANARY_JOB} of {workflow.name}, found {len(matches)}"
+        message = f"expected exactly one step with id {step_id!r} in jobs.{job} of {workflow.name}, found {len(matches)}"
         raise RuntimeError(message)
     return matches[0]
 
 
-def drift_step_requirements(workflow: Path = CI_WORKFLOW) -> dict[str, list[str | None]]:
-    """``{job: [ASYNCOPATION_REQUIRE_MYSQLDB of each step that runs the drift folder]}``.
+def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
+    """What differs between the workflow's drift steps and ``DRIFT_STEPS``; empty when none does.
 
-    ``None`` stands for a step that does not set the variable. A workflow in which no step runs the
-    drift folder raises: an unmatched command must not read as "nothing to check".
+    The steps are found by id and their ``run`` text and ``env`` are compared exactly, so no shell
+    parsing is needed: any change to the command, an extra command in it or an overriding ``env``
+    is a difference to be made on purpose, together with ``DRIFT_STEPS``.
     """
-    document = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
-    jobs = document.get("jobs") if isinstance(document, dict) else None
-    if not isinstance(jobs, dict):
-        message = f"{workflow.name} has no jobs mapping"
-        raise RuntimeError(message)
-    found: dict[str, list[str | None]] = {}
-    for name, job in jobs.items():
-        steps = job.get("steps") if isinstance(job, dict) else None
-        for step in steps if isinstance(steps, list) else []:
-            if isinstance(step, dict) and runs_drift_folder(str(step.get("run", ""))):
-                value = (step.get("env") or {}).get("ASYNCOPATION_REQUIRE_MYSQLDB")
-                found.setdefault(name, []).append(None if value is None else str(value))
-    if not found:
-        message = (
-            f"no step of {workflow.name} runs the drift folder; the CI check would pass vacuously"
-        )
-        raise RuntimeError(message)
-    return found
+    problems: list[str] = []
+    for job, step_id, expected_run, expected_env in DRIFT_STEPS:
+        step = find_step(workflow, job, step_id)
+        run = str(step.get("run", "")).strip()
+        if run != expected_run:
+            problems.append(f"jobs.{job}.{step_id}: run is {run!r}, expected {expected_run!r}")
+        if step.get("env") != expected_env:
+            problems.append(
+                f"jobs.{job}.{step_id}: env is {step.get('env')!r}, expected {expected_env!r}"
+            )
+    return problems
 
 
-def _steps_of(document: object, workflow: Path) -> list[object]:
-    """The ``steps`` of the canary job; a malformed workflow raises instead of reading as empty."""
-    jobs = document.get("jobs") if isinstance(document, dict) else None
-    job = jobs.get(CANARY_JOB) if isinstance(jobs, dict) else None
-    if not isinstance(job, dict):
-        message = f"{workflow.name} has no mapping at jobs.{CANARY_JOB}"
-        raise RuntimeError(message)
-    steps = job.get("steps")
-    return steps if isinstance(steps, list) else []
+def drift_step(job: str, step_id: str, **overrides: object) -> dict[str, object]:
+    """The expected step of ``DRIFT_STEPS`` as a workflow step mapping, with ``overrides`` applied."""
+    expected = {(j, i): (r, e) for j, i, r, e in DRIFT_STEPS}[job, step_id]
+    return {"id": step_id, "env": dict(expected[1]), "run": expected[0]} | overrides
 
 
-def write_workflow(
-    path: Path, drift_steps: int, extra_lines: str = "", other_job_drift_steps: int = 0
-) -> Path:
-    """A minimal workflow: an ``integration`` job with ``other_job_drift_steps`` drift steps and a
-    ``django-main`` job with ``drift_steps`` of them, followed by ``extra_lines`` (raw step text)."""
-    step = f'      - run: uv run --no-sync pytest {DRIFT_DIR} -m "not django_pin"\n'
+def write_workflow(path: Path, steps: dict[str, list[dict[str, object]]] | None = None) -> Path:
+    """A minimal workflow with the expected drift steps; ``steps`` replaces the steps of a job."""
+    default = {
+        job: [{"run": "uv sync"}, drift_step(job, step_id)] for job, step_id, _, _ in DRIFT_STEPS
+    }
     path.write_text(
-        "jobs:\n  integration:\n    steps:\n      - run: make test-int\n"
-        + step * other_job_drift_steps
-        + f"  {CANARY_JOB}:\n    steps:\n      - run: uv sync\n"
-        + step * drift_steps
-        + extra_lines,
+        yaml.safe_dump(
+            {"jobs": {job: {"steps": s} for job, s in (default | (steps or {})).items()}}
+        ),
         encoding="utf-8",
     )
     return path

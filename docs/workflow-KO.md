@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/workflow.md source-sha256=85064850f4cb -->
+<!-- i18n: source=docs/workflow.md source-sha256=a08259f40fb7 -->
 # 에이전트 개발 워크플로
 
 원문(영어): [workflow.md](workflow.md)
@@ -97,7 +97,7 @@ bypass 머지도 검사된다. 커밋/PR 제목은 접두사 하나를 쓴다:
 | 언어: 영어 + 번역본 (L1xx/L2xx) | `tools/guards` | 위와 동일 |
 | 에이전트 설정 불일치 | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
 | 정합성 | 3개 백엔드에서 pytest 차등 테스트, `compose_sql`은 순수 Python psycopg로도, drift 스위트(`tests/unit/django_drift`)와 MySQL wrapper 단위 테스트(`tests/unit/compile`, "`MySQLdb`가 로드되지 않음"을 확인하는 subprocess 검사 포함)는 mysqlclient가 설치된 integration job에서도 실행하며 `ASYNCOPATION_REQUIRE_MYSQLDB=1`이면 건너뛰던 MySQL wrapper drift 테스트가 실패로 바뀐다 | `make test-int`, `make test-compose-python`, CI 매트릭스 |
-| 업스트림 drift | `tests/unit/django_drift` (ledger, asgiref 핀) | `make test-unit`, CI; `django-main` canary job이 `django_pin` 테스트를 제외하고 이를 `tests/unit/compile`(mysqlclient 설치, `ASYNCOPATION_REQUIRE_MYSQLDB=1`)과 함께 실행하고, `tests/integration`도 Django main에서 실행 |
+| 업스트림 drift | `tests/unit/django_drift` (ledger, asgiref 핀) | `make test-unit`, CI; `django-main` canary job이 `django_pin` 테스트를 제외하고 이를 `tests/unit/compile`(mysqlclient 설치, `ASYNCOPATION_REQUIRE_MYSQLDB=1`; `ci.yml`의 step id `django-drift` / `integration-drift`는 `test_pin_marker.py`가 고정)과 함께 실행하고, `tests/integration`도 Django main에서 실행 |
 | E2E | uvicorn + httpx | `make test-e2e`, CI |
 | 성능 | micro + k6 하네스 | `make bench-micro` / `make bench`, CI (수동 / 야간) |
 | 브랜치 흐름 | GitHub ruleset + `branch-policy.yml` + `CODEOWNERS` | `develop`, `main`으로의 모든 푸시 / PR |

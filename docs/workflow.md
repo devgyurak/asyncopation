@@ -97,7 +97,7 @@ request and on pushes to `develop` and `main`, so back-merges and bypass merges 
 | Language: English + translations (L1xx/L2xx) | `tools/guards` | same |
 | Agent config drift | `tools/agentsync.py --check` | `make agents-check`, pre-commit, CI |
 | Correctness | pytest differential tests on 3 backends; `compose_sql` also against the pure-Python psycopg; the drift suite (`tests/unit/django_drift`) and the MySQL wrapper unit tests (`tests/unit/compile`, which include the "no `MySQLdb` loaded" subprocess checks) also in the integration job, where mysqlclient is installed and `ASYNCOPATION_REQUIRE_MYSQLDB=1` turns the skipped MySQL wrapper drift test into a failure | `make test-int`, `make test-compose-python`, CI matrix |
-| Upstream drift | `tests/unit/django_drift` (ledger, asgiref pin) | `make test-unit`, CI; the `django-main` canary job runs it (minus `django_pin` tests) together with `tests/unit/compile` (mysqlclient installed, `ASYNCOPATION_REQUIRE_MYSQLDB=1`) and `tests/integration` against Django main |
+| Upstream drift | `tests/unit/django_drift` (ledger, asgiref pin) | `make test-unit`, CI; the `django-main` canary job runs it (minus `django_pin` tests) together with `tests/unit/compile` (mysqlclient installed, `ASYNCOPATION_REQUIRE_MYSQLDB=1`; the step ids `django-drift` / `integration-drift` in `ci.yml` are pinned by `test_pin_marker.py`) and `tests/integration` against Django main |
 | End to end | uvicorn + httpx | `make test-e2e`, CI |
 | Performance | micro + k6 harness | `make bench-micro` / `make bench`, CI (manual / nightly) |
 | Branch flow | GitHub rulesets + `branch-policy.yml` + `CODEOWNERS` | every push / PR to `develop` and `main` |

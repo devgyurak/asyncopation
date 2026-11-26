@@ -4,7 +4,7 @@
 - Date: 2026-11-24
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
-- Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`; the compile stage compiles a copy of the QuerySet's Query, so overlapping evaluations of one QuerySet do not see each other's `as_sql()` mutations), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f)
+- Amended: 2026-11-25 (#6, PR #65) - Decision 2 (`CompiledQuery` also carries `alias` and `values_names`, so the pipeline diagram box and the field description change; the alias is resolved once per evaluation; an EMPTY query does no statement I/O but still opens the alias first), Decision 4 (the key names of `values()` rows are read before `as_sql()`; the compile stage compiles a copy of the QuerySet's Query, so overlapping evaluations of one QuerySet do not see each other's `as_sql()` mutations), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f)
 
 ## Context
 Plan §4.1 fixes *what* is reused (Django's `as_sql()`) and *what* is replaced (execution), but

@@ -97,7 +97,10 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `aq(Model.objects)` or `AsyncObjects.attach(Model)`. `Model` is never monkeypatched. *Amended
    2026-11-25 (#6, PR #67): `AsyncObjects` is exported from the package root lazily, like `aq`.*
 4. **Fetch mode.** Both `aobjects` and `aq()` apply `FETCH_RAISE` (any other sync fetch mode would
-   do sync I/O on attribute access). The clones `aget` and a querying `afirst` build are `FETCH_RAISE` too (Decision 2, #67 mark). *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
+   do sync I/O on attribute access). *Amended 2026-11-26 (#6, PR #67): the clones `aget` and a
+   querying `afirst` build are `FETCH_RAISE` too, even when the wrapper shares a filled cache (see
+   Decision 2).*
+   *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
    the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter
    of a many-to-many related manager, so `aq(tag.books).filter(tags__name=x)` would differ from
    Django's), and only for a real `Manager` instance: what a duck-typed `get_queryset()` returns

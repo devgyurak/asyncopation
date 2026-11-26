@@ -354,13 +354,13 @@ def _statements_of(run: Callable[[], Any]) -> int:
     return len(captured.captured_queries)
 
 
-# (an empty QuerySet, a QuerySet whose cache is filled) -> the combination; Django returns the second
-# one itself, or its first when the empty one is the argument.
+# (an empty QuerySet, a QuerySet whose cache is filled) -> the combination, and the statements Django
+# runs for it (measured against Django 6.1: each hands back the evaluated operand, 0 statements).
 FILLED_OPERAND_SHAPES = [
-    pytest.param(lambda empty, filled: empty | filled, id="empty-or-filled"),
-    pytest.param(lambda empty, filled: filled | empty, id="filled-or-empty"),
-    pytest.param(lambda empty, filled: empty ^ filled, id="empty-xor-filled"),
-    pytest.param(lambda empty, filled: empty.union(filled), id="empty-union-filled"),
+    pytest.param(lambda empty, filled: empty | filled, 0, id="empty-or-filled"),
+    pytest.param(lambda empty, filled: filled | empty, 0, id="filled-or-empty"),
+    pytest.param(lambda empty, filled: empty ^ filled, 0, id="empty-xor-filled"),
+    pytest.param(lambda empty, filled: empty.union(filled), 0, id="empty-union-filled"),
 ]
 
 
@@ -369,6 +369,7 @@ class FilledOperandOutcome:
     sync_statements: int
     statements: int
     same_pks: bool
+    row_count: int
 
 
 def _filled_operand_books() -> QuerySet[Book]:
@@ -397,7 +398,47 @@ async def alist_of_a_combination_with_a_filled_operand(
     await filled.alist()
     with recorded_statements() as log:
         rows = await shape(aq(Book.objects.none()), filled).alist()
-    return FilledOperandOutcome(sync_statements, len(log), [row.pk for row in rows] == sync_pks)
+    return FilledOperandOutcome(
+        sync_statements, len(log), [row.pk for row in rows] == sync_pks, len(rows)
+    )
+
+
+def _filled_identity_manager() -> Any:
+    from django.db.models import Manager
+
+    from tests.support.aq_wrapper import IdentityQuerySet
+
+    class _Manager(Manager):
+        def get_queryset(self) -> Any:
+            return stored
+
+    stored = IdentityQuerySet(model=Book).order_by("pk")
+    list(stored)
+    return _Manager()
+
+
+def _sync_same_all() -> tuple[int, list[int]]:
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    manager = _filled_identity_manager()
+    with CaptureQueriesContext(connection) as captured:
+        rows = list(manager.get_queryset().same().all())
+    return len(captured.captured_queries), [row.pk for row in rows]
+
+
+async def alist_of_all_of_a_user_method_result_over_a_prefetched_manager() -> FilledOperandOutcome:
+    """`aq(manager).same().all().alist()` where the manager's QuerySet has a filled cache and `same()`
+    returns its receiver: `all()` of that cached QuerySet is a new query, in Django and here."""
+    from asyncopation import aq
+
+    sync_statements, sync_pks = await in_sync(_sync_same_all)
+    manager = await in_sync(_filled_identity_manager)
+    with recorded_statements() as log:
+        rows = await aq(manager).same().all().alist()
+    return FilledOperandOutcome(
+        sync_statements, len(log), [row.pk for row in rows] == sync_pks, len(rows)
+    )
 
 
 @dataclass(frozen=True)

@@ -59,7 +59,9 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    2026-11-26 (#6, PR #65): arguments are unwrapped before Django sees them (a wrapper passed to
    `union()`, `intersection()`, `difference()` or any user method reaches Django as its QuerySet),
    because Django may return an argument itself (`none().union(aq_qs)`) and would hand the wrapper
-   back as if it were a QuerySet.*
+   back as if it were a QuerySet. Only direct arguments are unwrapped: a wrapper nested inside
+   another argument (`Prefetch(queryset=aq(...))`, a list, a `Q`) is not, and is unsupported;
+   pass the QuerySet (`.queryset`) there.*
 3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and
@@ -85,13 +87,13 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    fresh clone, and a user-defined method (an override of a Django one too) may return a QuerySet
    it stores. User-defined chaining methods must return a new QuerySet.* *Amended 2026-11-26
    (#6, PR #65): the one exception is an operand whose result cache is already filled (a
-   prefetched related manager, or a wrapper that `alist()` filled): Django returns that same
-   QuerySet (`cached | none() is cached`) and evaluating it makes no statement, so the result
+   prefetched related manager, a wrapper that `alist()` filled, or a stored QuerySet that a
+   user-defined method returns): Django returns that same QuerySet (`cached | none() is cached`) and evaluating it makes no statement, so the result
    shares it (`aq(t.books) | aq(none)`, `aq(none) ^ w` after `w.alist()`) and `alist()` only
    reads the cache. The result is an ordinary wrapper, not a prefetched one: its own `all()` is
    a new unevaluated QuerySet, as Django's `cached.all()` is, and `aq(t.books).all().all()`
-   queries like `t.books.all().all()`. A result with a filled cache that is no operand (a user
-   method returning a stored one) is cloned.* *Amended 2026-11-26 (#6, PR #65): `QuerySet |
+   queries like `t.books.all().all()`. A stored QuerySet with an unfilled cache that a
+   user-defined method returns is cloned.* *Amended 2026-11-26 (#6, PR #65): `QuerySet |
    aq(...)` runs Django's operator, which never defers to `__ror__`, and returns a plain QuerySet
    (or the wrapper when the left side is empty): keep the wrapper on the left of `|`, `&` and
    `^`.* *Amended 2026-11-25 (#6, PR #65): The clone is a chain, which consumes the pending sticky
@@ -160,8 +162,10 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   `intersection()` and `difference()` with an empty receiver or argument, the second argument
   included; a combination whose operand has a filled cache shares it, and its own `all()`, like
   `aq(t.books).all().all()`, is a new unevaluated QuerySet; a user-defined method returning its
-  receiver, an argument, the second argument or a stored QuerySet (`FETCH_RAISE`, another mode,
-  with a filled cache) is wrapped as a clone. Integration: `alist()` of a combination leaves the
+  receiver, an argument, the second argument or an unfilled stored QuerySet (`FETCH_RAISE` or
+  another mode) is wrapped as a clone, and one with a filled cache is shared (no statement). Integration: `alist()` of a combination leaves the
   QuerySets the caller and the operand wrappers hold unevaluated, a combination with an
-  `alist()`-evaluated operand runs the statements the sync ORM runs, and `aq(author.books).all()
+  `alist()`-evaluated operand runs the statements the sync ORM runs (0 for each operator and for
+  `none().union(u)`), `aq(manager).same().all().alist()` over a prefetched user-method result runs
+  the one statement Django's does, and `aq(author.books).all()
   .all().alist()` after `prefetch_related` runs the one statement Django's does.

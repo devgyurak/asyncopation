@@ -159,7 +159,7 @@ def raise_mode_books() -> QuerySet[Book]:
 SHARED_OTHER_MODE = Book.objects.all()
 SHARED_RAISE_MODE = raise_mode_books()
 SHARED_CACHED = raise_mode_books()
-SHARED_CACHED._result_cache = [object()]
+SHARED_CACHED._result_cache = [CACHED_ROW]
 
 
 class ForeignModeQuerySet(QuerySet):

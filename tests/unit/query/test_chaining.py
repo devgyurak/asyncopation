@@ -281,24 +281,36 @@ def test_all_of_a_combination_of_a_wrapper_that_alist_filled_is_a_new_queryset()
 
 
 @pytest.mark.parametrize("stored", ["shared_raise_mode", "shared_other_mode"])
-def test_a_user_method_that_returns_a_stored_queryset_is_wrapped_as_a_clone(stored):
+def test_a_user_method_that_returns_an_unfilled_stored_queryset_is_cloned_into_fetch_raise(stored):
     # given
     wrapper = stored_raise_mode_wrapper()
+    shared = getattr(wrapper.queryset, stored)()
     # when
     returned = getattr(wrapper, stored)()
     # then
-    assert returned.queryset is not getattr(wrapper.queryset, stored)()
+    assert returned.queryset is not shared
     assert returned.queryset._fetch_mode is FETCH_RAISE
 
 
-def test_a_user_method_that_returns_a_stored_queryset_with_a_filled_cache_is_wrapped_as_a_clone():
+def test_a_user_method_that_returns_a_stored_queryset_with_a_filled_cache_shares_it():
     # given
     wrapper = stored_raise_mode_wrapper()
+    shared = wrapper.queryset.shared_cached()
     # when
     returned = wrapper.shared_cached()
     # then
-    assert returned.queryset is not wrapper.queryset.shared_cached()
-    assert returned.queryset._result_cache is None
+    assert returned.queryset is shared
+
+
+async def test_a_stored_queryset_with_a_filled_cache_that_a_user_method_returns_makes_no_statement(
+    no_sql,
+):
+    # given
+    wrapper = stored_raise_mode_wrapper()
+    # when
+    rows = await wrapper.shared_cached().alist()
+    # then
+    assert rows == [CACHED_ROW]
 
 
 def test_a_user_method_that_returns_its_second_argument_is_wrapped_as_a_clone():

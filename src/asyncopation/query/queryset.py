@@ -223,15 +223,16 @@ def _wrap(value: Any, *operands: Any, own_method: bool = True) -> Any:
     A result that IS one of ``operands`` (wrappers or QuerySets: the receiver or an argument) is
     cloned whatever its mode: ``none() | qs`` and ``none().union(qs)`` return ``qs`` itself, and a
     user-defined method may return its receiver or an argument, so wrapping it as it is would let
-    ``alist()`` fill a QuerySet someone else holds. The one exception is an operand whose result
-    cache is already filled (a prefetched related manager, or a wrapper that ``alist()`` filled):
-    Django returns that same QuerySet and evaluating it makes no statement (``cached | none() is
-    cached``), so the result shares it; ``alist()`` only reads that cache. The result is an
+    ``alist()`` fill a QuerySet someone else holds. The one exception is a result whose cache is
+    already filled (a prefetched related manager, a wrapper that ``alist()`` filled, a stored
+    QuerySet a user method returns): Django returns that same QuerySet and evaluating it makes no
+    statement (``cached | none() is cached``), so the result shares it; ``alist()`` only reads that
+    cache. The result is an
     ordinary wrapper, so its own ``all()`` re-queries as Django's does."""
     if not isinstance(value, QuerySet):
         return value
     operands_held = [operand for operand in operands if value is _unwrap(operand)]
-    if operands_held and dq.cached_result(value) is not None:
+    if dq.cached_result(value) is not None:
         return AsyncQuerySet(value)
     if operands_held or not own_method or dq.queryset_fetch_mode(value) is not FETCH_RAISE:
         return AsyncQuerySet(_raise_clone(value))

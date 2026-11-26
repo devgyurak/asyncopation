@@ -11,6 +11,7 @@ import pytest
 from tests.support.alist_cases import (
     FILLED_OPERAND_SHAPES,
     alist_of_a_combination_with_a_filled_operand,
+    alist_of_all_of_a_user_method_result_over_a_prefetched_manager,
 )
 from tests.support.aq_wrapper import COMBINATIONS, user_caches_after_alist_of
 from tests.support.backends import XFAIL_UNTIL_ASYNCMY
@@ -26,12 +27,27 @@ async def test_alist_of_a_combination_leaves_the_callers_querysets_unevaluated(a
 
 
 @XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize("shape", FILLED_OPERAND_SHAPES)
+@pytest.mark.parametrize(("shape", "expected"), FILLED_OPERAND_SHAPES)
 async def test_alist_of_a_combination_with_a_filled_operand_makes_the_statements_django_does(
-    async_env, shape
+    async_env, shape, expected
 ):
     # when
     outcome = await alist_of_a_combination_with_a_filled_operand(shape)
     # then
-    assert outcome.statements == outcome.sync_statements
+    assert outcome.sync_statements == expected
+    assert outcome.statements == expected
+    assert outcome.row_count > 0
+    assert outcome.same_pks
+
+
+@XFAIL_UNTIL_ASYNCMY
+async def test_all_of_a_user_method_result_over_a_prefetched_manager_queries_as_django_does(
+    async_env,
+):
+    # when
+    outcome = await alist_of_all_of_a_user_method_result_over_a_prefetched_manager()
+    # then
+    assert outcome.sync_statements == 1
+    assert outcome.statements == 1
+    assert outcome.row_count > 0
     assert outcome.same_pks

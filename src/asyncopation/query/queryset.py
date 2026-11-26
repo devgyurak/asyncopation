@@ -148,13 +148,13 @@ class AsyncQuerySet:
 
     # -- combining ----------------------------------------------------------------------------
     def __or__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset | _unwrap(other), self._queryset, _unwrap(other))
+        return _wrap(self._queryset | _unwrap(other), self, other)
 
     def __and__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset & _unwrap(other), self._queryset, _unwrap(other))
+        return _wrap(self._queryset & _unwrap(other), self, other)
 
     def __xor__(self, other: Any) -> AsyncQuerySet:
-        return _wrap(self._queryset ^ _unwrap(other), self._queryset, _unwrap(other))
+        return _wrap(self._queryset ^ _unwrap(other), self, other)
 
     def __repr__(self) -> str:
         # QuerySet.__repr__ evaluates self[:21]; this one never touches the database.
@@ -181,15 +181,20 @@ class AsyncQuerySet:
             raise NotImplementedError(f"AsyncQuerySet.{name}() is not implemented yet")
         attribute = getattr(self._queryset, name)
         if callable(attribute) and not isinstance(attribute, type):
-            return _proxy(attribute, self._queryset)
+            return _proxy(attribute, self)
         return attribute
 
 
-def _proxy(method: Any, receiver: Any) -> Any:
+def _proxy(method: Any, owner: AsyncQuerySet) -> Any:
     @functools.wraps(method)
     def call(*args: Any, **kwargs: Any) -> Any:
-        operands = (receiver, *(_unwrap(value) for value in (*args, *kwargs.values())))
-        return _wrap(method(*args, **kwargs), *operands)
+        # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
+        # it would hand the wrapper back as if it were a QuerySet.
+        result = method(
+            *(_unwrap(value) for value in args),
+            **{name: _unwrap(value) for name, value in kwargs.items()},
+        )
+        return _wrap(result, owner, *args, *kwargs.values())
 
     return call
 
@@ -202,17 +207,21 @@ def _wrap(value: Any, *operands: Any) -> Any:
     """Re-wrap what a proxied method returned. Django's chaining methods hand back a fresh clone,
     so a ``FETCH_RAISE`` result is wrapped as it is; any other QuerySet is cloned into that mode.
 
-    A result that IS one of ``operands`` (the receiver or an argument) is cloned whatever its mode:
-    ``none() | qs`` and ``none().union(qs)`` return ``qs`` itself, and a user-defined method may
-    return its receiver or an argument, so wrapping it as it is would let ``alist()`` fill a
-    QuerySet someone else holds."""
+    A result that IS one of ``operands`` (wrappers or QuerySets: the receiver or an argument) is
+    cloned whatever its mode: ``none() | qs`` and ``none().union(qs)`` return ``qs`` itself, and a
+    user-defined method may return its receiver or an argument, so wrapping it as it is would let
+    ``alist()`` fill a QuerySet someone else holds. The one exception is an operand that is a
+    wrapper of a prefetched related manager: Django returns that same cached QuerySet
+    (``cached | none() is cached``, no statement), so the result shares it as ``all()`` does. A
+    cache that ``alist()`` filled is never shared."""
     if not isinstance(value, QuerySet):
         return value
-    if any(value is operand for operand in operands):
+    operands_held = [operand for operand in operands if value is _unwrap(operand)]
+    if any(isinstance(operand, AsyncQuerySet) and operand._prefetched for operand in operands_held):
+        return AsyncQuerySet(value, fresh=True, prefetched=True)
+    if operands_held or dq.queryset_fetch_mode(value) is not FETCH_RAISE:
         return AsyncQuerySet(_raise_clone(value))
-    if dq.queryset_fetch_mode(value) is FETCH_RAISE:
-        return AsyncQuerySet(value)
-    return AsyncQuerySet(_raise_clone(value))
+    return AsyncQuerySet(value)
 
 
 def _raise_clone(queryset: Any) -> Any:

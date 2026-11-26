@@ -7,9 +7,13 @@ from asyncopation import aq
 from asyncopation.query import AsyncQuerySet
 from tests.support.aq_wrapper import (
     COMBINATIONS,
+    PREFETCHED_COMBINATIONS,
     combination_operands,
+    filled_by_alist_wrapper,
+    foreign_mode_identity_wrapper,
     fresh_books,
     identity_queryset,
+    prefetched_operands,
     shared_with,
 )
 
@@ -116,3 +120,96 @@ def test_a_user_method_that_returns_an_argument_is_wrapped_as_a_clone():
     returned = wrapper.echo(argument)
     # then
     assert returned.queryset is not argument
+
+
+def test_a_user_method_that_returns_a_foreign_mode_receiver_is_wrapped_in_fetch_raise():
+    # given
+    wrapper = foreign_mode_identity_wrapper()
+    # when
+    returned = wrapper.same()
+    # then
+    assert returned.queryset is not wrapper.queryset
+    assert returned.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_user_method_that_returns_a_foreign_mode_argument_is_wrapped_in_fetch_raise():
+    # given
+    argument = fresh_books()
+    wrapper = aq(identity_queryset())
+    # when
+    returned = wrapper.echo(argument)
+    # then
+    assert returned.queryset is not argument
+    assert returned.queryset._fetch_mode is FETCH_RAISE
+
+
+def test_a_user_method_that_returns_a_keyword_argument_is_wrapped_as_a_clone():
+    # given
+    argument = identity_queryset()
+    wrapper = aq(identity_queryset())
+    # when
+    returned = wrapper.echo_keyword(first=identity_queryset(), other=argument)
+    # then
+    assert returned.queryset is not argument
+
+
+def test_a_wrapper_passed_as_an_argument_reaches_django_as_its_queryset():
+    # given
+    _empty, other, wrapped_empty, wrapped_other = combination_operands()
+    # when
+    combined = wrapped_other.union(wrapped_empty, wrapped_other)
+    # then
+    assert isinstance(combined, AsyncQuerySet)
+    assert isinstance(combined.queryset, QuerySet)
+    assert str(combined.queryset.query) == str(other.union(other).query)
+
+
+@pytest.mark.parametrize("build", PREFETCHED_COMBINATIONS)
+def test_a_combination_that_returns_a_prefetched_receiver_shares_its_cache(build):
+    # given
+    manager, prefetched, wrapped_empty, empty = prefetched_operands()
+    # when
+    combined = build(prefetched, wrapped_empty, empty)
+    # then
+    assert combined.queryset is manager.shared
+
+
+@pytest.mark.parametrize("build", PREFETCHED_COMBINATIONS)
+async def test_a_combination_of_a_prefetched_receiver_makes_no_statement(no_sql, build):
+    # given
+    _manager, prefetched, wrapped_empty, empty = prefetched_operands()
+    # when
+    rows = await build(prefetched, wrapped_empty, empty).alist()
+    # then
+    assert rows == []
+
+
+def test_a_proxied_method_that_returns_a_prefetched_receiver_shares_its_cache():
+    # given
+    manager, prefetched, _, _ = prefetched_operands()
+    # when
+    returned = prefetched.all().all()
+    # then
+    assert returned.queryset is manager.shared
+
+
+def test_a_combination_of_a_wrapper_that_alist_filled_is_an_unevaluated_clone():
+    # given
+    wrapper = filled_by_alist_wrapper()
+    _, _, wrapped_empty, _ = prefetched_operands()
+    # when
+    combined = wrapper | wrapped_empty
+    # then
+    assert combined.queryset is not wrapper.queryset
+    assert combined.queryset._result_cache is None
+
+
+def test_a_wrapper_passed_as_a_keyword_argument_reaches_django_as_its_queryset():
+    # given
+    argument = aq(identity_queryset())
+    wrapper = aq(identity_queryset())
+    # when
+    returned = wrapper.echo_keyword(first=argument, other=argument)
+    # then
+    assert returned.queryset is not argument.queryset
+    assert isinstance(returned.queryset, QuerySet)

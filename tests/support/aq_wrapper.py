@@ -181,6 +181,9 @@ class IdentityQuerySet(QuerySet):
     def echo(self, other: QuerySet[Book]) -> QuerySet[Book]:
         return other
 
+    def echo_keyword(self, *, first: QuerySet[Book], other: QuerySet[Book]) -> QuerySet[Book]:
+        return other
+
 
 def identity_queryset() -> QuerySet[Book]:
     from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
@@ -218,10 +221,13 @@ COMBINATIONS = [
     _case("and-empty-wrapped-left", lambda we, wo, e, o: we & wo),
     _case("and-empty-wrapped-right", lambda we, wo, e, o: wo & we),
     _case("and-empty-plain-right", lambda we, wo, e, o: wo & e),
+    _case("xor-empty-left-plain-right", lambda we, wo, e, o: we ^ o),
     _case("xor-empty-wrapped-left", lambda we, wo, e, o: we ^ wo),
     _case("xor-empty-wrapped-right", lambda we, wo, e, o: wo ^ we),
     _case("xor-empty-plain-right", lambda we, wo, e, o: wo ^ e),
     _case("union-empty-receiver", lambda we, wo, e, o: we.union(o)),
+    _case("union-empty-receiver-wrapped-argument", lambda we, wo, e, o: we.union(wo)),
+    _case("union-empty-argument-wrapped", lambda we, wo, e, o: wo.union(we)),
     _case("union-empty-argument", lambda we, wo, e, o: wo.union(e)),
     _case("intersection-empty-receiver", lambda we, wo, e, o: we.intersection(o)),
     _case("intersection-empty-argument", lambda we, wo, e, o: wo.intersection(e)),
@@ -337,3 +343,39 @@ class NotAQuerySetDuckSource:
 
 def all_then_filter(wrapper: Any) -> Any:
     return wrapper.all().filter(published=True)
+
+
+def foreign_mode_identity_wrapper() -> Any:
+    """A wrapper built by hand over a QuerySet that is NOT in FETCH_RAISE (`aq()` never makes one);
+    its user method returns the receiver."""
+    from asyncopation.query import AsyncQuerySet
+
+    return AsyncQuerySet(IdentityQuerySet(model=Book))
+
+
+def prefetched_operands() -> tuple[Any, Any, Any, Any]:
+    """A manager with a filled cache, its wrapper, an empty wrapper and an empty plain QuerySet."""
+    from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member] - missing from django-types
+
+    from asyncopation import aq
+
+    manager = prefilled_manager()
+    empty = Book.objects.none().fetch_mode(FETCH_RAISE)
+    return manager, aq(manager), aq(empty), empty
+
+
+# (wrapper of the prefetched manager, wrapper of an empty QuerySet, that empty QuerySet) -> result.
+# Django returns the cached QuerySet itself in each (`cached | none() is cached`).
+PREFETCHED_COMBINATIONS = [
+    _case("or-prefetched-left", lambda wp, we, e: wp | we),
+    _case("or-prefetched-right", lambda wp, we, e: we | wp),
+    _case("or-prefetched-left-plain-right", lambda wp, we, e: wp | e),
+    _case("xor-prefetched-left", lambda wp, we, e: wp ^ we),
+    _case("xor-prefetched-right", lambda wp, we, e: we ^ wp),
+    _case("xor-prefetched-left-plain-right", lambda wp, we, e: wp ^ e),
+]
+
+
+def filled_by_alist_wrapper() -> Any:
+    """A wrapper over a plain QuerySet whose cache `alist()` filled (no statement)."""
+    return fill_cache(aq_of(fresh_books()))

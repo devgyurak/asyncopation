@@ -77,7 +77,15 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `qs ^ none()`, `none().union(qs)`, `qs.intersection(none())`), so `aq(none) | user_qs` would
    otherwise wrap the caller's QuerySet and `alist()` would fill its cache. User-defined chaining
    methods must return a new QuerySet (a method that returns an argument or its own receiver is
-   wrapped as a clone). The clone is a chain, which consumes the pending sticky
+   wrapped as a clone). One exception: when the result is the QuerySet of a wrapper that was
+   prefetched when `aq()` wrapped it (`aq(t.books) | aq(none)`, `aq(none) ^ aq(t.books)`),
+   Django returns that same cached QuerySet (`cached | none() is cached`, no statement), so the
+   result shares it as `all()` does. A cache that `alist()` filled is never shared: `w | none()`
+   after `alist()` re-queries, where sync Django hands back the evaluated QuerySet itself (a
+   deliberate deviation: the wrapper's QuerySet stays unevaluated). Arguments are unwrapped before
+   Django sees them (`none().union(aq_qs)` returns its argument). `QuerySet | aq(...)` runs
+   Django's operator, which never defers to `__ror__`, and returns a plain QuerySet (or the
+   wrapper when the left side is empty): keep the wrapper on the left. The clone is a chain, which consumes the pending sticky
    filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
    clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`

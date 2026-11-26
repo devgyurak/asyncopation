@@ -1,6 +1,9 @@
 """`alist()` of a combination (`|`, `&`, `^`, union ...) never fills a QuerySet the caller holds.
 
 Django returns an operand itself when one side is empty (`none() | qs`, `none().union(qs)`).
+
+On MySQL and MariaDB this test xfails before its assertion (no async driver until #7), so the unit
+tests in `tests/unit/query/test_chaining.py` carry the behaviour there.
 """
 
 import pytest

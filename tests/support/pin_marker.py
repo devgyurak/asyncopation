@@ -1,6 +1,8 @@
 """Collect the django-drift tests under a marker expression, as the django-main canary does.
 
-Also reads the canary's drift step out of ``.github/workflows/ci.yml``.
+Also checks the two CI drift steps in ``.github/workflows/ci.yml``. The canary's drift step must
+follow the ``uv pip install`` of Django main directly (intended: the canary only means something
+when nothing runs between the install and the drift tests).
 """
 
 from __future__ import annotations
@@ -120,14 +122,36 @@ def _differences(label: str, actual: dict[str, object], expected: dict[str, obje
     ]
 
 
+_GUARDED_JOB_KEYS = ("if", "defaults", "continue-on-error", "needs")
+
+
+def _guarded_job_keys(job: dict[str, Any]) -> dict[str, Any]:
+    """The job keys that can skip or neuter the drift step: ``if``, ``defaults``,
+    ``continue-on-error``, ``needs``, ``strategy.fail-fast`` and ``strategy.matrix.include`` /
+    ``exclude`` (the rest of the job, such as the matrix values and ``env``, is not looked at)."""
+    strategy = job.get("strategy")
+    strategy = strategy if isinstance(strategy, dict) else {}
+    matrix = strategy.get("matrix")
+    matrix = matrix if isinstance(matrix, dict) else {}
+    guarded = {key: job[key] for key in _GUARDED_JOB_KEYS if key in job}
+    guarded |= {f"strategy.{key}": strategy[key] for key in ("fail-fast",) if key in strategy}
+    guarded |= {
+        f"strategy.matrix.{key}": matrix[key] for key in ("include", "exclude") if key in matrix
+    }
+    return guarded
+
+
 def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
     """What differs between the workflow's drift steps (and their jobs) and ``DRIFT_STEPS``.
 
     Each step is found by id and compared as a whole mapping except ``name``: ``run``, ``env`` and
     any other key (``if``, ``continue-on-error``, ``working-directory``, ``shell``, ``with``, ...)
-    must be exactly as expected, so no shell parsing is needed. The job's own keys (besides ``name``
-    and ``steps``) are compared the same way, a workflow-level ``defaults`` is a problem, and the
-    canary's drift step must follow the Django main install step. Empty when nothing differs.
+    must be exactly as expected, so no shell parsing is needed. Of the job only the keys that can skip
+    or neuter the step are compared (see ``_guarded_job_keys``; adding a matrix value or a job
+    ``env`` variable is benign), a workflow-level ``defaults`` is a problem, and the canary's drift
+    step must follow the Django main install step directly (intended: the canary's premise is that
+    Django main is installed right before). Steps after the drift step and other top-level keys are
+    free. Empty when nothing differs.
     """
     document = yaml.safe_load(workflow.read_text(encoding="utf-8")) or {}
     problems: list[str] = []
@@ -139,8 +163,8 @@ def drift_step_problems(workflow: Path = CI_WORKFLOW) -> list[str]:
         problems += _differences(f"jobs.{job}.{expected_step['id']}", step, expected_step)
         problems += _differences(
             f"jobs.{job}",
-            {k: v for k, v in document["jobs"][job].items() if k != "steps"},
-            expected_job,
+            _guarded_job_keys(document["jobs"][job]),
+            _guarded_job_keys(expected_job),
         )
         before = steps[steps.index(step) - 1] if steps.index(step) else {}
         if previous_run is not None and before.get("run") != previous_run:
@@ -170,25 +194,28 @@ def write_workflow(
     steps: Mapping[str, Sequence[Mapping[str, object]]] | None = None,
     jobs: Mapping[str, Mapping[str, object]] | None = None,
     drift: Mapping[str, Mapping[str, object]] | None = None,
-    top: dict[str, object] | None = None,
+    drop_job_keys: Mapping[str, tuple[str, ...]] | None = None,
+    top: Mapping[str, object] | None = None,
 ) -> Path:
     """A minimal workflow with the expected drift steps and job keys.
 
     The default steps of a job are the step before the drift step, then the drift step; ``drift``
     replaces the drift step of a job, ``steps`` all of its steps, ``jobs`` adds or replaces job
-    keys and ``top`` adds workflow-level keys.
+    keys, ``drop_job_keys`` removes job keys and ``top`` adds workflow-level keys.
     """
-    document: dict[str, Any] = {"jobs": {}} | (top or {})
+    document: dict[str, Any] = {"jobs": {}} | dict(top or {})
     for job, step, previous_run, job_keys in DRIFT_STEPS:
         default = [
             {"run": previous_run or "uv sync"},
             (drift or {}).get(job, drift_step(job, step["id"])),
         ]
-        document["jobs"][job] = (
+        built = (
             copy.deepcopy(job_keys)
             | {"steps": (steps or {}).get(job, default)}
             | dict((jobs or {}).get(job, {}))
         )
+        dropped = (drop_job_keys or {}).get(job, ())
+        document["jobs"][job] = {k: v for k, v in built.items() if k not in dropped}
     path.write_text(yaml.safe_dump(document), encoding="utf-8")
     return path
 

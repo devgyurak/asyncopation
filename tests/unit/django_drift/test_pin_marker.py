@@ -1,9 +1,14 @@
-"""The ``django_pin`` marker is what the django-main canary deselects (issue #47)."""
+"""The ``django_pin`` marker is what the django-main canary deselects (issue #47).
+
+Also pins the CI drift steps; the canary's drift step must follow the Django main install step
+directly, on purpose.
+"""
 
 import pytest
 
 from tests.support.pin_marker import (
     ASGIREF_VERSION_TEST,
+    CANARY_INSTALL_RUN,
     CANARY_STEP,
     CI_WORKFLOW,
     DRIFT_DIR,
@@ -18,6 +23,7 @@ from tests.support.pin_marker import (
 )
 
 CANARY = ("django-main", "django-drift")
+DRIFT = {"integration": ("integration", "integration-drift"), "django-main": CANARY}
 INTEGRATION = ("integration", "integration-drift")
 CANARY_RUN = f'uv run --no-sync pytest {DRIFT_DIR} tests/unit/compile -m "not django_pin"'
 
@@ -156,13 +162,29 @@ def test_a_drift_step_without_a_key_is_a_problem(tmp_path, key):
         ("integration", "if", "${{ false }}"),
         ("integration", "defaults", {"run": {"shell": "true {0}"}}),
         ("integration", "continue-on-error", True),
-        ("integration", "strategy", {"matrix": {"db": ["postgresql"]}}),
-        ("integration", "env", {"ASYNCOPATION_REQUIRE_MYSQLDB": "0"}),
+        ("integration", "needs", "other"),
+        ("integration", "strategy", {"fail-fast": True, "matrix": {"db": ["postgresql"]}}),
+        ("integration", "strategy", {"fail-fast": False, "matrix": {"include": [{"db": "x"}]}}),
+        ("integration", "strategy", {"fail-fast": False, "matrix": {"exclude": [{"db": "x"}]}}),
         ("django-main", "if", "${{ false }}"),
         ("django-main", "defaults", {"run": {"shell": "true {0}"}}),
         ("django-main", "continue-on-error", False),
         ("django-main", "needs", "other"),
-        ("django-main", "env", {"ASYNCOPATION_REQUIRE_MYSQLDB": "0"}),
+        ("django-main", "strategy", {"fail-fast": False}),
+    ],
+    ids=[
+        "integration-if",
+        "integration-defaults",
+        "integration-continue-on-error",
+        "integration-needs",
+        "integration-fail-fast",
+        "integration-matrix-include",
+        "integration-matrix-exclude",
+        "canary-if",
+        "canary-defaults",
+        "canary-continue-on-error-false",
+        "canary-needs",
+        "canary-strategy",
     ],
 )
 def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value):
@@ -171,7 +193,73 @@ def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value):
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert is_single_problem(problems, f"jobs.{job}: {key} is ")
+    assert is_single_problem(problems, f"jobs.{job}: ")
+
+
+@pytest.mark.parametrize(
+    ("job", "key"),
+    [("integration", "needs"), ("django-main", "needs"), ("django-main", "continue-on-error")],
+)
+def test_a_dropped_drift_job_key_is_a_problem(tmp_path, job, key):
+    # given
+    workflow = write_workflow(tmp_path / "ci.yml", drop_job_keys={job: (key,)})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert is_single_problem(problems, f"jobs.{job}: {key} is '<missing>'")
+
+
+@pytest.mark.parametrize(
+    ("job", "key", "value"),
+    [
+        ("integration", "name", "another"),
+        ("integration", "env", {"X": "y"}),
+        ("integration", "runs-on", "macos-latest"),
+        (
+            "integration",
+            "strategy",
+            {"fail-fast": False, "matrix": {"db": ["postgresql"], "python": ["3.12", "3.15"]}},
+        ),
+        ("django-main", "name", "another"),
+        ("django-main", "env", {"X": "y"}),
+    ],
+    ids=[
+        "integration-name",
+        "integration-env",
+        "integration-runs-on",
+        "integration-matrix-values",
+        "canary-name",
+        "canary-env",
+    ],
+)
+def test_a_changed_job_key_that_cannot_skip_the_drift_step_is_not_a_problem(
+    tmp_path, job, key, value
+):
+    # given
+    workflow = write_workflow(tmp_path / "ci.yml", jobs={job: {key: value}})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert problems == []
+
+
+@pytest.mark.parametrize("job", ["integration", "django-main"])
+def test_a_step_after_the_drift_step_is_not_a_problem(tmp_path, job):
+    # given
+    steps = {job: [{"run": CANARY_INSTALL_RUN}, drift_step(*DRIFT[job]), {"run": "echo done"}]}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
+    # then
+    assert problems == []
+
+
+def test_unrelated_top_level_keys_are_not_a_problem(tmp_path):
+    # given
+    top = {"concurrency": "ci", "env": {"X": "y"}, "permissions": {"contents": "read"}}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", top=top))
+    # then
+    assert problems == []
 
 
 def test_a_workflow_level_defaults_is_a_problem(tmp_path):
@@ -180,7 +268,7 @@ def test_a_workflow_level_defaults_is_a_problem(tmp_path):
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert len(problems) == 1
+    assert is_single_problem(problems, "workflow defaults is ")
 
 
 def test_a_canary_drift_step_not_right_after_the_django_main_install_is_a_problem(tmp_path):
@@ -192,13 +280,24 @@ def test_a_canary_drift_step_not_right_after_the_django_main_install_is_a_proble
     assert is_single_problem(problems, "jobs.django-main: the step before the drift step is")
 
 
+def test_an_inserted_step_between_install_and_canary_drift_is_a_problem(tmp_path):
+    # given
+    steps = {"django-main": [{"run": CANARY_INSTALL_RUN}, {"run": "uv sync"}, drift_step(*CANARY)]}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
+    # then
+    assert is_single_problem(
+        problems, "jobs.django-main: the step before the drift step is 'uv sync'"
+    )
+
+
 def test_a_canary_drift_step_as_the_first_step_is_a_problem(tmp_path):
     # given
     steps = {"django-main": [drift_step(*CANARY)]}
     # when
     problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
     # then
-    assert len(problems) == 1
+    assert is_single_problem(problems, "jobs.django-main: the step before the drift step is None")
 
 
 @pytest.mark.parametrize(

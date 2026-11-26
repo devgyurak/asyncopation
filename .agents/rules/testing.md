@@ -61,6 +61,8 @@ can skip or neuter it (`if`, `defaults`, `continue-on-error`, `needs`, `strategy
 and that the canary's drift step directly follows the Django main install step are compared
 exactly with `DRIFT_STEPS` in `tests/support/pin_marker.py`, so a change to either step is made together
 with that constant.
+The check is a deny-list of the ways a workflow edit can skip or neuter a step; its accepted gaps
+are listed in the `tests/support/pin_marker.py` module docstring.
 
 ## Database isolation
 Async connections cannot see the sync test transaction, so pytest-django's default

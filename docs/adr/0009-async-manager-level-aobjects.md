@@ -9,7 +9,7 @@
   applied; re-review 2026-11-26: APPROVE WITH CHANGES, 4 remaining changes applied; final check
   2026-11-26 at 7eac090: APPROVE; PR #73 review changes re-reviewed 2026-11-26: APPROVE WITH
   CHANGES, 1 change applied; final: APPROVE)
-- Amended: 2026-11-26 (#72, PR #TBD) - Decision 1 (the binding helper and the binding state use the prefix `_asyncopation_`, and every `_asyncopation_` name is reserved; slots are copied by their stored names) and Decision 4 (a copied method's QuerySet is built when it is called, not when it is read; any `BaseManager` a proxied method returns is re-bound, not only a `Manager`; an awaitable or async generator stored on the manager is refused without being closed, and a returned future or task is cancelled, best effort; a manager attached to no model raises `TypeError`), new Validation items; approved by: to be confirmed in the PR review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26, changes applied; final: APPROVE)
+- Amended: 2026-11-26 (#72, PR #75) - Decision 1 (the binding helper and the binding state use the prefix `_asyncopation_`, and every `_asyncopation_` name is reserved; slots are copied by their stored names) and Decision 4 (a copied method's QuerySet is built when it is called, not when it is read; any `BaseManager` a proxied method returns is re-bound, not only a `Manager`; an awaitable or async generator stored on the manager is refused without being closed, and a returned future or task is cancelled, best effort; a manager attached to no model raises `TypeError`), new Validation items; approved by: to be confirmed in the PR review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26, changes applied; final: APPROVE)
 - Supersedes in part: [ADR-0006](0006-public-api-attachment.md) Decision 3 (the `aobjects` shape),
   the first half of its Consequences bullet on manager-only methods and its last Validation item
   (the `AsyncQuerySet` return type); ADR-0006 Decisions 1, 2, 4, 5 and 6 stay in force
@@ -127,7 +127,7 @@ class). The new requirement (async manager methods) does not change any of these
    object is made by a private `_bind(model, manager)` that copies the declared object's instance
    state (`__dict__` / slots) shallowly and sets the binding, so state a subclass sets in `__init__`
    is carried over and binding never runs `__copy__`; a `db_manager()` re-bind (Decision 4) is a
-   `_bind` of the bound object with the new manager. *Amended 2026-11-26 (#72, PR #TBD): the helper is
+   `_bind` of the bound object with the new manager. *Amended 2026-11-26 (#72, PR #75): the helper is
    `_asyncopation_bind` and the binding state `_asyncopation_model` / `_asyncopation_manager`:
    names with the reserved prefix `_asyncopation_`, so a subclass's own `_bind` or `_manager` (or a
    subclass that is also called `AsyncObjects`, which name mangling would not separate) never
@@ -214,7 +214,7 @@ class). The new requirement (async manager methods) does not change any of these
      not the two of today's `aq(get_queryset())` path, and none more than Django's
      `Model.objects.filter(...)`. For every copied name `Model.aobjects.<name>` therefore behaves as
      `aq(Model._default_manager).<name>` (a user QuerySet method included, chaining or not).
-     *Amended 2026-11-26 (#72, PR #TBD): the name reads as a callable that builds `aq(manager)` each time it is called, as
+     *Amended 2026-11-26 (#72, PR #75): the name reads as a callable that builds `aq(manager)` each time it is called, as
      `manager_method` calls `get_queryset()` each time: a saved `f = Model.aobjects.filter` follows
      a `get_queryset()` that depends on the call-time context, and reading it (or `hasattr`) builds
      no QuerySet.* This
@@ -232,7 +232,7 @@ class). The new requirement (async manager methods) does not change any of these
      Otherwise it is proxied, and its result is handled as follows:
      - an awaitable (a sync method returning `self.filter(...).acount()`, Django's `sync_to_async`
        coroutine) is closed when it has `close()` (it has not started, so no thread has) and
-       `NotImplementedError` is raised; *Amended 2026-11-26 (#72, PR #TBD): a returned `asyncio`
+       `NotImplementedError` is raised; *Amended 2026-11-26 (#72, PR #75): a returned `asyncio`
        future or task is cancelled, best effort: a task the call just created has not run a step,
        but work already handed to an executor, or a task the method shares, may already have run,
        and a shared one is cancelled for its other awaiters too (a thread started that way is
@@ -249,7 +249,7 @@ class). The new requirement (async manager methods) does not change any of these
        method, an `all()` override included, is a clone unless its result cache is filled;
      - a `Manager` (`db_manager()`) is re-bound: a copy of the manager-level object (Decision 1)
        bound to that manager and its model, so `Model.aobjects.db_manager("other")` keeps the
-       subclass methods; *Amended 2026-11-26 (#72, PR #TBD): this covers every `BaseManager`, so a default manager built
+       subclass methods; *Amended 2026-11-26 (#72, PR #75): this covers every `BaseManager`, so a default manager built
        with `BaseManager.from_queryset(...)`, which is not a `Manager`, is re-bound too; a manager
        attached to no model (`model is None`) cannot be bound and raises `TypeError`;*
      - anything else (`db`, `deconstruct()`, `check()`, a `RawQuerySet` a user method returns) is
@@ -436,7 +436,7 @@ Implemented in the follow-up issue to #69 (PR 2); every item below is a test the
 - e2e: the existing `/aopt` scenarios pass unchanged.
 - bench: `make bench-micro` on the `asyncopation.*` cases that use `aobjects` shows the expected
   gain (one QuerySet clone fewer per read) and no regression.
-- *Amended 2026-11-26 (#72, PR #TBD):* unit (`tests/unit/query/test_objects_routing.py`,
+- *Amended 2026-11-26 (#72, PR #75):* unit (`tests/unit/query/test_objects_routing.py`,
   `test_objects_refusals.py`, `test_objects_subclass.py`): copies are lazy
   (`test_reading_a_copied_method_runs_no_get_queryset`,
   `test_hasattr_of_a_copied_method_runs_no_get_queryset`,

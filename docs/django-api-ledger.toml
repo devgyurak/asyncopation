@@ -420,7 +420,7 @@ names = [
     "_known_related_objects",
 ]
 used_by = ["src/asyncopation/_django/query.py"]
-reason = "Read (and `_result_cache` written, as `QuerySet._fetch_all` does; `_fetch_mode` written in place for a Manager's own fresh QuerySet in `aq()`, where `fetch_mode()` would clone and consume the sticky filter) by the evaluation engine: which iterable to run, whether a cache or prefetch lookups exist, the fetch mode and the known related objects of the ported ModelIterable"
+reason = "Read (and `_result_cache` written, as `QuerySet._fetch_all` does; `_fetch_mode` written in place for a Manager's own fresh QuerySet in `aq()`, where `fetch_mode()` would clone and consume the sticky filter, and on the clones `aget` / a querying `afirst` build (`raise_on_fetch`)) by the evaluation engine: which iterable to run, whether a cache or prefetch lookups exist, the fetch mode and the known related objects of the ported ModelIterable"
 verified_against = "6.1.3"
 
 [[attribute]]

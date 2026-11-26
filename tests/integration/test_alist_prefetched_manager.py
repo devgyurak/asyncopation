@@ -12,8 +12,9 @@ from tests.support.alist_cases import (
     alist_of_a_prefetched_manager,
     alist_of_all_of_a_prefetched_manager,
     alist_of_all_of_all_of_a_prefetched_manager,
-    fetch_mode_of_a_read_over_a_shared_cache,
+    instance_mode_after_a_read_over_a_shared_cache,
     read_of_a_prefetched_manager,
+    relation_access_after_a_read_over_a_shared_cache,
 )
 from tests.support.backends import XFAIL_UNTIL_ASYNCMY
 
@@ -145,14 +146,24 @@ _CACHE_READS = [
 
 @XFAIL_UNTIL_ASYNCMY
 @pytest.mark.parametrize(("subject", "read"), _ENGINE_CLONES)
-async def test_an_instance_an_engine_built_clone_loads_cannot_fetch_a_relation(
+async def test_a_relation_of_an_instance_an_engine_built_clone_loads_is_blocked(
     async_env, writable_db, subject, read
 ):
     # when
-    outcome = await fetch_mode_of_a_read_over_a_shared_cache(subject, read)
+    access = await relation_access_after_a_read_over_a_shared_cache(subject, read)
     # then
-    assert outcome.relation_access == "FieldFetchBlocked"
-    assert outcome.instance_mode == "FetchRaise"
+    assert access == "FieldFetchBlocked"
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize(("subject", "read"), _ENGINE_CLONES)
+async def test_an_instance_an_engine_built_clone_loads_is_fetch_raise(
+    async_env, writable_db, subject, read
+):
+    # when
+    mode = await instance_mode_after_a_read_over_a_shared_cache(subject, read)
+    # then
+    assert mode == "FetchRaise"
 
 
 @pytest.mark.parametrize(("subject", "read"), _CACHE_READS)
@@ -160,6 +171,6 @@ async def test_an_instance_read_from_the_shared_cache_keeps_its_fetch_mode(
     async_env, writable_db, subject, read
 ):
     # when
-    outcome = await fetch_mode_of_a_read_over_a_shared_cache(subject, read)
+    mode = await instance_mode_after_a_read_over_a_shared_cache(subject, read)
     # then
-    assert outcome.instance_mode == "FetchOne"
+    assert mode == "FetchOne"

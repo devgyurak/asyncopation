@@ -427,14 +427,6 @@ async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedRea
     return PrefetchedReadOutcome(len(log), sync_statements, result, sync_result)
 
 
-@dataclass(frozen=True)
-class FetchModeOutcome:
-    """What reading a relation of the instance a read returned does: the exception name or `ok`."""
-
-    relation_access: str
-    instance_mode: str
-
-
 def _filled_orders() -> Any:
     """A QuerySet of `Order` whose cache was filled by a synchronous evaluation (FETCH_ONE)."""
     _add_two_orders()
@@ -463,20 +455,10 @@ def _fetch_mode_subject(subject: str) -> tuple[Any, str, int]:
     return filled, "book", pk
 
 
-def _relation_outcome(instance: Any, relation: str) -> FetchModeOutcome:
-    try:
-        getattr(instance, relation)
-        access = "ok"
-    except Exception as error:
-        access = type(error).__name__
-    return FetchModeOutcome(access, type(instance._state.fetch_mode).__name__)
-
-
-async def fetch_mode_of_a_read_over_a_shared_cache(subject: str, read: str) -> FetchModeOutcome:
-    """Read `read` (`aget`, `afirst`, `alist`, `async for`) over a wrapper that shares a filled
-    cache in a user fetch mode (`prefetched-books`, `evaluated-orders`, `empty-or-evaluated-orders`),
-    then read a relation of the first instance: the engine's own clones are FETCH_RAISE, the
-    instances read from the cache keep their mode."""
+async def _instance_read_over_a_shared_cache(subject: str, read: str) -> tuple[Any, str]:
+    """The first instance a read (`aget`, `afirst`, `alist`, `async for`) returns over a wrapper that
+    shares a filled cache in a user fetch mode (`prefetched-books`, `evaluated-orders`,
+    `empty-or-evaluated-orders`), and the name of a relation of it that needs a fetch."""
     from asyncopation import aq
 
     source, relation, pk = await in_sync(lambda: _fetch_mode_subject(subject))
@@ -489,7 +471,24 @@ async def fetch_mode_of_a_read_over_a_shared_cache(subject: str, read: str) -> F
         "alist": lambda: _first_of(wrapper.alist()),
         "async for": lambda: _first_of_iteration(wrapper),
     }[read]()
-    return _relation_outcome(instance, relation)
+    return instance, relation
+
+
+async def relation_access_after_a_read_over_a_shared_cache(subject: str, read: str) -> str:
+    """`ok` or the exception name of reading a relation of the instance the read returned: the
+    engine's own clones are FETCH_RAISE, whatever mode the shared cache was filled in."""
+    instance, relation = await _instance_read_over_a_shared_cache(subject, read)
+    try:
+        getattr(instance, relation)
+    except Exception as error:
+        return type(error).__name__
+    return "ok"
+
+
+async def instance_mode_after_a_read_over_a_shared_cache(subject: str, read: str) -> str:
+    """The fetch mode class name of the instance the read returned, without touching a relation."""
+    instance, _ = await _instance_read_over_a_shared_cache(subject, read)
+    return type(instance._state.fetch_mode).__name__
 
 
 async def _first_of(awaitable: Any) -> Any:

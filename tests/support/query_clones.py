@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db.models import QuerySet
-from django.db.models import FETCH_PEERS  # ty: ignore[missing-module-member] - missing from django-types
+from django.db.models import (
+    FETCH_PEERS,  # ty: ignore[missing-module-member] - missing from django-types
+    QuerySet,
+)
 
 from asyncopation._django import query as dq
 from harness.catalog.models import Book

@@ -5,7 +5,8 @@
 - Deciders: maintainer (@devgyurak)
 - Architect review: APPROVE WITH CHANGES (2026-11-24); required changes incorporated
 - Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
-- Amended: 2026-11-25 and 2026-11-26 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place only on a real `Manager`'s own fresh QuerySet, every other QuerySet or duck-typed `get_queryset()` result is cloned even if it already is `FETCH_RAISE`, and the clone and `all()` of a manager wrapper keep the pending sticky filter; 2026-11-26: a result of a proxied method or operator that is an operand is cloned, except one whose result cache is already filled (a prefetched related manager or a wrapper that `alist()` filled), which is shared as Django returns it and whose own `all()` re-queries; a user-defined method's result is always cloned, a stored `FETCH_RAISE` QuerySet included; wrapper arguments are unwrapped before Django sees them), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: PENDING (the 2026-11-25 verdict, APPROVE WITH CHANGES, covers the 2026-11-25 text only; the 2026-11-26 wording is to be reviewed by the architect and its verdict recorded here before merge)
+- Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place only on a real `Manager`'s own fresh QuerySet, every other QuerySet or duck-typed `get_queryset()` result is cloned unless its result cache is filled, even if it already is `FETCH_RAISE`, and the clone and `all()` of a manager wrapper keep the pending sticky filter; `all()` shares only a cache that was filled when the manager was wrapped; copies keep the sticky filter but not the cache), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25 of the PR #65 amendment, changes applied)
+- Amended: 2026-11-26 (#6, PR #65) - Decisions 2 and 4 (the sync-evaluator list is the full `_SYNC_EVALUATORS` table and `__reduce__` raises `SyncEvaluationError`; wrapper arguments are unwrapped before Django sees them, nested ones are not; a result of a proxied method or operator that is an operand is cloned, and so is every result of a user-defined method, unless its result cache is filled: a result whose cache is filled is shared, as Django returns it, whether or not it is an operand, and the wrapper it gets is ordinary, so its own `all()` re-queries; reflected operators: `QuerySet | aq(...)` returns a plain QuerySet, keep the wrapper on the left), new Validation items; approved by: maintainer (@devgyurak), to be confirmed in the PR #65 review; architect verdict: PENDING (to be recorded after the architect re-reviews the 2026-11-26 wording, before merge)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -56,12 +57,16 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    those implemented; a slice with a step (`qs[::2]`, which Django evaluates) is a sync evaluator
    too; `raw()` raises `NotImplementedError` (it returns an unwrapped `RawQuerySet`); the
    `iterator()` error says `aiterator()` is not implemented yet and points to `alist()`.* *Amended
-   2026-11-26 (#6, PR #65): arguments are unwrapped before Django sees them (a wrapper passed to
-   `union()`, `intersection()`, `difference()` or any user method reaches Django as its QuerySet),
-   because Django may return an argument itself (`none().union(aq_qs)`) and would hand the wrapper
-   back as if it were a QuerySet. Only direct arguments are unwrapped: a wrapper nested inside
-   another argument (`Prefetch(queryset=aq(...))`, a list, a `Q`) is not, and is unsupported;
-   pass the QuerySet (`.queryset`) there.*
+   2026-11-26 (#6, PR #65): the sync evaluators are every name of the `_SYNC_EVALUATORS` table:
+   the list above plus `last`, `earliest`, `latest`, `contains`, `update_or_create`,
+   `bulk_create`, `bulk_update` and `explain`; `pickle` (`__reduce__`) raises
+   `SyncEvaluationError` too, because `QuerySet.__getstate__` evaluates. Arguments are unwrapped
+   before Django sees them (a wrapper passed to `union()`, `intersection()`, `difference()` or
+   any user method reaches Django as its QuerySet), because Django may return an argument itself
+   (`none().union(aq_qs)`) and would hand the wrapper back as if it were a QuerySet. Only direct
+   arguments are unwrapped: a wrapper nested inside another argument (`Prefetch(queryset=aq(...))`,
+   a list, a `Q`) is not, its behaviour is undefined (no error is defined for it), and it is
+   unsupported; pass the QuerySet (`.queryset`) there.*
 3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and
@@ -78,37 +83,42 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    `fetch_mode(FETCH_RAISE)`, so the caller's is never touched and `alist()` never fills its
    cache (a class-attribute QuerySet would otherwise return stale rows to later requests). Only
    the QuerySets Django creates while the wrapper re-wraps its own chaining (`filter()`, `all()`,
-   a slice, copies) skip the clone.* *Amended 2026-11-26 (#6, PR #65): a result of a proxied call
-   that IS the receiver or one of the arguments is cloned too (Django returns an operand itself
-   when one side is empty: `none() | qs`, `qs ^ none()`, `none().union(qs)`,
-   `qs.intersection(none())`, so `aq(none) | user_qs` would otherwise wrap the caller's QuerySet
-   and `alist()` would fill its cache), and so is the result of any user-defined chaining method,
-   a stored `FETCH_RAISE` QuerySet included: only Django's own methods are known to return a
-   fresh clone, and a user-defined method (an override of a Django one too) may return a QuerySet
-   it stores. User-defined chaining methods must return a new QuerySet.* *Amended 2026-11-26
-   (#6, PR #65): the one exception is an operand whose result cache is already filled (a
-   prefetched related manager, a wrapper that `alist()` filled, or a stored QuerySet that a
-   user-defined method returns): Django returns that same QuerySet (`cached | none() is cached`) and evaluating it makes no statement, so the result
-   shares it (`aq(t.books) | aq(none)`, `aq(none) ^ w` after `w.alist()`) and `alist()` only
-   reads the cache. The result is an ordinary wrapper, not a prefetched one: its own `all()` is
-   a new unevaluated QuerySet, as Django's `cached.all()` is, and `aq(t.books).all().all()`
-   queries like `t.books.all().all()`. A stored QuerySet with an unfilled cache that a
-   user-defined method returns is cloned.* *Amended 2026-11-26 (#6, PR #65): `QuerySet |
-   aq(...)` runs Django's operator, which never defers to `__ror__`, and returns a plain QuerySet
-   (or the wrapper when the left side is empty): keep the wrapper on the left of `|`, `&` and
-   `^`.* *Amended 2026-11-25 (#6, PR #65): The clone is a chain, which consumes the pending sticky
+   a slice, copies) skip the clone. The clone is a chain, which consumes the pending sticky
    filter (`Query.filter_is_sticky`) of a related-manager QuerySet, so it is copied onto the
    clone: `aq(tag.books.all()).filter(tags__name=x)` does not depend on how `tag` was loaded.
    `all()` of a wrapper that came straight from a manager keeps that state, as `Manager.all()`
    (which returns `get_queryset()` unchained) does: its sticky filter, and a prefetched result
-   cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement).* *Amended
-   2026-11-26 (#6, PR #65): only that first `all()` returns it, the wrapper it gives is
-   ordinary.* *Amended 2026-11-25 (#6, PR #65): `all()` shares only the cache that was already filled when the manager was wrapped, never one
-   that `alist()` filled later. Copies (`copy.copy`) keep the sticky filter but not that cache:
-   they are an unevaluated clone, so a copy of a prefetched wrapper queries where its `all()`
-   does not. The in-place switch assumes `Manager.get_queryset()`
-   returns a fresh QuerySet, as Django's and related managers do; a custom manager returning a
-   shared one that is already `FETCH_RAISE` gets a clone.*
+   cache, which it returns as it is (`aq(t.books).all().alist()` makes no statement). `all()`
+   shares only the cache that was already filled when the manager was wrapped, never one that
+   `alist()` filled later. Copies (`copy.copy`) keep the sticky filter but not that cache: they
+   are an unevaluated clone, so a copy of a prefetched wrapper queries where its `all()` does
+   not. The in-place switch assumes `Manager.get_queryset()` returns a fresh QuerySet, as
+   Django's and related managers do; a custom manager returning a shared one that is already
+   `FETCH_RAISE` gets a clone.*
+
+   *Amended 2026-11-26 (#6, PR #65): a result of a proxied call that IS the receiver or one of
+   the arguments is cloned too (Django returns an operand itself when one side is empty:
+   `none() | qs`, `qs ^ none()`, `none().union(qs)`, `qs.intersection(none())`, so
+   `aq(none) | user_qs` would otherwise wrap the caller's QuerySet and `alist()` would fill its
+   cache), and so is the result of any user-defined chaining method, a stored `FETCH_RAISE`
+   QuerySet included: only Django's own methods are known to return a fresh clone, and a
+   user-defined method (an override of a Django one too) may return a QuerySet it stores. User-
+   defined chaining methods must return a new QuerySet. The one exception: a result whose cache
+   is filled is shared, whether or not it is an operand (a prefetched related manager, a wrapper
+   that `alist()` filled, a stored QuerySet that a user-defined method returns). Django returns
+   that same QuerySet (`cached | none() is cached`) and evaluating it makes no statement, so
+   `aq(t.books) | aq(none)` and `aq(none) ^ w` after `w.alist()` share it and `alist()` only
+   reads the cache; the instances in a shared cache keep the fetch mode they were loaded with,
+   as in Django. The result is an ordinary wrapper, not a prefetched one: its own `all()` is a
+   new unevaluated QuerySet, as Django's `cached.all()` is, and `aq(t.books).all().all()`
+   queries like `t.books.all().all()`. A stored QuerySet with an unfilled cache that a
+   user-defined method returns is cloned. `deepcopy` of a wrapper drops the cache, like
+   `copy.copy`. Reflected operators: `QuerySet | aq(...)` runs Django's operator, which never
+   defers to `__ror__`, so a non-empty left side returns a plain QuerySet without `FETCH_RAISE`;
+   with an empty left side `&` returns that plain empty QuerySet (`self`), while `|` and `^`
+   return the other operand, the wrapper itself. Keep the wrapper on the left of `|`, `&` and
+   `^`. A slice with a step is refused whatever the QuerySet holds, although Django evaluates
+   only when it must: the code is conservative and the divergence is deliberate.*
    Unloaded forward/one-to-one relations and deferred fields raise `FieldFetchBlocked`; reverse FK
    / M2M managers are evaluated through `aq()`. `afetch()` is explicit and non-recursive; batched
    peer loading returns results aligned with the parents.
@@ -169,3 +179,7 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   `none().union(u)`), `aq(manager).same().all().alist()` over a prefetched user-method result runs
   the one statement Django's does, and `aq(author.books).all()
   .all().alist()` after `prefetch_related` runs the one statement Django's does.
+- *Amended 2026-11-26 (#6, PR #65):* unit: `QuerySet | aq(...)`, `&` and `^` with a non-empty left
+  side return a plain QuerySet that is not in `FETCH_RAISE`; with an empty left side `&` returns
+  a plain QuerySet and `|` and `^` return the wrapper. Nested wrappers in arguments stay an
+  undocumented-behaviour limit and are not pinned by a test.

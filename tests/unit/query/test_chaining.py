@@ -1,5 +1,7 @@
 """Chaining methods stay lazy and every QuerySet they return is wrapped again."""
 
+import operator
+
 import pytest
 from django.db.models import FETCH_RAISE, QuerySet  # ty: ignore[missing-module-member] - missing from django-types
 
@@ -342,3 +344,34 @@ def test_a_wrapper_passed_as_a_keyword_argument_reaches_django_as_its_queryset()
     # then
     assert returned.queryset is not argument.queryset
     assert isinstance(returned.queryset, QuerySet)
+
+
+@pytest.mark.parametrize("combine", [operator.or_, operator.and_, operator.xor])
+def test_a_plain_queryset_combined_with_a_wrapper_returns_a_plain_queryset(combine):
+    # given
+    plain = fresh_books().filter(pk=1)
+    wrapper = aq(fresh_books().filter(pk__gt=3))
+    # when
+    combined = combine(plain, wrapper)
+    # then
+    assert isinstance(combined, QuerySet)
+    assert combined._fetch_mode is not FETCH_RAISE
+
+
+def test_an_empty_plain_queryset_anded_with_a_wrapper_returns_a_plain_queryset():
+    # given
+    wrapper = aq(fresh_books())
+    # when
+    combined = operator.and_(fresh_books().none(), wrapper)
+    # then
+    assert isinstance(combined, QuerySet)
+
+
+@pytest.mark.parametrize("combine", [operator.or_, operator.xor])
+def test_an_empty_plain_queryset_combined_with_a_wrapper_returns_the_wrapper(combine):
+    # given
+    wrapper = aq(fresh_books())
+    # when
+    combined = combine(fresh_books().none(), wrapper)
+    # then
+    assert combined is wrapper

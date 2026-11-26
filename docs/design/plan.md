@@ -105,7 +105,7 @@ a, b, c = await asyncio.gather(
 | # | Decision |
 |---|---|
 | 1 | Drivers: **psycopg3 (PostgreSQL) + asyncmy (MySQL)** |
-| 2 | API: leave `objects` untouched and add an **`aobjects`** accessor (a descriptor, not a `Manager` - ADR-0006) |
+| 2 | API: leave `objects` untouched and add an **`aobjects`** accessor (a descriptor, not a `Manager` - ADR-0006). Its value is a manager-level object over the default manager: manager methods are proxied, and async manager methods are written on an `AsyncObjects` subclass (ADR-0009) |
 | 3 | Scope: support the core traits of the Django ORM, **lazy loading + eager loading** |
 | 4 | End goal: make **the SQL generation path async-friendly** as well (defined in §4.4) |
 
@@ -220,6 +220,8 @@ from asyncopation import aq
 books = await aq(author.book_set.filter(published=True)).alist()
 ```
 
+`aq()` stays the adapter for related managers; the manager-level `aobjects` covers the default manager only (ADR-0009).
+
 ---
 
 ## 5. Test and benchmark strategy
@@ -281,6 +283,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 - [x] hstore/citext type registration in the PostgreSQL driver when `django.contrib.postgres` is installed (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] Pin the asgiref version and `Local(thread_critical=True)` semantics `compile_scope` relies on in the drift suite (ledger `[[dependency]]` row, `asgiref>=3.13`; #49, ADR-0008)
 - [x] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`) on PostgreSQL, with `aget` / `afirst` / `acount` / `aexists` / `async for`, the `aobjects` descriptor and the sans-I/O runner with the `get_aggregation` / `has_results` cores (#6, PR #67; MySQL/MariaDB with the MySQL wrapper, #6, PR #68 / #7)
+- [ ] Manager-level `aobjects` (ADR-0009): manager-only methods proxied and re-wrapped, async manager methods on an `AsyncObjects` subclass, coroutines a manager defines refused (#72)
 - [ ] Reproduce the same flow on asyncmy; acceptance (#7): the server-info probe builds `MySQLServerInfo(*row)` from the exact `SELECT` whose column order matches Django's `row[n]` contract (ADR-0008 Decision 5; the source drift test pins the field order)
 
 ---

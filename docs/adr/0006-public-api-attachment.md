@@ -8,6 +8,7 @@
 - Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place only on a real `Manager`'s own fresh QuerySet, every other QuerySet or duck-typed `get_queryset()` result is cloned even if it already is `FETCH_RAISE`, and the clone and `all()` of a manager wrapper keep the pending sticky filter), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f; the 2026-11-25 Decision 6 note on an already-FETCH_RAISE QuerySet is superseded by the 2026-11-26 amendment on the next line)
 - Amended: 2026-11-26 (#6, PR #65) - Decisions 2, 4 and 6 (the sync-evaluator list is the full `_SYNC_EVALUATORS` table and `__reduce__` raises `SyncEvaluationError`; wrapper arguments are unwrapped before Django sees them, nested ones are not; a result of a proxied method or operator that is an operand is cloned, and so is every result of a user-defined method, unless its result cache is filled; operators, `all()` and slicing skip the clone only when the method is Django's own; a result whose cache is filled is shared whatever its fetch mode (an unfilled operand or user-method result is still cloned, `FETCH_RAISE` or not), as Django returns it, whether or not it is an operand, and the wrapper it gets is ordinary, so its own `all()` re-queries; `all()` shares only a cache that was filled when the manager was wrapped; copies keep the sticky filter but not the cache; reflected operators: `QuerySet | aq(...)` returns a plain QuerySet, keep the wrapper on the left; `aq()` wraps as it is only a QuerySet whose result cache is filled, which corrects the 2026-11-25 Decision 6 note that an already-`FETCH_RAISE` QuerySet is wrapped uncloned; slicing a filled-cache QuerySet returns a plain list that the wrapper passes through, and a slice with a step is refused unconditionally, a deliberate divergence), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f)
 - Amended: 2026-11-26 (#6, PR #67; covers the 2026-11-25 and 2026-11-26 marks in the body) - Decisions 2, 3 and 4 (`aget` / `afirst` / `acount` / `aexists` / `async for` semantics; `AsyncObjects` exported lazily from the root; `AsyncObjects` does not refuse a swapped-out model, unlike Django's manager descriptor, because guard A102 reserves the `swapped` name for `compile/scope.py`; deviation: for a `select_for_update()` QuerySet `aget` asks the database router once where Django's `get()` asks it twice, described under Decision 2; second deviation: Django's `get()` clones with `filter()` and the clone inherits the receiver's fetch mode, whereas the engine-built clones (`aget`, a querying `afirst`) are `FETCH_RAISE` even when the wrapper shares a filled cache (intentional: no sync lazy load); instances read from the cache keep their mode), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #67 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-26, changes applied at 4870c5d)
+- Partially superseded: 2026-11-26 (#69, PR #73) - Decision 3 (the `aobjects` shape), the Consequences bullet on manager-only methods (its first half) and the last Validation item (the `AsyncQuerySet` return type pinned by `test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset`) are superseded by [ADR-0009](0009-async-manager-level-aobjects.md); Decisions 1, 2, 4, 5 and 6 and every other Validation item stay Accepted (Decision 4 carries a clarifying mark)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -89,7 +90,10 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    unfilled wrapper QuerySet is always `FETCH_RAISE`), not through a clone of its own. Django's
    `get()` clones with `filter()` and the clone keeps the receiver's fetch mode; `aget`
    deliberately returns `FETCH_RAISE` instances (see Decision 4).*
-3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
+3. *Superseded 2026-11-26 by [ADR-0009](0009-async-manager-level-aobjects.md) (#69, PR #73):
+   `Model.aobjects` is a bound instance of the declared `AsyncObjects` (sub)class, a manager-level object over the
+   default manager, not an `AsyncQuerySet`; the text below records the original decision.*
+   **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and
    multi-table inheritance); instance access raises like `Manager`. Models opt in by declaring
@@ -102,6 +106,10 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    use.*
 4. **Fetch mode.** Both `aobjects` and `aq()` apply `FETCH_RAISE` (any other sync fetch mode would
    do sync I/O on attribute access).
+   *Clarified 2026-11-26 by [ADR-0009](0009-async-manager-level-aobjects.md) (#69, PR #73): for
+   `aobjects` this means every QuerySet it returns; the manager-level object itself has no fetch
+   mode, and its default-manager path follows `aq(manager)` (in-place switch of the manager's fresh
+   `get_queryset()` result).*
    *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
    the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter
    of a many-to-many related manager, so `aq(tag.books).filter(tags__name=x)` would differ from
@@ -192,6 +200,9 @@ cache is filled.*
 - The wrapper is not a `QuerySet`; code that type-checks for `QuerySet` must unwrap (`.queryset`).
 - Manager-only methods (e.g. `UserManager.create_user`) are not on `aobjects`, and user QuerySet
 methods that evaluate internally raise `SynchronousOnlyOperation`.
+  *Superseded in part 2026-11-26 by [ADR-0009](0009-async-manager-level-aobjects.md) (#69, PR #73):
+  manager-only methods are reachable through `aobjects` and async ones are written on an
+  `AsyncObjects` subclass; user QuerySet methods that evaluate internally still raise.*
 - Changing this shape later is a breaking public API change.
 
 ## Validation
@@ -267,3 +278,6 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   raises `AttributeError`, and
   `test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset` pins the deliberate
   divergence of Decision 3 (`aobjects` returns an `AsyncQuerySet`).
+  *Superseded in part 2026-11-26 by [ADR-0009](0009-async-manager-level-aobjects.md) (#69, PR
+  #73): the swapped-out model's `aobjects` returns a bound `AsyncObjects`; the `objects` half of this item
+  stands.*

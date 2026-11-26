@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=02836662b44d -->
+<!-- i18n: source=docs/design/plan.md source-sha256=2f606bf2eaa1 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -106,7 +106,7 @@ a, b, c = await asyncio.gather(
 | # | 결정 사항 |
 |---|---|
 | 1 | 드라이버: **psycopg3 (PostgreSQL) + asyncmy (MySQL)** |
-| 2 | API: 기존 `objects`는 그대로 두고 **`aobjects`** 접근자(`Manager`가 아닌 디스크립터 - ADR-0006)를 추가한다 |
+| 2 | API: 기존 `objects`는 그대로 두고 **`aobjects`** 접근자(`Manager`가 아닌 디스크립터 - ADR-0006)를 추가한다. 그 값은 기본 매니저 위의 매니저 수준 객체다. 매니저 메서드는 프록시되고, async 매니저 메서드는 `AsyncObjects` 서브클래스에 작성한다 (ADR-0009) |
 | 3 | 목표 범위: Django ORM의 핵심 특징인 **lazy loading + eager loading**까지 지원한다 |
 | 4 | 최종 목표: **SQL 생성 경로까지 비동기 친화적으로** 만든다 (정의는 §4.4 참고) |
 
@@ -220,6 +220,8 @@ from asyncopation import aq
 books = await aq(author.book_set.filter(published=True)).alist()
 ```
 
+관계 매니저의 어댑터는 계속 `aq()`다. 매니저 수준 `aobjects`는 기본 매니저만 다룬다 (ADR-0009).
+
 ---
 
 ## 5. 테스트 & 벤치마크 전략
@@ -281,6 +283,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
 - [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6, PR #68 / #7)
+- [ ] 매니저 수준 `aobjects` (ADR-0009): 매니저 전용 메서드를 프록시하고 다시 래핑, async 매니저 메서드는 `AsyncObjects` 서브클래스에, 매니저가 정의한 코루틴은 거부 (#72)
 - [ ] asyncmy로 같은 흐름 재현; 인수 조건(#7): 서버 정보 프로브는 열 순서가 Django의 `row[n]` 계약과 일치하는 정확한 `SELECT`에서 `MySQLServerInfo(*row)`를 만든다 (ADR-0008 결정 5; 소스 drift 테스트가 필드 순서를 고정한다)
 
 ---

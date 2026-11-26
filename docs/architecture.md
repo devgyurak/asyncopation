@@ -6,7 +6,9 @@ the recording driver, and so are the executors (borrowed/pinned connection owner
 (`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6); the
 MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
-amendments); ADR-0008 is Accepted (scoped `compile_scope` swap).
+amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
+`aobjects`, Accepted) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
+behaviour described below is still ADR-0006's until then.
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
 ## The split
@@ -34,7 +36,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`, `SyncEvaluationError`); imports nothing (an import-linter contract keeps it free of `asyncopation` layers, a subprocess import test of Django and the drivers), so `import asyncopation` stays light; re-exported at the package root | import anything |
 | 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
-| 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md)) | fall through to Django's `sync_to_async` methods |
+| 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md); `aobjects` shape: [ADR-0009](adr/0009-async-manager-level-aobjects.md), implementation #72) | fall through to Django's `sync_to_async` methods |
 | 6 | `asyncopation.deletion`, `asyncopation.prefetch` | async `Collector`, async `prefetch_related` as sans-I/O cores | import each other |
 | 5 | `asyncopation.fetch` | `afetch()`, async fetch modes, `FETCH_RAISE` default | - |
 | 4 | `asyncopation.engine` | `CompiledQuery`, materializer via `results_iter(results=...)`, sans-I/O runner ([ADR-0002](adr/0002-pipeline-contracts.md), [ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import the public facade |
@@ -75,7 +77,8 @@ Django-side halves are ported without their I/O in `_django.aggregation` (split 
 ADR-0007 Decision 5); `engine.read` follows `QuerySet.get` / `first` / `count` / `exists` (result-cache
 shortcuts, the `MAX_GET_RESULTS` bound, the `select_for_update` limit read from the compile-only
 wrapper's `features`). `asyncopation.query.AsyncObjects` is the `aobjects` descriptor (not a Django
-`Manager`).
+`Manager`); [ADR-0009](adr/0009-async-manager-level-aobjects.md) makes its value a manager-level
+object over the default manager (implementation #72).
 
 Stage contracts: [ADR-0002](adr/0002-pipeline-contracts.md). Ported orchestration (prefetch,
 `Collector`, `get_or_create`) is written as generators that yield requests and is driven by one

@@ -57,56 +57,82 @@ async def test_alist_of_all_of_all_of_a_prefetched_related_manager_queries_as_dj
 
 
 # (subject, read, the statements Django runs): an ordered manager reads the cache; `get()` and an
-# unordered `first()` query again (MySQL/MariaDB need the driver for those).
-_CACHED = [
+# unordered `first()` query again (MySQL/MariaDB need the driver for those). The `orders` subject
+# inserts two orders, so it runs under `writable_db`; the others only read (`readonly_db`).
+_CACHED_READ = [
     ("books", "acount", 0),
     ("books", "aexists", 0),
     ("books", "afirst", 0),
     ("books", "async for", 0),
-    ("orders", "acount", 0),
-    ("orders", "aexists", 0),
-    ("orders", "async for", 0),
     ("empty", "acount", 0),
     ("empty", "aexists", 0),
     ("empty", "async for", 0),
 ]
-_QUERIED = [
+_CACHED_WRITE = [
+    ("orders", "acount", 0),
+    ("orders", "aexists", 0),
+    ("orders", "async for", 0),
+]
+_QUERIED_READ = [
     ("books", "aget", 1),
     ("books", "aget-missing", 1),
-    ("orders", "aget", 1),
     ("empty", "aget-missing", 1),
-    ("orders", "afirst", 1),
     ("empty", "afirst", 1),
+]
+_QUERIED_WRITE = [
+    ("orders", "aget", 1),
+    ("orders", "afirst", 1),
 ]
 
 
-@pytest.mark.parametrize(("subject", "name", "statements"), _CACHED)
+@pytest.mark.parametrize(("subject", "name", "statements"), _CACHED_READ)
 async def test_read_of_a_prefetched_related_manager_matches_django_from_the_cache(
+    async_env, readonly_db, subject, name, statements
+):
+    # when
+    outcome = await read_of_a_prefetched_manager(subject, name)
+    # then
+    assert outcome.sync_statements == statements
+    assert outcome.statements == outcome.sync_statements
+    assert outcome.async_result == outcome.sync_result
+
+
+@pytest.mark.parametrize(("subject", "name", "statements"), _CACHED_WRITE)
+async def test_read_of_a_prefetched_orders_manager_matches_django_from_the_cache(
     async_env, writable_db, subject, name, statements
 ):
     # when
     outcome = await read_of_a_prefetched_manager(subject, name)
     # then
-    assert (outcome.sync_statements, outcome.statements, outcome.async_result) == (
-        statements,
-        outcome.sync_statements,
-        outcome.sync_result,
-    )
+    assert outcome.sync_statements == statements
+    assert outcome.statements == outcome.sync_statements
+    assert outcome.async_result == outcome.sync_result
 
 
 @XFAIL_UNTIL_ASYNCMY
-@pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED)
+@pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED_READ)
 async def test_read_of_a_prefetched_related_manager_matches_django_when_it_queries(
+    async_env, readonly_db, subject, name, statements
+):
+    # when
+    outcome = await read_of_a_prefetched_manager(subject, name)
+    # then
+    assert outcome.sync_statements == statements
+    assert outcome.statements == outcome.sync_statements
+    assert outcome.async_result == outcome.sync_result
+
+
+@XFAIL_UNTIL_ASYNCMY
+@pytest.mark.parametrize(("subject", "name", "statements"), _QUERIED_WRITE)
+async def test_read_of_a_prefetched_orders_manager_matches_django_when_it_queries(
     async_env, writable_db, subject, name, statements
 ):
     # when
     outcome = await read_of_a_prefetched_manager(subject, name)
     # then
-    assert (outcome.sync_statements, outcome.statements, outcome.async_result) == (
-        statements,
-        outcome.sync_statements,
-        outcome.sync_result,
-    )
+    assert outcome.sync_statements == statements
+    assert outcome.statements == outcome.sync_statements
+    assert outcome.async_result == outcome.sync_result
 
 
 # (subject, read): the engine builds a clone and queries, so its instances are FETCH_RAISE

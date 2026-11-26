@@ -216,11 +216,21 @@ def get_clone(queryset: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> A
         raise NotSupportedError(
             f"Calling QuerySet.get(...) with filters after {query.combinator}() is not supported."
         )
-    # `get()` calls `self._chain()` here, not `all()`: a QuerySet subclass may return itself from `all()`
-    clone = queryset._chain() if query.combinator else queryset.filter(*args, **kwargs)
+    # `get()` calls `self._chain()` here, not `all()`
+    clone = (
+        queryset._chain()
+        if query.combinator
+        else _own_clone(queryset.filter(*args, **kwargs), queryset)
+    )
     if query.can_filter() and not query.distinct_fields:
         clone = clone.order_by()
     return raise_on_fetch(clone)
+
+
+def _own_clone(clone: Any, shared: Any) -> Any:
+    """``clone``, or a ``_chain()`` of ``shared`` if a QuerySet subclass returned ``shared`` itself:
+    the engine mutates its clones and must never touch the wrapper's own QuerySet."""
+    return shared._chain() if clone is shared else clone
 
 
 def supports_select_for_update_with_limit(wrapper: Any) -> bool:
@@ -243,4 +253,4 @@ def first_queryset(queryset: Any) -> Any:
     if queryset.ordered or not queryset.query.default_ordering:
         return queryset
     queryset._check_ordering_first_last_queryset_aggregation(method="first")
-    return raise_on_fetch(queryset.order_by("pk"))
+    return raise_on_fetch(_own_clone(queryset.order_by("pk"), queryset))

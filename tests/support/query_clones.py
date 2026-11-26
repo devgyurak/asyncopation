@@ -10,7 +10,7 @@ from django.db.models import (
 )
 
 from asyncopation._django import query as dq
-from harness.catalog.models import Book
+from harness.catalog.models import Book, Order
 
 
 def filled_in_a_user_fetch_mode(queryset: Any) -> Any:
@@ -34,3 +34,27 @@ def shared_sliced_combinator_with_self_returning_all() -> Any:
     union = Book.objects.union(Book.objects.all())
     shared = _SelfReturningAll(model=Book, query=union.query)[:50]
     return filled_in_a_user_fetch_mode(shared)
+
+
+class _SelfReturningFilter(QuerySet):
+    def filter(self, *args: Any, **kwargs: Any) -> Any:
+        return self
+
+
+class _SelfReturningOrderBy(QuerySet):
+    def order_by(self, *field_names: Any) -> Any:
+        return self
+
+
+def shared_sliced_with_self_returning_filter() -> Any:
+    """A sliced QuerySet (no `order_by()` step follows) whose `filter()` returns itself."""
+    return filled_in_a_user_fetch_mode(
+        _SelfReturningFilter(model=Book, query=Book.objects.all().query)[:50]
+    )
+
+
+def shared_unordered_with_self_returning_order_by() -> Any:
+    """An unordered `Order` QuerySet whose `order_by()` returns itself."""
+    return filled_in_a_user_fetch_mode(
+        _SelfReturningOrderBy(model=Order, query=Order.objects.all().query)
+    )

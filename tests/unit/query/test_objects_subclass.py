@@ -17,6 +17,7 @@ from tests.support.manager_models import (
     Root,
     RootChild,
     RootProxy,
+    SilentHookItem,
     SlottedItem,
     StatefulItem,
     attach_subclass_to_bare,
@@ -161,6 +162,13 @@ def test_a_bound_object_carries_a_private_slot_its_subclass_set_in_init():
     secret = SlottedItem.aobjects.secret()
     # then
     assert secret == "hidden"
+
+
+def test_a_bound_object_carries_a_slot_below_a_class_that_skips_init_subclass():
+    # when
+    depth = SilentHookItem.aobjects.depth
+    # then
+    assert depth == "below"
 
 
 def test_a_subclass_property_raising_attribute_error_falls_back_to_the_manager():

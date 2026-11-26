@@ -251,6 +251,24 @@ class SlottedAsyncObjects(AsyncObjects):
         return self.__secret
 
 
+class SilentHookAsyncObjects(AsyncObjects):
+    """Overrides `__init_subclass__` without calling `super()` (so `AsyncObjects` never sees its
+    subclasses)."""
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        pass
+
+
+class SlottedBelowSilentHook(SilentHookAsyncObjects):
+    """Declares a slot below a class whose `__init_subclass__` skips `AsyncObjects`'."""
+
+    __slots__ = ("depth",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.depth = "below"
+
+
 class FaultyPropertyAsyncObjects(AsyncObjects):
     """Properties whose body raises `AttributeError`: the manager has a `label` of its own, but no
     `missing`."""
@@ -415,6 +433,12 @@ class StatefulItem(Fields):
 
 class SlottedItem(Fields):
     aobjects = SlottedAsyncObjects()
+
+    Meta = _meta()
+
+
+class SilentHookItem(Fields):
+    aobjects = SlottedBelowSilentHook()
 
     Meta = _meta()
 

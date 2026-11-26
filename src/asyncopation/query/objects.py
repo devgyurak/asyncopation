@@ -112,7 +112,10 @@ class AsyncObjects:
         # Not copy.copy: binding must not run a `__copy__` a subclass defines.
         bound = object.__new__(type(self))
         bound.__dict__.update(self.__dict__)
-        for slot in type(self)._asyncopation_slots:
+        # Computed in `__init_subclass__`; recomputed for a class whose own `__init_subclass__`
+        # did not reach ours (it skipped `super()`).
+        slots = vars(type(self)).get("_asyncopation_slots")
+        for slot in _slots(type(self)) if slots is None else slots:
             try:
                 value = object.__getattribute__(self, slot)
             except AttributeError:

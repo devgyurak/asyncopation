@@ -23,11 +23,12 @@ def test_wrapper_for_replaces_the_wrapper_when_the_info_changes(alias):
 
 def test_wrapper_for_does_not_serve_stale_features_after_the_info_changes(alias):
     # given
+    # (the newest `is_postgresql_NN` feature: Django drops the older ones as it raises its floor)
     first = wrapper_for(alias, dict(PG_SETTINGS), pg_info(150000))
-    stale = first.features.is_postgresql_16  # ty: ignore[missing-attribute]
+    stale = first.features.is_postgresql_18  # ty: ignore[missing-attribute]
     # when
-    second = wrapper_for(alias, dict(PG_SETTINGS), pg_info(170000))
-    fresh = second.features.is_postgresql_16  # ty: ignore[missing-attribute]
+    second = wrapper_for(alias, dict(PG_SETTINGS), pg_info(180000))
+    fresh = second.features.is_postgresql_18  # ty: ignore[missing-attribute]
     # then
     assert (stale, fresh) == (False, True)
 

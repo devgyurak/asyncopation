@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=91c310bd4f17 -->
+<!-- i18n: source=README.md source-sha256=e95c3af9fe51 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.

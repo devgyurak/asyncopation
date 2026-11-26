@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=e95c3af9fe51 -->
+<!-- i18n: source=README.md source-sha256=91ba61609418 -->
 # Asyncopation
 
-> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`)와 매니저 수준 `aobjects`(`async for`를 뺀 같은 evaluator와 async 매니저 메서드)로 데이터를 읽을 수 있다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -79,9 +79,65 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 `raw()`(래핑되지 않은 `RawQuerySet`을 돌려주게 된다)는 `NotImplementedError`를 낸다. 일치할 수 없는
 `QuerySet`(`.none()`, `pk__in=[]`)은 SQL을 실행하지 않지만, 읽기 API는 먼저 해당 alias의 풀을 연다(ADR-0004).
 PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()`, `async for`이다
-(`prefetch_related`는 아직 없고 MySQL/MariaDB는 뒤따른다). `aobjects = AsyncObjects()`를 선언한
-모델(서드파티 모델은 `AsyncObjects.attach(Model)`)은 `await Book.aobjects.filter(...).alist()`처럼
-`aobjects`로 읽는다. `aobjects`는 교체되어 쓰이지 않는 모델을 거부하지 않으므로, 실제로 사용하는 모델에 붙여야 한다.
+(`prefetch_related`는 아직 없고 MySQL/MariaDB는 뒤따른다).
+
+### `aobjects`: 매니저 수준
+
+`aobjects = AsyncObjects()`를 선언한 모델(서드파티 모델은 `AsyncObjects.attach(Model)`)에는
+`objects` 옆에 매니저 수준 객체가 생긴다(ADR-0009). 이 객체는 Django `Manager`가 아니며 `objects`를
+대체하지 않는다. 모델의 기본 매니저에 바인딩되어 그 매니저처럼 동작한다.
+
+- QuerySet 메서드는 `AsyncQuerySet`을 돌려준다(`Book.aobjects.filter(...)`, 사용자 QuerySet의
+  메서드). 매니저에만 정의된 메서드도 마찬가지다(`Book.aobjects.published()`).
+  `Book.aobjects.all()`은 `Book.objects.all()`처럼 매니저의 `all()` 오버라이드를 따른다.
+- evaluator를 쓸 수 있다: `await Book.aobjects.aget(pk=1)`, `alist()`, `afirst()`, `acount()`,
+  `aexists()`. 매니저에서처럼 호출할 때마다 쿼리를 따로 실행한다.
+- 매니저가 할 수 없는 일은 먼저 `.all()`을 거친다: 슬라이싱(`Book.aobjects.all()[:20]`), `|` / `&` /
+  `^`, `.queryset`, `async for`.
+- `Book.aobjects.db_manager("replica")`는 사용자 서브클래스를 유지하고, `aq(Book.aobjects)`는 새
+  `AsyncQuerySet`이다.
+- Django 매니저가 정의한 코루틴과 async generator(`UserManager.acreate_user`,
+  `aget_by_natural_key`)는 `sync_to_async`(스레드)에서 실행되므로 `NotImplementedError`를 낸다.
+  코루틴이나 async generator를 반환하는 매니저 메서드도 마찬가지다.
+- 동기로 쿼리하는 매니저 메서드나 QuerySet 메서드(`create_user`, `get_by_natural_key`,
+  `return self.first().title`)는 여전히 `SynchronousOnlyOperation`을 낸다.
+
+async 매니저 로직은 서브클래스에 작성한다. 서브클래스는 `self`로 QuerySet API에 닿고 I/O는
+evaluator로 하므로 스레드 홉이 없다.
+
+```python
+from asyncopation import AsyncObjects
+
+
+class BookAsyncObjects(AsyncObjects):
+    async def apublished_by(self, author):
+        return await self.filter(author=author, published=True).alist()
+
+    async def aget(self, *args, **kwargs):  # evaluators can be overridden
+        return await super().aget(*args, **kwargs)
+
+
+class Book(models.Model):
+    aobjects = BookAsyncObjects()  # third-party model: BookAsyncObjects.attach(Book)
+```
+
+서브클래스에 대해 알아 둘 점:
+
+- `self.model`은 객체를 읽어 온 클래스다(자식 모델이나 프록시 모델은 자기 클래스에 바인딩된다).
+  `model`과 `name`은 다시 정의할 수 없다(`TypeError`).
+- `super()`는 `AsyncObjects`가 정의한 것(evaluator)에만 닿는다. 프록시되는 이름에는 닿지 않는다.
+  매니저 자신의 메서드는 `super().__getattr__("published")(...)`로, QuerySet 메서드는
+  `aq(self).filter(...)`로 호출한다. 쓰기 API가 생기기 전까지 `super().acreate()`는 `AttributeError`를 낸다.
+- evaluator 오버라이드는 매니저 수준 호출에만 적용된다. `Book.aobjects.filter(...).aget()`과
+  `aq(Book.aobjects).aget()`은 `AsyncQuerySet`으로 가므로 오버라이드를 거치지 않는다.
+  `Manager.get`을 오버라이드해도 `Book.objects.filter().get()`이 바뀌지 않는 것과 같다. 접근 제어용
+  오버라이드라면 체이닝 메서드까지 다뤄야 한다.
+
+async `create_user`는 쓰기 API(#20)가 생기면 `return await self.acreate(username=username,
+password=make_password(password))` 같은 서브클래스 메서드로 만들 수 있다. `make_password`는
+이벤트 루프에서 해시를 계산하므로, 그 CPU 시간 동안 루프를 막는다.
+
+`aobjects`는 교체되어 쓰이지 않는 모델을 거부하지 않으므로, 실제로 사용하는 모델에 붙여야 한다.
 
 ## 동시성과 트랜잭션
 

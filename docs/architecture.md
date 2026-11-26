@@ -3,12 +3,12 @@
 Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
 the recording driver, and so are the executors (borrowed/pinned connection ownership, #5) and the first read path
-(`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6); the
+(`aq(qs)`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6; the manager-level
+`aobjects`: the same evaluators except `async for`, #72); the
 MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
 ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
-`aobjects`, Accepted) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
-behaviour described below is still ADR-0006's until then.
+`aobjects`, Accepted, implemented in #72) partially supersedes ADR-0006 Decision 3.
 The plan behind it: [design/plan.md](design/plan.md). Decisions: [adr/](adr/).
 
 ## The split
@@ -36,7 +36,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | - | `asyncopation.errors` | public exceptions of our own (`ConcurrentQueryError`, `SyncEvaluationError`); imports nothing (an import-linter contract keeps it free of `asyncopation` layers, a subprocess import test of Django and the drivers), so `import asyncopation` stays light; re-exported at the package root | import anything |
 | 9 | `asyncopation.apps` | Django `AppConfig` (entry module: nothing imports it; `ready()` calls `connection.configure()`; [ADR-0004](adr/0004-lifecycle-and-registry.md)) | - |
 | 8 | `asyncopation.testing` | `assert_num_queries` on observers, recording driver (`RecordingDriver`, with `Capabilities` / `ExecResult` re-exported) | - |
-| 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md); `aobjects` shape: [ADR-0009](adr/0009-async-manager-level-aobjects.md), implementation #72) | fall through to Django's `sync_to_async` methods |
+| 7 | `asyncopation.query` | public facade: `aq()`, `AsyncObjects` (`aobjects`), evaluation methods ([ADR-0006](adr/0006-public-api-attachment.md); the manager-level `aobjects`: [ADR-0009](adr/0009-async-manager-level-aobjects.md)) | fall through to Django's `sync_to_async` methods |
 | 6 | `asyncopation.deletion`, `asyncopation.prefetch` | async `Collector`, async `prefetch_related` as sans-I/O cores | import each other |
 | 5 | `asyncopation.fetch` | `afetch()`, async fetch modes, `FETCH_RAISE` default | - |
 | 4 | `asyncopation.engine` | `CompiledQuery`, materializer via `results_iter(results=...)`, sans-I/O runner ([ADR-0002](adr/0002-pipeline-contracts.md), [ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import the public facade |
@@ -44,7 +44,7 @@ pyproject.toml) and `tools/guards` (see [.agents/rules/architecture.md](../.agen
 | 2 | `asyncopation.connection` | executors (borrowed/pinned), registry keyed by `(alias, loop)`, lifecycle, ASGI lifespan wrapper, hooks ([ADR-0001](adr/0001-connection-ownership.md), [ADR-0004](adr/0004-lifecycle-and-registry.md), [ADR-0005](adr/0005-instrumentation-hooks.md)) | - |
 | 1 | `asyncopation.drivers` (internal, experimental) | `AsyncDriver` protocol, `Capabilities`, psycopg3 / asyncmy implementations ([ADR-0003](adr/0003-driver-contract.md)) | know about models |
 | 1 | `asyncopation.compile` | compile-only `DatabaseWrapper` (`CompileOnlyMixin` + per-backend composition: `compile.postgresql` and `compile.mysql` (MySQL / MariaDB, composed without mysqlclient), imported lazily; frozen `ServerInfo` / `PostgreSQLServerInfo` / `MySQLServerInfo`) and the synchronous `compile_scope` that swaps it into `connections[alias]` for one compile call ([ADR-0008](adr/0008-compile-only-wrapper-reachability.md)) | do I/O, contain `async def`, `await` inside a scope |
-| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.transaction` re-exports only Django's `TransactionManagementError` (the one name of `django.db.transaction` guard A101 lets through); `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.apps` is the one place that asks which apps are installed (`is_installed`; read by `connection.engines` at `configure()` for the contrib.postgres flag, ADR-0003 Decision 2); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
+| 0 | `asyncopation._django` | sole importer of non-public Django APIs, split per backend; `_django.transaction` re-exports only Django's `TransactionManagementError` (the one name of `django.db.transaction` guard A101 lets through); `_django.connections` is the only module allowed to touch `django.db.connections` (the `swapped` context manager only, imported by `compile/scope.py` only; guard A102); `_django.apps` is the one place that asks which apps are installed (`is_installed`; read by `connection.engines` at `configure()` for the contrib.postgres flag, ADR-0003 Decision 2); `_django.postgresql_adapters` holds Django's adapter helpers for the psycopg driver (imported by `drivers/postgresql` only; guard A104); `_django.managers` tells a QuerySet method Django copied onto a manager from one the manager defines (the shared `manager_method` code object) and reads `_default_manager` for `aobjects` (ADR-0009 Decision 6) ([ADR-0007](adr/0007-sans-io-ports-and-django-boundary.md)) | import anything from `asyncopation` |
 
 ## Evaluation pipeline
 
@@ -77,8 +77,13 @@ Django-side halves are ported without their I/O in `_django.aggregation` (split 
 ADR-0007 Decision 5); `engine.read` follows `QuerySet.get` / `first` / `count` / `exists` (result-cache
 shortcuts, the `MAX_GET_RESULTS` bound, the `select_for_update` limit read from the compile-only
 wrapper's `features`). `asyncopation.query.AsyncObjects` is the `aobjects` descriptor (not a Django
-`Manager`); [ADR-0009](adr/0009-async-manager-level-aobjects.md) makes its value a manager-level
-object over the default manager (implementation #72).
+`Manager`); its value is a manager-level object bound to the accessed model's default manager
+([ADR-0009](adr/0009-async-manager-level-aobjects.md)): `model` / `name`, then the subclass's own
+methods, then the evaluators, then the blocking tables of `query/queryset.py`, then the manager. A
+QuerySet method Django copied onto the manager goes straight to `aq(manager)` (recognised by the
+shared `manager_method` code object, `_django.managers`); a name the manager defines is proxied,
+its QuerySets re-wrapped, a returned `Manager` re-bound, and coroutines, async generators and
+awaitables it defines or returns refused (`NotImplementedError`).
 
 Stage contracts: [ADR-0002](adr/0002-pipeline-contracts.md). Ported orchestration (prefetch,
 `Collector`, `get_or_create`) is written as generators that yield requests and is driven by one

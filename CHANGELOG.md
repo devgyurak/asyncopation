@@ -4,6 +4,17 @@ All notable changes are documented here. Format: [Keep a Changelog](https://keep
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** `Model.aobjects` is a manager-level object, no longer an `AsyncQuerySet` (#72, ADR-0009, which supersedes ADR-0006 Decision 3). It is a new instance of the declared `AsyncObjects` (sub)class per access, bound to the accessed model and its default manager, and it is not a Django `Manager`.
+  - Methods defined only on the manager (`Model.aobjects.published()`) return an `AsyncQuerySet`. `Model.aobjects.all()` follows an `all()` override. `db_manager()` returns the same `AsyncObjects` subclass. `aq(Model.aobjects)` is a fresh `AsyncQuerySet`.
+  - Async manager methods go on an `AsyncObjects` subclass (`aobjects = MyAsyncObjects()` or `MyAsyncObjects.attach(Model)`). They use `self.model` and do their I/O through the evaluators.
+  - Evaluators (`alist`, `aget`, `afirst`, `acount`, `aexists`) can be overridden, and `super()` reaches them. `super()` does not reach proxied manager names; use `super().__getattr__(name)` or `aq(self)`. An override does not apply to chains such as `Model.aobjects.filter(...).aget()`. A subclass that redefines `model` or `name` raises `TypeError`.
+  - Coroutines and async generators defined on a Django manager (`UserManager.acreate_user`, `aget_by_natural_key`) raise `NotImplementedError` instead of running on `sync_to_async`. So do coroutines, async generators and awaitables returned by a manager's sync method.
+  - `contribute_to_class` is never proxied, so putting `Model.aobjects` on another model cannot take over `Model`'s default manager.
+  - Migration: slicing, `|` / `&` / `^`, `.queryset` and `async for` on `Model.aobjects` now need `.all()` first, as on a `Manager`. `copy.copy(Model.aobjects)` is another manager-level object. Each evaluator call on a bound object runs its own query; there is no result cache at this level.
+  - `Model.aobjects.filter(...)` builds one QuerySet clone instead of two.
+  - The test harness gives `Publisher` a default manager with a manager-only `from_country()` and an `all()` override (no migration).
+
 ### Added
 - `pytest-timeout` (dev dependency): every test has a 120 s timeout so a hang fails the test instead of slowing the run.
 - Phase 0: agentic workflow (Claude Code / Codex / Pi), guards, differential/e2e/benchmark harness.

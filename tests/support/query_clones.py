@@ -63,3 +63,10 @@ def shared_unordered_with_self_returning_order_by() -> Any:
     return filled_in_a_user_fetch_mode(
         _SelfReturningOrderBy(model=Order, query=Order.objects.all().query)
     )
+
+
+def shared_distinct_on_with_self_returning_filter() -> Any:
+    """An unsliced `distinct(<fields>)` QuerySet whose `filter()` returns itself (`get_clone` skips
+    `order_by()` for it)."""
+    query = Book.objects.distinct("title").query
+    return filled_in_a_user_fetch_mode(_SelfReturningFilter(model=Book, query=query))

@@ -51,7 +51,8 @@ class _SelfReturningOrderBy(QuerySet):
 
 
 def shared_sliced_with_self_returning_filter() -> Any:
-    """A sliced QuerySet (no `order_by()` step follows) whose `filter()` returns itself."""
+    """A sliced QuerySet whose `filter()` returns itself. Sliced so `get_clone` skips `order_by()`:
+    on an unsliced one `order_by()` always builds a fresh clone, which would hide a missing guard."""
     return filled_in_a_user_fetch_mode(
         _SelfReturningFilter(model=Book, query=Book.objects.all().query)[:50]
     )
@@ -61,11 +62,4 @@ def shared_unordered_with_self_returning_order_by() -> Any:
     """An unordered `Order` QuerySet whose `order_by()` returns itself."""
     return filled_in_a_user_fetch_mode(
         _SelfReturningOrderBy(model=Order, query=Order.objects.all().query)
-    )
-
-
-def shared_unsliced_with_self_returning_filter() -> Any:
-    """An unsliced QuerySet (an `order_by()` step follows) whose `filter()` returns itself."""
-    return filled_in_a_user_fetch_mode(
-        _SelfReturningFilter(model=Book, query=Book.objects.all().query)
     )

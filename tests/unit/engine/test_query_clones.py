@@ -12,7 +12,6 @@ from tests.support.query_clones import (
     shared_sliced_combinator_with_self_returning_all,
     shared_sliced_with_self_returning_filter,
     shared_unordered_with_self_returning_order_by,
-    shared_unsliced_with_self_returning_filter,
 )
 
 
@@ -59,14 +58,24 @@ def test_get_clone_after_a_combinator_is_not_the_shared_queryset():
     assert clone is not shared
 
 
-def test_get_clone_after_a_combinator_leaves_a_self_returning_all_queryset_unchanged():
+def test_get_clone_after_a_combinator_with_a_self_returning_all_is_not_the_shared_queryset():
     # given
     shared = shared_sliced_combinator_with_self_returning_all()
     # when
     clone = dq.get_clone(shared, (), {})
     # then
     assert clone is not shared
-    assert (dq.queryset_fetch_mode(shared), dq.cached_result(shared)) == (FETCH_PEERS, [])
+
+
+def test_get_clone_after_a_combinator_with_a_self_returning_all_leaves_the_shared_one_unchanged():
+    # given
+    shared = shared_sliced_combinator_with_self_returning_all()
+    cache = dq.cached_result(shared)
+    # when
+    dq.get_clone(shared, (), {})
+    # then
+    assert dq.queryset_fetch_mode(shared) == FETCH_PEERS
+    assert dq.cached_result(shared) is cache
 
 
 def test_get_clone_of_a_sliced_queryset_whose_filter_returns_itself_is_not_the_shared_queryset():
@@ -81,10 +90,12 @@ def test_get_clone_of_a_sliced_queryset_whose_filter_returns_itself_is_not_the_s
 def test_get_clone_of_a_sliced_queryset_whose_filter_returns_itself_leaves_the_shared_one_unchanged():
     # given
     shared = shared_sliced_with_self_returning_filter()
+    cache = dq.cached_result(shared)
     # when
     dq.get_clone(shared, (), {})
     # then
-    assert (dq.queryset_fetch_mode(shared), dq.cached_result(shared)) == (FETCH_PEERS, [])
+    assert dq.queryset_fetch_mode(shared) == FETCH_PEERS
+    assert dq.cached_result(shared) is cache
 
 
 def test_get_clone_of_a_sliced_queryset_whose_filter_returns_itself_is_fetch_raise():
@@ -96,23 +107,33 @@ def test_get_clone_of_a_sliced_queryset_whose_filter_returns_itself_is_fetch_rai
     assert dq.queryset_fetch_mode(clone) == FETCH_RAISE
 
 
-def test_get_clone_of_an_unsliced_queryset_whose_filter_returns_itself_is_not_the_shared_queryset():
+def test_get_clone_applies_the_filter_to_the_clone():
     # given
-    shared = shared_unsliced_with_self_returning_filter()
+    shared = Book.objects.all()
     # when
-    clone = dq.get_clone(shared, (), {})
+    clone = dq.get_clone(shared, (), {"pk": 1})
     # then
-    assert clone is not shared
+    assert (bool(shared.query.where), bool(clone.query.where)) == (False, True)
 
 
-def test_first_queryset_leaves_a_queryset_whose_order_by_returns_itself_unchanged():
+def test_first_queryset_with_a_self_returning_order_by_is_not_the_shared_queryset():
     # given
     shared = shared_unordered_with_self_returning_order_by()
     # when
     ordered = dq.first_queryset(shared)
     # then
     assert ordered is not shared
-    assert (dq.queryset_fetch_mode(shared), dq.cached_result(shared)) == (FETCH_PEERS, [])
+
+
+def test_first_queryset_with_a_self_returning_order_by_leaves_the_shared_one_unchanged():
+    # given
+    shared = shared_unordered_with_self_returning_order_by()
+    cache = dq.cached_result(shared)
+    # when
+    dq.first_queryset(shared)
+    # then
+    assert dq.queryset_fetch_mode(shared) == FETCH_PEERS
+    assert dq.cached_result(shared) is cache
 
 
 def test_first_queryset_of_a_queryset_whose_order_by_returns_itself_is_fetch_raise():

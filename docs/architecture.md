@@ -230,7 +230,9 @@ savepoints) or `transaction` (BEGIN / COMMIT / ROLLBACK); transaction control ca
 `asyncopation.connection` and the query goes on, while a `BaseException` propagates once every
 observer got the event. The pinned executor passes a per-call `hooks.Outcome` (whether the call
 reached the driver, what the driver raised), so only a failure of the driver itself breaks a
-transaction, and a control call an observer stopped before the driver changes no transaction state. `params` is in an event only for observers
+transaction (a cancellation leaving the block of an open pinned stream counts, whatever raised it:
+it is thrown into the driver's stream, which discards the connection), and a control call an
+observer stopped before the driver changes no transaction state. `params` is in an event only for observers
 registered with `params=True`, or for all while `settings.DEBUG` is true. `bench/hooks_micro.py`
 (the `hooks.*` cases of `make bench-micro`) times the executors on a `RecordingDriver` with 0 and 1
 observers.

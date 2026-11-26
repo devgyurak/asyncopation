@@ -12,9 +12,9 @@ from typing import Any
 
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import call, kinds_of, raised_by
-from tests.support.executors.scenarios import ALIAS, _executors, executor_of
-from tests.support.hooks.events import Recorder, hooks
-from tests.support.hooks.scenarios import Observed, _outcome
+from tests.support.executors.scenarios import ALIAS, executor_module, executor_of
+from tests.support.hooks.events import Raising, Recorder, hooks
+from tests.support.hooks.scenarios import Observed, outcome_of
 from tests.support.hooks.streams import CHUNK, ROWS, SQL, ConsumerError
 
 
@@ -49,7 +49,7 @@ class InTransaction:
 
 async def observer_raising_in_transaction(env: ExecEnv, observer: Any, op: str) -> InTransaction:
     """`begin()` on a pin, then `op` observed by `observer`, then `rollback()`."""
-    async with _executors().pin(ALIAS) as executor:
+    async with executor_module().pin(ALIAS) as executor:
         await executor.begin()
         with hooks().observe(observer):
             error = await raised_by(call(executor, op))
@@ -66,7 +66,7 @@ async def real_cancel_in_observed_transaction(env: ExecEnv) -> tuple[bool, bool]
     seen: list[Any] = []
 
     async def worker() -> None:
-        async with _executors().pin(ALIAS) as executor:
+        async with executor_module().pin(ALIAS) as executor:
             seen.append(executor)
             await executor.begin()
             await executor.fetch_all("SELECT 1", None)
@@ -84,8 +84,6 @@ async def failed_call_with_raising_observer(
     env: ExecEnv, op: str, late: BaseException, *, pinned: bool
 ) -> Observed:
     """`op` while the driver raises a queued error and a `query_finished` observer raises `late`."""
-    from tests.support.hooks.events import Raising
-
     injected = ValueError("driver failure")
     env.default.queue(injected)
     recorder = Recorder()
@@ -95,7 +93,7 @@ async def failed_call_with_raising_observer(
             return await call(executor, op)
 
     with hooks().observe(recorder), hooks().observe(Raising("query_finished", late)):
-        result, error = await _outcome(run())
+        result, error = await outcome_of(run())
     return Observed(recorder, result, error, injected)
 
 
@@ -117,8 +115,6 @@ async def consumer_error_with_raising_observer(
 ) -> BaseException | None:
     """The consumer's code raises inside the stream block while a `query_finished` observer raises
     `late` when the stream closes."""
-    from tests.support.hooks.events import Raising
-
     env.default.queue(list(ROWS))
 
     async def run() -> Any:

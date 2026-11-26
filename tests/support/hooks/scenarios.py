@@ -14,7 +14,7 @@ from typing import Any
 
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import call, call_with, in_gather_child, yield_once
-from tests.support.executors.scenarios import ALIAS, _executors, executor_of
+from tests.support.executors.scenarios import ALIAS, executor_module, executor_of
 from tests.support.hooks.events import Recorder, Tagged, hooks
 
 PARAMETERIZED = "SELECT %s"
@@ -44,7 +44,7 @@ class Observed:
         return self.recorder.only_finished
 
 
-async def _outcome(awaitable: Awaitable[Any]) -> tuple[Any, BaseException | None]:
+async def outcome_of(awaitable: Awaitable[Any]) -> tuple[Any, BaseException | None]:
     try:
         return await awaitable, None
     except BaseException as exc:
@@ -69,7 +69,7 @@ async def observed(
     """Run `run()` inside `observe(recorder, params=params)`."""
     recorder = recorder or Recorder()
     with hooks().observe(recorder, params=params):
-        result, error = await _outcome(run())
+        result, error = await outcome_of(run())
     return Observed(recorder, result, error)
 
 
@@ -105,7 +105,7 @@ async def observed_failure(env: ExecEnv, op: str, *, pinned: bool) -> Observed:
 
 
 async def unobserved_fetch(sql: str) -> Any:
-    return await _executors().BorrowedExecutor(ALIAS).fetch_all(sql, None)
+    return await executor_module().BorrowedExecutor(ALIAS).fetch_all(sql, None)
 
 
 # --------------------------------------------------------------------------- when events fire
@@ -174,14 +174,14 @@ async def opted_in_and_out() -> TwoObservers:
     """Two scoped observers on one statement, only the first asks for parameters."""
     opted_in, opted_out = Recorder(), Recorder()
     with hooks().observe(opted_in, params=True), hooks().observe(opted_out):
-        await _executors().BorrowedExecutor(ALIAS).fetch_all(PARAMETERIZED, (1,))
+        await executor_module().BorrowedExecutor(ALIAS).fetch_all(PARAMETERIZED, (1,))
     return TwoObservers(opted_in, opted_out)
 
 
 async def global_with_params() -> Recorder:
     recorder = Recorder()
     with registered(recorder, params=True):
-        await _executors().BorrowedExecutor(ALIAS).fetch_all(PARAMETERIZED, (1,))
+        await executor_module().BorrowedExecutor(ALIAS).fetch_all(PARAMETERIZED, (1,))
     return recorder
 
 
@@ -206,10 +206,10 @@ async def with_failing_observer(
 
     if scope == "global":
         with registered(failing), hooks().observe(other):
-            result, error = await _outcome(run())
+            result, error = await outcome_of(run())
     else:
         with hooks().observe(failing), hooks().observe(other):
-            result, error = await _outcome(run())
+            result, error = await outcome_of(run())
     return WithFailing(result, error, other, getattr(failing, "calls", -1))
 
 
@@ -386,5 +386,5 @@ class Passthrough:
 def run_without_subscribers(kind: str) -> Passthrough:
     """`_run` with no subscriber: what it returned and what the connection method produced."""
     connection = SentinelConnection()
-    returned = _executors()._run(connection, (), ALIAS, None, kind, *ARGS[kind])
+    returned = executor_module()._run(connection, (), ALIAS, None, kind, *ARGS[kind])
     return Passthrough(returned, connection.produced)

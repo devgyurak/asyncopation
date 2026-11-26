@@ -5,26 +5,40 @@ changes no transaction state, and an observer re-raising the call's own error ad
 import asyncio
 
 import pytest
+from django.db.transaction import TransactionManagementError
 
+from tests.support.executors.fakes import LostConnection
 from tests.support.executors.ops import CONTROLS
 from tests.support.hooks.aborts import notes_of
-from tests.support.hooks.events import BOTH, FINISHED, STARTED, Failing
+from tests.support.hooks.events import BOTH, FINISHED, STARTED, Failing, Recorder
 from tests.support.hooks.transactions import (
     EVERY_CALL,
+    Reraiser,
     another_observer_note,
     cancel_after_observed_control,
+    cancel_observed_transaction_call,
     cancellation_from_another_call_escapes_a_stream,
     compare_with_failing_observer,
     control_aborted_at_start,
+    lost_connection_in_observed_transaction,
+    lost_connection_on_observed_stream_close,
     reraise_driver_error,
     reraise_real_cancellation,
     rollback_after_aborted_commit,
     two_observers_raising,
+    two_reraisers_on_a_failed_call,
 )
 
 PINNED = pytest.mark.parametrize("pinned", [False, True], ids=["borrowed", "pinned"])
 OPS = pytest.mark.parametrize("op", ["fetch_all", "stream"])
 ON = pytest.mark.parametrize("on", [STARTED, FINISHED])
+REAL_CANCEL_POINTS = pytest.mark.parametrize(
+    "where", ["fetch_all", "stream-open", "stream-read", "stream-close"]
+)
+OBSERVERS = pytest.mark.parametrize(
+    "observer_type",
+    [pytest.param(Recorder, id="recorder"), pytest.param(Reraiser, id="reraiser")],
+)
 BASE_EXCEPTIONS = pytest.mark.parametrize(
     "error_type",
     [
@@ -36,18 +50,20 @@ BASE_EXCEPTIONS = pytest.mark.parametrize(
 
 
 # --------------------------------------------------------------------------- re-raising observers
-@OPS
-async def test_an_observer_reraising_a_real_cancellation_still_breaks_the_transaction(execenv, op):
+@REAL_CANCEL_POINTS
+async def test_an_observer_reraising_a_real_cancellation_still_breaks_the_transaction(
+    execenv, where
+):
     # when
-    outcome = await reraise_real_cancellation(execenv, op)
+    outcome = await reraise_real_cancellation(execenv, where)
     # then
     assert (outcome.cancelled, outcome.broken) == (True, True)
 
 
-@OPS
-async def test_an_observer_reraising_a_real_cancellation_adds_no_note(execenv, op):
+@REAL_CANCEL_POINTS
+async def test_an_observer_reraising_a_real_cancellation_adds_no_note(execenv, where):
     # when
-    outcome = await reraise_real_cancellation(execenv, op)
+    outcome = await reraise_real_cancellation(execenv, where)
     # then
     assert outcome.notes == []
 
@@ -57,6 +73,54 @@ async def test_an_observer_reraising_a_real_cancellation_adds_no_note(execenv, o
 async def test_an_observer_reraising_the_driver_error_adds_no_note(execenv, op, pinned):
     # when
     observed = await reraise_driver_error(execenv, op, pinned=pinned)
+    # then
+    assert observed.error is observed.injected
+    assert notes_of(observed.error) == []
+
+
+@OBSERVERS
+async def test_a_real_cancellation_of_an_observed_pinned_stream_open_breaks_the_transaction(
+    execenv, observer_type
+):
+    # when
+    outcome = await cancel_observed_transaction_call(execenv, "stream-open", observer_type())
+    # then
+    assert (outcome.cancelled, outcome.broken) == (True, True)
+
+
+@OBSERVERS
+async def test_a_real_cancellation_of_an_observed_pinned_stream_close_breaks_the_transaction(
+    execenv, observer_type
+):
+    # when
+    outcome = await cancel_observed_transaction_call(execenv, "stream-close", observer_type())
+    # then
+    assert (outcome.cancelled, outcome.broken) == (True, True)
+
+
+async def test_a_lost_connection_on_an_observed_pinned_stream_close_breaks_the_transaction(
+    execenv,
+):
+    # when
+    error, broken = await lost_connection_on_observed_stream_close(execenv)
+    # then
+    assert isinstance(error, LostConnection)
+    assert broken is True
+
+
+async def test_a_lost_connection_in_an_observed_transaction_breaks_the_pin(execenv):
+    # when
+    broken, next_error = await lost_connection_in_observed_transaction(execenv)
+    # then
+    assert broken is True
+    assert isinstance(next_error, TransactionManagementError)
+
+
+@OPS
+@PINNED
+async def test_two_observers_reraising_the_driver_error_add_no_note(execenv, op, pinned):
+    # when
+    observed = await two_reraisers_on_a_failed_call(execenv, op, pinned=pinned)
     # then
     assert observed.error is observed.injected
     assert notes_of(observed.error) == []
@@ -110,6 +174,17 @@ async def test_a_control_call_stopped_by_a_started_observer_finishes_with_its_er
         ),
         pytest.param(
             "commit", FINISHED, True, ["begin", "commit"], False, id="commit-reached-the-driver"
+        ),
+        pytest.param(
+            "rollback", STARTED, True, ["begin"], True, id="rollback-stopped-before-the-driver"
+        ),
+        pytest.param(
+            "rollback",
+            FINISHED,
+            True,
+            ["begin", "rollback"],
+            False,
+            id="rollback-reached-the-driver",
         ),
     ],
 )

@@ -15,9 +15,9 @@ from typing import Any
 
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import call, in_gather_child, raised_by
-from tests.support.executors.scenarios import _executors, executor_of
+from tests.support.executors.scenarios import executor_module, executor_of
 from tests.support.hooks.events import Recorder, WithMethod, hooks
-from tests.support.hooks.scenarios import Observed, _outcome, registered, unobserved_fetch
+from tests.support.hooks.scenarios import Observed, outcome_of, registered, unobserved_fetch
 from tests.support.hooks.streams import CHUNK, ROWS, SQL
 
 
@@ -156,7 +156,7 @@ async def remove_keeps_the_older_registration() -> list[Any]:
     module.add_observer(recorder)
     try:
         module.remove_observer(recorder)
-        await _executors().BorrowedExecutor("default").fetch_all("SELECT %s", (1,))
+        await executor_module().BorrowedExecutor("default").fetch_all("SELECT %s", (1,))
     finally:
         _remove_all(recorder)
     return recorder.params_seen
@@ -193,10 +193,10 @@ async def observer_raising(
 
     if scope == "global":
         with registered(observer), hooks().observe(recorder):
-            result, error = await _outcome(run())
+            result, error = await outcome_of(run())
     else:
         with hooks().observe(observer), hooks().observe(recorder):
-            result, error = await _outcome(run())
+            result, error = await outcome_of(run())
     return Observed(recorder, result, error)
 
 
@@ -214,7 +214,7 @@ async def observer_returning_an_awaitable(observer: Any) -> MisusedObserver:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with hooks().observe(observer):
-            result, error = await _outcome(unobserved_fetch("SELECT 1"))
+            result, error = await outcome_of(unobserved_fetch("SELECT 1"))
         gc.collect()
     found = [
         str(w.message)
@@ -294,7 +294,7 @@ async def reversed_release(env: ExecEnv) -> Recorder:
 # --------------------------------------------------------------------------- alias and passthrough
 @asynccontextmanager
 async def _executor_on(alias: str, pinned: bool) -> AsyncGenerator[Any]:
-    module = _executors()
+    module = executor_module()
     if pinned:
         async with module.pin(alias) as executor:
             yield executor
@@ -328,5 +328,5 @@ async def failed_control(env: ExecEnv) -> Observed:
     recorder = Recorder()
     with hooks().observe(recorder):
         async with executor_of(True) as executor:
-            result, raised = await _outcome(executor.begin())
+            result, raised = await outcome_of(executor.begin())
     return Observed(recorder, result, raised, error)

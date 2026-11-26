@@ -15,10 +15,10 @@ import pytest
 
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import CONTROLS, STATEMENTS, call, kinds_of, raised_by
-from tests.support.executors.scenarios import ALIAS, _executors, executor_of
+from tests.support.executors.scenarios import ALIAS, executor_module, executor_of
 from tests.support.hooks.aborts import notes_of
 from tests.support.hooks.events import STARTED, Raising, Recorder, hooks
-from tests.support.hooks.scenarios import Observed, _outcome
+from tests.support.hooks.scenarios import Observed, outcome_of
 from tests.support.hooks.streams import CHUNK, ROWS, SQL
 
 EVERY_CALL = [
@@ -50,28 +50,55 @@ class Reraised:
     cancelled: bool
 
 
-async def reraise_real_cancellation(env: ExecEnv, op: str) -> Reraised:
-    """In a transaction, the driver call of `op` (`fetch_all`: the statement; `stream`: a chunk
-    read) is held and its task cancelled; a `query_finished` observer re-raises that error. The
-    worker catches what propagates, to report it."""
-    hold = env.default.hold_statements() if op == "fetch_all" else env.default.hold_chunks()
-    env.default.queue(list(ROWS))
-    seen: dict[str, Any] = {}
+class Seen(dict[str, Any]):
+    """What a worker task recorded; a missing key fails with the task's own outcome instead of a
+    bare `KeyError`."""
 
-    async def run(executor: Any) -> Any:
-        if op == "fetch_all":
-            return await executor.fetch_all("SELECT 1", None)
-        async with executor.stream(SQL, None, CHUNK) as chunks:
-            return await anext(chunks)
+    def __init__(self) -> None:
+        super().__init__()
+        self.task: asyncio.Task[Any] | None = None
+
+    def __missing__(self, key: str) -> Any:
+        state = "not started" if self.task is None else repr(self.task)
+        raise AssertionError(f"the worker never recorded {key!r} (task: {state})")
+
+
+HELD_AT = ("fetch_all", "stream-open", "stream-read", "stream-close")
+"""Where the driver holds the call that gets cancelled: the statement, a stream's open (the
+statement gate also holds a stream open), its first chunk read, or its close."""
+
+
+def _hold(env: ExecEnv, where: str) -> Any:
+    driver = env.default
+    if where in ("fetch_all", "stream-open"):
+        return driver.hold_statements()
+    if where == "stream-read":
+        return driver.hold_chunks()
+    return driver.hold_stream_closes()
+
+
+async def _held_call(executor: Any, where: str) -> Any:
+    if where == "fetch_all":
+        return await executor.fetch_all("SELECT 1", None)
+    async with executor.stream(SQL, None, CHUNK) as chunks:
+        return await anext(chunks)
+
+
+async def cancel_observed_transaction_call(env: ExecEnv, where: str, observer: Any) -> Reraised:
+    """In a transaction, a call observed by `observer` is held in the driver at `where` and the
+    owner task is cancelled there. The worker catches what propagates, to report it."""
+    hold = _hold(env, where)
+    env.default.queue(list(ROWS))
+    seen = Seen()
 
     async def worker() -> None:
-        async with _executors().pin(ALIAS) as executor:
+        async with executor_module().pin(ALIAS) as executor:
             await executor.begin()
-            with hooks().observe(Reraiser()):
-                seen["error"] = await raised_by(run(executor))
+            with hooks().observe(observer):
+                seen["error"] = await raised_by(_held_call(executor, where))
             seen["broken"] = executor.broken
 
-    task = asyncio.create_task(worker())
+    task = seen.task = asyncio.create_task(worker())
     await hold.wait_entered()
     task.cancel()
     await asyncio.wait([task])
@@ -79,6 +106,54 @@ async def reraise_real_cancellation(env: ExecEnv, op: str) -> Reraised:
     return Reraised(
         error, notes_of(error), seen["broken"], isinstance(error, asyncio.CancelledError)
     )
+
+
+async def reraise_real_cancellation(env: ExecEnv, where: str) -> Reraised:
+    """`cancel_observed_transaction_call` with a `query_finished` observer re-raising the error."""
+    return await cancel_observed_transaction_call(env, where, Reraiser())
+
+
+async def lost_connection_on_observed_stream_close(env: ExecEnv) -> tuple[Any, bool]:
+    """In a transaction, an observed pinned stream whose close loses the connection:
+    `(error, pin broken)`."""
+    from tests.support.executors.fakes import LostConnection
+
+    env.default.disconnect_errors = (LostConnection,)
+    env.default.queue(list(ROWS))
+    env.default.fail_next("stream_close", LostConnection())
+    async with executor_module().pin(ALIAS) as executor:
+        await executor.begin()
+        with hooks().observe(Recorder()):
+            error = await raised_by(_held_call(executor, "stream-close"))
+        broken = executor.broken
+    return error, broken
+
+
+async def lost_connection_in_observed_transaction(env: ExecEnv) -> tuple[bool, Any]:
+    """A statement of an observed transaction loses the connection: `(pin broken, error of the
+    next statement)`."""
+    from tests.support.executors.scenarios import lost_connection_pin
+
+    with hooks().observe(Recorder()):
+        async with lost_connection_pin(env) as executor:
+            broken = executor.broken
+            next_error = await raised_by(executor.fetch_all("SELECT 2", None))
+    return broken, next_error
+
+
+async def two_reraisers_on_a_failed_call(env: ExecEnv, op: str, *, pinned: bool) -> Observed:
+    """Two `Reraiser` observers on a call whose driver raises a queued error."""
+    injected = ValueError("driver failure")
+    env.default.queue(injected)
+
+    async def run() -> Any:
+        async with executor_of(pinned) as executor:
+            return await call(executor, op)
+
+    recorder = Recorder()
+    with hooks().observe(Reraiser()), hooks().observe(Reraiser()), hooks().observe(recorder):
+        result, error = await outcome_of(run())
+    return Observed(recorder, result, error, injected)
 
 
 async def reraise_driver_error(env: ExecEnv, op: str, *, pinned: bool) -> Observed:
@@ -92,7 +167,7 @@ async def reraise_driver_error(env: ExecEnv, op: str, *, pinned: bool) -> Observ
 
     recorder = Recorder()
     with hooks().observe(Reraiser()), hooks().observe(recorder):
-        result, error = await _outcome(run())
+        result, error = await outcome_of(run())
     return Observed(recorder, result, error, injected)
 
 
@@ -103,14 +178,14 @@ async def cancellation_from_another_call_escapes_a_stream(env: ExecEnv) -> tuple
     env.default.queue(list(ROWS))
     error = asyncio.CancelledError()
 
-    async with _executors().pin(ALIAS) as executor:
+    async with executor_module().pin(ALIAS) as executor:
         await executor.begin()
 
         async def body() -> None:
             async with executor.stream(SQL, None, CHUNK) as chunks:
                 await anext(chunks)
                 with hooks().observe(Raising(STARTED, error)):
-                    await _executors().BorrowedExecutor("other").fetch_all("SELECT 1", None)
+                    await executor_module().BorrowedExecutor("other").fetch_all("SELECT 1", None)
 
         raised = await raised_by(body())
         broken = executor.broken
@@ -130,7 +205,7 @@ async def control_aborted_at_start(env: ExecEnv, op: str, error: BaseException) 
     """Control `op` on a pin whose `query_started` observer raises `error`; what the driver logged
     during the call, and what a second observer saw."""
     recorder = Recorder()
-    async with _executors().pin(ALIAS) as executor:
+    async with executor_module().pin(ALIAS) as executor:
         with hooks().observe(Raising(STARTED, error)), hooks().observe(recorder):
             raised = await raised_by(call(executor, op))
         kinds = kinds_of(env.default)
@@ -152,10 +227,10 @@ async def cancel_after_observed_control(
     `CancelledError` on `on`; then a statement is held in the driver and its task really
     cancelled. The pin is broken only when a transaction was still open."""
     hold = env.default.hold_statements()
-    seen: dict[str, Any] = {}
+    seen = Seen()
 
     async def worker() -> None:
-        async with _executors().pin(ALIAS) as executor:
+        async with executor_module().pin(ALIAS) as executor:
             seen["executor"] = executor
             if begin_first:
                 await executor.begin()
@@ -164,7 +239,7 @@ async def cancel_after_observed_control(
             seen["kinds"] = kinds_of(env.default)
             await executor.fetch_all("SELECT 1", None)
 
-    task = asyncio.create_task(worker())
+    task = seen.task = asyncio.create_task(worker())
     await hold.wait_entered()
     task.cancel()
     await asyncio.wait([task])
@@ -174,7 +249,7 @@ async def cancel_after_observed_control(
 async def rollback_after_aborted_commit(env: ExecEnv) -> tuple[BaseException | None, list[str]]:
     """`begin()`, a `commit()` stopped by its `query_started` observer, then `rollback()`:
     `(rollback error, driver log)`."""
-    async with _executors().pin(ALIAS) as executor:
+    async with executor_module().pin(ALIAS) as executor:
         await executor.begin()
         with hooks().observe(Raising(STARTED, asyncio.CancelledError())):
             await raised_by(executor.commit())
@@ -217,7 +292,7 @@ async def compare_with_failing_observer(failing: Any, op: str, *, pinned: bool) 
         plain_result = await run()
     other = Recorder()
     with hooks().observe(failing), hooks().observe(other):
-        result, error = await _outcome(run())
+        result, error = await outcome_of(run())
     return Compared(
         (plain_result, plain.only_finished.rowcount),
         (result, other.only_finished.rowcount),

@@ -13,9 +13,9 @@ from typing import Any
 from tests.support.aio import collect
 from tests.support.executors.fakes import ExecEnv
 from tests.support.executors.ops import in_gather_child
-from tests.support.executors.scenarios import _executors, executor_of
+from tests.support.executors.scenarios import executor_module, executor_of
 from tests.support.hooks.events import Recorder, hooks
-from tests.support.hooks.scenarios import Observed, _outcome, registered
+from tests.support.hooks.scenarios import Observed, outcome_of, registered
 
 SQL = "SELECT g FROM t"
 CHUNK = 10
@@ -30,8 +30,8 @@ async def _read(env: ExecEnv, how: str, *, pinned: bool) -> tuple[Any, BaseExcep
     """Open the stream on a fresh executor and leave it the way `how` says."""
     async with executor_of(pinned) as executor:
         if how == "generator_close":
-            return await _outcome(_close_generator_early(executor))
-        return await _outcome(_use(executor, env, how))
+            return await outcome_of(_close_generator_early(executor))
+        return await outcome_of(_use(executor, env, how))
 
 
 async def _use(executor: Any, env: ExecEnv, how: str) -> Any:
@@ -171,5 +171,5 @@ async def closed_after_the_block(env: ExecEnv, *, pinned: bool, in_child: bool) 
 async def borrowed_stream_manager_without_subscribers(env: ExecEnv) -> list[Any]:
     """A borrowed stream read in full with no observer at all (the plain path still works)."""
     env.default.queue(list(ROWS))
-    async with _executors().BorrowedExecutor("default").stream(SQL, None, CHUNK) as chunks:
+    async with executor_module().BorrowedExecutor("default").stream(SQL, None, CHUNK) as chunks:
         return await collect(chunks)

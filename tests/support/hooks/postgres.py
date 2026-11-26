@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from tests.support.aio import collect
-from tests.support.executors.scenarios import _executors
+from tests.support.executors.scenarios import executor_module
 from tests.support.hooks.scenarios import Observed, observed
 
 ALIAS = "default"
@@ -15,7 +15,7 @@ TWENTY_FIVE = "SELECT g FROM generate_series(1, 25) g"
 
 async def observed_real_fetch_all() -> Observed:
     async def run() -> Any:
-        return await _executors().BorrowedExecutor(ALIAS).fetch_all(THREE, None)
+        return await executor_module().BorrowedExecutor(ALIAS).fetch_all(THREE, None)
 
     return await observed(run)
 
@@ -25,9 +25,9 @@ async def observed_real_stream(*, pinned: bool) -> Observed:
 
     async def run() -> Any:
         if pinned:
-            async with _executors().pin(ALIAS) as executor:
+            async with executor_module().pin(ALIAS) as executor:
                 return await _stream_all(executor)
-        return await _stream_all(_executors().BorrowedExecutor(ALIAS))
+        return await _stream_all(executor_module().BorrowedExecutor(ALIAS))
 
     return await observed(run)
 
@@ -41,7 +41,7 @@ async def observed_real_transaction() -> Observed:
     """BEGIN, SAVEPOINT sp, RELEASE SAVEPOINT sp and COMMIT on a pinned real connection."""
 
     async def run() -> None:
-        async with _executors().pin(ALIAS) as executor:
+        async with executor_module().pin(ALIAS) as executor:
             await executor.begin()
             await executor.savepoint("sp")
             await executor.release_savepoint("sp")
@@ -61,9 +61,9 @@ async def real_stream_with_consumer_error(*, pinned: bool) -> Observed:
 
     async def run() -> None:
         if pinned:
-            async with _executors().pin(ALIAS) as executor:
+            async with executor_module().pin(ALIAS) as executor:
                 await use(executor)
         else:
-            await use(_executors().BorrowedExecutor(ALIAS))
+            await use(executor_module().BorrowedExecutor(ALIAS))
 
     return await observed(run)

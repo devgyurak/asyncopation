@@ -3,7 +3,7 @@
 Every call to a connection - statements, streams and transaction control - passes the executors'
 ``_run`` (``connection.executor``). When somebody observes, ``_run`` hands the call to
 ``observed_call``, which emits a ``query_started`` event right before the driver call (the
-connection is already acquired; a call that never reaches the driver emits nothing) and a
+connection is already acquired; a call whose connection is never acquired emits nothing) and a
 ``query_finished`` event when it returns, fails or is cancelled (a stream: when it closes).
 
 Observers are synchronous callables (async-correctness rule 6): they add no ``await`` and schedule
@@ -258,8 +258,9 @@ class Outcome:
     With observers, an exception leaving ``_run`` may come from an observer instead of the
     connection; only what the driver itself raised may break a transaction, and a call an observer
     stopped before the driver changed no transaction state. ``reached`` is set right before the
-    driver call, ``failure`` to the exception the driver call (or a stream's open, chunk read or
-    close) raised."""
+    driver call, ``failure`` to the exception the driver call (or a stream's open or close)
+    raised. A failed chunk read is not recorded here: the pinned stream reports it itself (no
+    observer runs while a chunk is read)."""
 
     __slots__ = ("failure", "reached")
 

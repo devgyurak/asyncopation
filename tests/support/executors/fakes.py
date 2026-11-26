@@ -166,6 +166,7 @@ class GatedDriver(RecordingDriver):
         self.during_in_flight: list[int] = []
         self.close_hold: Hold | None = None
         self.chunk_hold: Hold | None = None
+        """Every chunk read of a stream stops here until `release()` (a slow server)."""
         self.control_hold: Hold | None = None
         """Every transaction-control call stops here until `release()`."""
         self.control_during: Callable[[], Awaitable[None]] | None = None
@@ -174,7 +175,6 @@ class GatedDriver(RecordingDriver):
         """A statement whose SQL is a key stops at that hold until it is released."""
         self.results_by_sql: dict[str, Any] = {}
         """A statement whose SQL is a key gets that result instead of the next queued one."""
-        """Every chunk read of a stream stops here until `release()` (a slow server)."""
         self.borrow_hold: Hold | None = None
         """`connection()` stops here once it holds the connection, until `release()` (a pin that
         waits in the pool)."""

@@ -261,3 +261,9 @@ methods that evaluate internally raise `SynchronousOnlyOperation`.
   `test_a_read_of_a_combination_with_a_filled_operand_returns_what_django_does` run `alist`,
   `acount`, `aexists` and `afirst` over the four filled-operand shapes (`|` both ways, `^`,
   `union()`): Django and the wrapper run 0 statements and return the same result.
+- *Amended 2026-11-26 (#6, PR #67):* unit (`tests/unit/query/test_objects.py`, model from
+  `tests/support/swapped_model.py`, DB-free): for a swappable model whose setting names another
+  model, `test_objects_of_a_swapped_out_model_raises_as_django_does` shows Django's manager
+  raises `AttributeError`, and
+  `test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset` pins the deliberate
+  divergence of Decision 3 (`aobjects` returns an `AsyncQuerySet`).

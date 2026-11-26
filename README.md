@@ -95,7 +95,7 @@ read API still opens the alias's pool first (ADR-0004).
 The read API on PostgreSQL is `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()` and `async for`
 (no `prefetch_related` yet; MySQL/MariaDB follow). A model that declares `aobjects = AsyncObjects()`
 (a third-party one gets it with `AsyncObjects.attach(Model)`) is read through it, as in
-`await Book.aobjects.filter(...).alist()`.
+`await Book.aobjects.filter(...).alist()`. `aobjects` does not refuse a swapped-out model; attach it to the model in use.
 
 ## Concurrency and transactions
 

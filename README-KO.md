@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=d184fc6eeb4d -->
+<!-- i18n: source=README.md source-sha256=19c00c2c5da8 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -81,7 +81,7 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()`, `async for`이다
 (`prefetch_related`는 아직 없고 MySQL/MariaDB는 뒤따른다). `aobjects = AsyncObjects()`를 선언한
 모델(서드파티 모델은 `AsyncObjects.attach(Model)`)은 `await Book.aobjects.filter(...).alist()`처럼
-`aobjects`로 읽는다.
+`aobjects`로 읽는다. `aobjects`는 교체되어 쓰이지 않는 모델을 거부하지 않으므로, 실제로 사용하는 모델에 붙여야 한다.
 
 ## 동시성과 트랜잭션
 

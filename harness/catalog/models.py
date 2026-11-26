@@ -15,11 +15,27 @@ from django.db import models
 from asyncopation import AsyncObjects
 
 
+class PublisherManager(models.Manager):
+    """A default manager with a manager-only chaining method and an `all()` override (ADR-0009).
+    It overrides neither `get_queryset` nor `use_in_migrations`, so it needs no migration and
+    every read through `get_queryset()` (filter, get, counts, the evaluators) is unchanged. The
+    only other caller of `Publisher.objects.all()` is `harness/seed.py`'s `reset()`, whose
+    `delete()` clears the ordering."""
+
+    def from_country(self, code: str) -> models.QuerySet[Publisher]:
+        return self.get_queryset().filter(country=code)
+
+    def all(self) -> models.QuerySet[Publisher]:
+        return super().all().order_by("-pk")
+
+
 class Publisher(models.Model):
     aobjects = AsyncObjects()
 
     name = models.CharField(max_length=100)
     country = models.CharField(max_length=2)
+
+    objects = PublisherManager()
 
     class Meta:
         ordering = ["pk"]

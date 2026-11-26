@@ -1,4 +1,4 @@
-<!-- i18n: source=docs/design/plan.md source-sha256=2f606bf2eaa1 -->
+<!-- i18n: source=docs/design/plan.md source-sha256=dbab53f3b849 -->
 # Asyncopation — 진짜 비동기 Django ORM 설계 및 로드맵
 
 > 상태: 구상 / 설계 초안
@@ -251,7 +251,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 | Phase | 내용 | 난이도 | 산출물 |
 |---|---|---|---|
 | 0 | **테스트 하네스**: 차등 테스트 러너, 쿼리셋 생성 전략, async 쿼리 캡처, CI 매트릭스 | 중 | 하네스, CI |
-| 1 | 드라이버 추상화 + 컴파일 전용 커넥션 + `aobjects` 읽기 API (`alist`/`aget`/`afirst`/`acount`/`aexists`/`async for`) — PG → MySQL. 하네스를 실제 구현에 붙여서 다듬는 단계 | 중 | 첫 동작 버전 |
+| 1 | 드라이버 추상화 + 컴파일 전용 커넥션 + `aq()` / `aobjects` 읽기 API (`alist`/`aget`/`afirst`/`acount`/`aexists`; `async for`는 `aq()`에서) — PG → MySQL. 하네스를 실제 구현에 붙여서 다듬는 단계 | 중 | 첫 동작 버전 |
 | 2 | `select_related`, `values` / `values_list` | 중하 | |
 | 3 | **`afetch` + 기본 `FETCH_RAISE` + async peers 로딩** (대표 기능) | 중상 | async fetch modes |
 | 4 | `prefetch_related` async 포팅, `aq()` 어댑터 | 상 | |
@@ -283,7 +283,7 @@ books = await aq(author.book_set.filter(published=True)).alist()
 - [x] `django.contrib.postgres`가 설치된 경우 PostgreSQL 드라이버의 hstore/citext 타입 등록 (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] drift 스위트에서 asgiref 버전과 `compile_scope`가 의존하는 `Local(thread_critical=True)` 동작을 고정 (ledger `[[dependency]]` 행, `asgiref>=3.13`; #49, ADR-0008)
 - [x] 첫 차등 테스트 1개 통과 (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`): PostgreSQL. `aget` / `afirst` / `acount` / `aexists` / `async for`, `aobjects` 디스크립터, `get_aggregation` / `has_results` 코어가 있는 sans-I/O 러너 포함 (#6, PR #67; MySQL/MariaDB는 MySQL wrapper와 함께, #6, PR #68 / #7)
-- [ ] 매니저 수준 `aobjects` (ADR-0009): 매니저 전용 메서드를 프록시하고 다시 래핑, async 매니저 메서드는 `AsyncObjects` 서브클래스에, 매니저가 정의한 코루틴은 거부 (#72)
+- [x] 매니저 수준 `aobjects` (ADR-0009): 매니저 전용 메서드를 프록시하고 다시 래핑, async 매니저 메서드는 `AsyncObjects` 서브클래스에, 매니저가 정의한 코루틴은 거부 (#72)
 - [ ] asyncmy로 같은 흐름 재현; 인수 조건(#7): 서버 정보 프로브는 열 순서가 Django의 `row[n]` 계약과 일치하는 정확한 `SELECT`에서 `MySQLServerInfo(*row)`를 만든다 (ADR-0008 결정 5; 소스 drift 테스트가 필드 순서를 고정한다)
 
 ---

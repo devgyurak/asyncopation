@@ -1,12 +1,20 @@
-"""`AsyncObjects` (ADR-0006 Decision 3): a plain descriptor over the model's default manager."""
+"""`AsyncObjects` (ADR-0006 Decision 3, ADR-0009 Decision 1): a plain descriptor whose value is a
+manager-level object bound to the model and its default manager."""
 
 import pytest
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import FETCH_RAISE  # ty: ignore[missing-module-member]
+from django.db.models import FETCH_RAISE, Manager  # ty: ignore[missing-module-member]
 
-from asyncopation import AsyncObjects
+from asyncopation import AsyncObjects, aq
 from asyncopation.query import AsyncQuerySet
-from tests.support.aq_wrapper import read_attribute
+from asyncopation.query.objects import EVALUATORS
+from tests.support.aq_wrapper import call_named, has_attribute, read_attribute
+from tests.support.manager_models import (
+    await_evaluator,
+    declared_object,
+    receive_in_class_body,
+    receive_with_add_to_class,
+)
 from tests.support.object_models import (
     Base,
     Child,
@@ -65,42 +73,78 @@ def attached_over_marker():
 # -- what Model.aobjects is ----------------------------------------------------------------------
 
 
-def test_aobjects_is_an_async_queryset_of_the_model():
+def test_aobjects_is_an_async_objects_bound_to_the_model():
     # when
-    wrapper = Plain.aobjects
+    bound = Plain.aobjects
     # then
-    assert isinstance(wrapper, AsyncQuerySet)
-    assert wrapper.model is Plain
+    assert isinstance(bound, AsyncObjects)
+    assert bound.model is Plain
 
 
-def test_aobjects_gives_a_fresh_queryset_on_every_access():
+def test_aobjects_is_not_an_async_queryset():
+    # when
+    bound = Plain.aobjects
+    # then
+    assert not isinstance(bound, AsyncQuerySet)
+
+
+def test_aobjects_is_not_a_django_manager():
+    # when
+    bound = Plain.aobjects
+    # then
+    assert not isinstance(bound, Manager)
+
+
+def test_aobjects_gives_a_new_bound_object_on_every_access():
     # when
     first, second = Plain.aobjects, Plain.aobjects
     # then
     assert first is not second
+
+
+def test_aobjects_all_gives_a_new_queryset_on_every_call():
+    # given
+    bound = Plain.aobjects
+    # when
+    first, second = bound.all(), bound.all()
+    # then
     assert first.queryset is not second.queryset
 
 
-def test_aobjects_carries_fetch_raise_so_attribute_access_never_does_io():
+def test_aobjects_all_carries_fetch_raise_so_attribute_access_never_does_io():
     # when
-    wrapper = Plain.aobjects
+    wrapper = Plain.aobjects.all()
     # then
     assert fetch_mode_of(wrapper) is FETCH_RAISE
 
 
-def test_aobjects_has_not_run_a_query(no_sql):
+def test_aobjects_access_and_all_run_no_query(no_sql):
     # when
-    wrapper = Plain.aobjects
+    wrapper = Plain.aobjects.all()
     # then
     assert wrapper.queryset._result_cache is None
+
+
+def test_aobjects_name_is_the_declared_attribute_name():
+    # when
+    name = Plain.aobjects.name
+    # then
+    assert name == "aobjects"
+
+
+def test_a_renamed_descriptor_reports_its_own_name():
+    # when
+    name = Renamed.async_objects.name
+    # then
+    assert name == "async_objects"
 
 
 # -- the default manager is the source -----------------------------------------------------------
 
 
-def test_aobjects_applies_the_filter_of_a_custom_default_manager():
+def test_aobjects_all_applies_the_filter_of_a_custom_default_manager():
     # when
-    conditions = where_conditions(Widget.aobjects)
+    conditions = where_conditions(Widget.aobjects.all())
     # then
     assert conditions == [("active", "exact")]
 
@@ -119,16 +163,23 @@ def test_a_chained_custom_queryset_method_keeps_the_filter_of_the_default_manage
     assert conditions == [("active", "exact"), ("price", "lt")]
 
 
-def test_aobjects_adds_no_filter_of_a_default_manager_that_overrides_all():
+def test_aobjects_all_follows_the_all_override_of_the_default_manager():
     # when
-    conditions = where_conditions(Overriding.aobjects)
+    conditions = where_conditions(Overriding.aobjects.all())
+    # then
+    assert conditions == [("active", "exact")]
+
+
+def test_aobjects_filter_skips_the_all_override_of_the_default_manager():
+    # when
+    conditions = where_conditions(Overriding.aobjects.filter())
     # then
     assert conditions == []
 
 
 def test_aobjects_uses_the_manager_named_by_default_manager_name():
     # when
-    conditions = where_conditions(Special.aobjects)
+    conditions = where_conditions(Special.aobjects.all())
     # then
     assert default_manager_name(Special) == "special"
     assert conditions == [("active", "exact")]
@@ -164,6 +215,85 @@ def test_aobjects_is_a_descriptor_not_a_manager():
     declared = vars(Plain)["aobjects"]
     # then
     assert isinstance(declared, AsyncObjects)
+
+
+# -- the unbound declared object ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", EVALUATORS)
+async def test_an_evaluator_of_the_unbound_declared_object_raises_attribute_error(name):
+    # given
+    declared = declared_object(Plain)
+    # when / then
+    with pytest.raises(AttributeError, match=r"not bound to a model"):
+        await await_evaluator(declared, name)
+
+
+@pytest.mark.parametrize("name", EVALUATORS)
+async def test_the_unbound_evaluator_error_names_the_evaluator(name):
+    # given
+    declared = declared_object(Plain)
+    # when / then
+    with pytest.raises(AttributeError, match=name):
+        await await_evaluator(declared, name)
+
+
+@pytest.mark.parametrize("name", ["all", "filter", "get_queryset", "db_manager"])
+def test_a_proxied_name_of_the_unbound_declared_object_raises_attribute_error(name):
+    # given
+    declared = declared_object(Plain)
+    # when / then
+    with pytest.raises(AttributeError, match=r"not bound to a model"):
+        call_named(declared, name)
+
+
+# -- contribute_to_class is never proxied ---------------------------------------------------------
+
+
+def test_aobjects_has_no_contribute_to_class():
+    # when
+    found = has_attribute(Plain.aobjects, "contribute_to_class")
+    # then
+    assert found is False
+
+
+def test_the_unbound_declared_object_has_no_contribute_to_class():
+    # when
+    found = has_attribute(declared_object(Plain), "contribute_to_class")
+    # then
+    assert found is False
+
+
+def test_aobjects_in_another_model_body_leaves_the_source_default_manager_untouched():
+    # when
+    received = receive_in_class_body(Plain)
+    # then
+    assert received.source_manager_kept is True
+    assert received.source_manager_model is Plain
+
+
+def test_aobjects_in_another_model_body_keeps_its_implicit_objects():
+    # when
+    received = receive_in_class_body(Plain)
+    # then
+    assert received.receiver_managers == ["objects"]
+    assert received.receiver_objects_model is received.receiver
+
+
+def test_aobjects_added_to_another_model_leaves_the_source_default_manager_untouched():
+    # when
+    received = receive_with_add_to_class(Plain)
+    # then
+    assert received.source_manager_kept is True
+    assert received.source_manager_model is Plain
+
+
+def test_aobjects_added_to_another_model_leaves_its_managers_as_they_were():
+    # when
+    received = receive_with_add_to_class(Plain)
+    # then
+    assert received.receiver_managers == ["objects"]
+    assert received.receiver_objects_model is received.receiver
 
 
 # -- where it refuses ----------------------------------------------------------------------------
@@ -237,15 +367,63 @@ def test_aobjects_of_a_proxy_model_uses_the_proxy_model():
     assert wrapper.model is ProxyPlain
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(Child, id="multi-table-child"),
+        pytest.param(ProxyPlain, id="proxy-model"),
+        pytest.param(Concrete, id="concrete-child-of-an-abstract-model"),
+    ],
+)
+def test_aq_of_aobjects_queries_the_accessed_class(model):
+    # when
+    wrapper = aq(model.aobjects)
+    # then
+    assert wrapper.model is model
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param(Child, id="multi-table-child"),
+        pytest.param(ProxyPlain, id="proxy-model"),
+        pytest.param(Concrete, id="concrete-child-of-an-abstract-model"),
+    ],
+)
+def test_aobjects_all_queries_the_accessed_class(model):
+    # when
+    wrapper = model.aobjects.all()
+    # then
+    assert wrapper.model is model
+
+
+# -- repr ----------------------------------------------------------------------------------------
+
+
+def test_repr_of_aobjects_names_the_class_and_the_model_label(no_sql):
+    # when
+    text = repr(Plain.aobjects)
+    # then
+    assert "AsyncObjects" in text
+    assert "aobjects_unit.Plain" in text
+
+
+def test_repr_of_the_unbound_declared_object_says_unbound(no_sql):
+    # when
+    text = repr(declared_object(Plain))
+    # then
+    assert "unbound" in text
+
+
 # -- attach --------------------------------------------------------------------------------------
 
 
 def test_attach_adds_aobjects_to_a_model_that_cannot_declare_it(attached_content_type):
     # when
-    wrapper = attached_content_type.aobjects
+    bound = attached_content_type.aobjects
     # then
-    assert isinstance(wrapper, AsyncQuerySet)
-    assert wrapper.model is ContentType
+    assert isinstance(bound, AsyncObjects)
+    assert bound.model is ContentType
 
 
 def test_attach_leaves_the_model_managers_alone(attached_content_type):
@@ -257,9 +435,16 @@ def test_attach_leaves_the_model_managers_alone(attached_content_type):
 
 def test_attach_applies_fetch_raise(attached_content_type):
     # when
-    mode = fetch_mode_of(attached_content_type.aobjects)
+    mode = fetch_mode_of(attached_content_type.aobjects.all())
     # then
     assert mode is FETCH_RAISE
+
+
+def test_attach_with_a_name_reports_it_as_the_name(attached_plain_name):
+    # when
+    name = read_attribute(Plain, "async_rows").name
+    # then
+    assert name == "async_rows"
 
 
 def test_attach_with_a_name_uses_it_in_its_errors(attached_plain_name):
@@ -272,10 +457,10 @@ def test_attach_with_a_name_uses_it_in_its_errors(attached_plain_name):
 
 def test_attach_over_an_existing_attribute_replaces_it(attached_over_marker):
     # when
-    wrapper = Occupied.marker
+    bound = Occupied.marker
     # then
-    assert isinstance(wrapper, AsyncQuerySet)
-    assert wrapper.model is Occupied
+    assert isinstance(bound, AsyncObjects)
+    assert bound.model is Occupied
 
 
 # -- a swapped-out model ---------------------------------------------------------------------------
@@ -287,9 +472,10 @@ def test_objects_of_a_swapped_out_model_raises_as_django_does(swapped_model):
         read_objects(swapped_model)
 
 
-def test_aobjects_of_a_swapped_out_model_still_returns_an_async_queryset(swapped_model, no_sql):
+def test_aobjects_of_a_swapped_out_model_still_returns_a_bound_async_objects(swapped_model, no_sql):
     # when
-    wrapper = swapped_model.aobjects
+    bound = swapped_model.aobjects
     # then
-    assert isinstance(wrapper, AsyncQuerySet)
-    assert wrapper.model is swapped_model
+    assert isinstance(bound, AsyncObjects)
+    assert not isinstance(bound, AsyncQuerySet)
+    assert bound.model is swapped_model

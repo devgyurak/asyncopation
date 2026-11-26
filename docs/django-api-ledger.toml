@@ -582,6 +582,29 @@ reason = "Ported (mysql.base imports MySQLdb, so it is never imported): the Data
 verified_against = "6.1.3"
 ported = true
 
+# --------------------------------------------------------------------------- Manager-level aobjects (#72)
+[[internal]]
+module = "django.db.models.manager"
+names = ["BaseManager"]
+used_by = ["src/asyncopation/_django/managers.py", "src/asyncopation/query/objects.py"]
+reason = "`BaseManager.all` / `BaseManager.get_queryset` are Django's own manager methods that return a fresh `get_queryset()` result, which the manager-level `aobjects` switches to FETCH_RAISE in place (ADR-0009 Decision 4); `_get_queryset_methods` names the copies (see the [[attribute]] row); a `BaseManager` a proxied manager method returns (`db_manager()`, also of a default manager built with `BaseManager.from_queryset`, which is not a `Manager`) is re-bound, never handed out"
+verified_against = "6.1.3"
+signatures = { "BaseManager.all" = "(self)", "BaseManager.get_queryset" = "(self)" }
+
+[[attribute]]
+owner = "django.db.models.manager.BaseManager"
+names = ["_get_queryset_methods"]
+used_by = ["src/asyncopation/_django/managers.py"]
+reason = "Its nested `manager_method` is the one code object every QuerySet method copied onto a manager shares (`getattr(self.get_queryset(), name)(...)`); `aobjects` routes a copy straight to `aq(manager)` and checks the copy's `co_qualname` against this method's `__qualname__`; if Django changes the copies, every name is taken from the manager (ADR-0009 Decision 6; pinned by tests/unit/django_drift/test_manager_methods_drift.py)"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.base.ModelBase"
+names = ["_default_manager"]
+used_by = ["src/asyncopation/_django/managers.py", "src/asyncopation/query/objects.py"]
+reason = "The per-class default manager copy (`Options.default_manager`, `model` set to the accessed class) that `Model.aobjects` binds to (ADR-0006 Decision 3, ADR-0009 Decision 1)"
+verified_against = "6.1.3"
+
 # --------------------------------------------------------------------------- Runtime dependencies (#49)
 [[dependency]]
 package = "asgiref"

@@ -9,9 +9,11 @@ from django.db.models import Count, Q
 from hypothesis import given
 from hypothesis import strategies as st
 
-from harness.catalog.models import Author, AuthorProfile, Book, BookEdition, Tag
+from harness.catalog.models import Author, AuthorProfile, Book, BookEdition, Publisher, Tag
 from tests.support.backends import POSTGRESQL_ONLY, XFAIL_UNTIL_ASYNCMY
+from tests.support.manager_models import attach_pass_through, pass_through_calls, restore_aobjects
 from tests.support.read_api import (
+    aobjects_statements_of_two_alists,
     cancel_acount_in_flight,
     cancel_locking_aget_in_a_pin,
     cancel_read_in_flight,
@@ -19,7 +21,9 @@ from tests.support.read_api import (
     compare_aobjects,
     compare_chained_aobjects,
     compare_in_transaction,
+    compare_manager_method,
     gathered_aget_and_iteration,
+    gathered_on_one_bound_object,
     gathered_reads,
     iterate_twice,
     iteration_sync_connection_attempts,
@@ -27,6 +31,7 @@ from tests.support.read_api import (
     statements_of,
     sync_aget_and_list,
     sync_connection_attempts,
+    sync_list_and_count,
     sync_trio,
     sync_value,
 )
@@ -472,6 +477,65 @@ async def test_a_filtered_aobjects_read_matches_the_sync_manager(async_env, op):
     # then
     assert pair.sync.error is None
     assert pair.async_ == pair.sync
+
+
+# -- aobjects through the default manager (ADR-0009) ----------------------------------------------
+
+
+@pytest.fixture
+def pass_through_publisher():
+    """`PassThroughAsyncObjects.attach(Publisher)` (an `aget` override calling `super().aget()`),
+    the original declared object restored afterwards."""
+    original = attach_pass_through(Publisher)
+    yield Publisher
+    restore_aobjects(Publisher, original)
+
+
+@pytest.mark.parametrize("country", ["US", "KR", "JP", "FR"])
+@pytest.mark.parametrize("op", ["alist", "acount", "afirst"])
+async def test_a_manager_only_chaining_method_reads_like_the_sync_manager(async_env, op, country):
+    # when
+    pair = await compare_manager_method(Publisher, "from_country", op, country)
+    # then
+    assert pair.sync.error is None
+    assert pair.async_ == pair.sync
+
+
+@pytest.mark.parametrize("op", ["alist", "afirst"])
+async def test_an_all_override_reads_like_the_sync_manager_order_included(async_env, op):
+    # when
+    pair = await compare_manager_method(Publisher, "all", op)
+    # then
+    assert pair.sync.error is None
+    assert pair.async_ == pair.sync
+
+
+async def test_an_aget_override_through_super_reads_like_the_sync_manager(
+    async_env, pass_through_publisher
+):
+    # when
+    pair = await compare_aobjects(pass_through_publisher, "aget", name="publisher-0")
+    # then
+    assert pair.sync.error is None
+    assert pair.async_ == pair.sync
+    assert pass_through_calls(pass_through_publisher) == ["aget"]
+
+
+async def test_two_alist_calls_on_one_bound_aobjects_run_two_statements(async_env):
+    # when
+    statements = await aobjects_statements_of_two_alists(Book)
+    # then
+    assert statements == 2
+
+
+async def test_gathered_reads_on_one_bound_aobjects_match_the_sync_manager(async_env):
+    # given
+    expected = await sync_list_and_count(Book)
+    # when
+    gathered = await gathered_on_one_bound_object(Book)
+    # then
+    assert gathered.readings == expected
+    assert gathered.statements == 2
 
 
 # -- what cannot match issues no statement --------------------------------------------------------

@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`) and the manager-level `aobjects` (the same evaluators except `async for`, plus async manager methods) read data on PostgreSQL; the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -93,9 +93,69 @@ unloaded relation or a deferred field raises
 `RawQuerySet`). A `QuerySet` that cannot match (`.none()`, `pk__in=[]`) runs no statement, but the
 read API still opens the alias's pool first (ADR-0004).
 The read API on PostgreSQL is `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()` and `async for`
-(no `prefetch_related` yet; MySQL/MariaDB follow). A model that declares `aobjects = AsyncObjects()`
-(a third-party one gets it with `AsyncObjects.attach(Model)`) is read through it, as in
-`await Book.aobjects.filter(...).alist()`. `aobjects` does not refuse a swapped-out model; attach it to the model in use.
+(no `prefetch_related` yet; MySQL/MariaDB follow).
+
+### `aobjects`: the manager level
+
+A model that declares `aobjects = AsyncObjects()` (a third-party one gets it with
+`AsyncObjects.attach(Model)`) has a manager-level object next to `objects` (ADR-0009). It is not a
+Django `Manager` and never replaces `objects`. It is bound to the model's default manager and
+behaves like it:
+
+- QuerySet methods return an `AsyncQuerySet` (`Book.aobjects.filter(...)`, a custom QuerySet's
+  methods), and so do methods defined only on the manager (`Book.aobjects.published()`).
+  `Book.aobjects.all()` follows the manager's `all()` override, as `Book.objects.all()` does.
+- The evaluators are there: `await Book.aobjects.aget(pk=1)`, `alist()`, `afirst()`, `acount()`,
+  `aexists()`. Each call runs its own query, as on a manager.
+- What a manager cannot do needs `.all()` first: slicing (`Book.aobjects.all()[:20]`), `|` / `&` /
+  `^`, `.queryset` and `async for`.
+- `Book.aobjects.db_manager("replica")` keeps your subclass, and `aq(Book.aobjects)` is a fresh
+  `AsyncQuerySet`.
+- Coroutines and async generators that a Django manager defines (`UserManager.acreate_user`,
+  `aget_by_natural_key`) raise `NotImplementedError`, because they run on `sync_to_async` (a
+  thread). So does a manager method that returns a coroutine or an async generator.
+- Manager or QuerySet methods that query synchronously (`create_user`, `get_by_natural_key`,
+  `return self.first().title`) still raise `SynchronousOnlyOperation`.
+
+Write async manager logic on a subclass. It reaches the QuerySet API through `self` and does its
+I/O with the evaluators, so there is no thread hop:
+
+```python
+from asyncopation import AsyncObjects
+
+
+class BookAsyncObjects(AsyncObjects):
+    async def apublished_by(self, author):
+        return await self.filter(author=author, published=True).alist()
+
+    async def aget(self, *args, **kwargs):  # evaluators can be overridden
+        return await super().aget(*args, **kwargs)
+
+
+class Book(models.Model):
+    aobjects = BookAsyncObjects()  # third-party model: BookAsyncObjects.attach(Book)
+```
+
+Things to know about subclasses:
+
+- `self.model` is the class the object was read from (a child or a proxy model binds its own), and
+  `model` and `name` cannot be redefined (`TypeError`).
+- Names starting with `_asyncopation_` are reserved for the binding machinery. This is not
+  checked, so do not define such names on a subclass.
+- `super()` reaches only what `AsyncObjects` defines (the evaluators). It does not reach proxied
+  names. Call the manager's own method with `super().__getattr__("published")(...)`, or a QuerySet
+  method with `aq(self).filter(...)`. `super().acreate()` raises `AttributeError` until the write
+  API exists.
+- An evaluator override applies to the manager-level call only. `Book.aobjects.filter(...).aget()`
+  and `aq(Book.aobjects).aget()` go to the `AsyncQuerySet` and bypass it, just as overriding
+  `Manager.get` does not change `Book.objects.filter().get()`. An override used for access control
+  must cover the chaining methods too.
+
+An async `create_user` becomes possible with the write API (#20), as a subclass method such as
+`return await self.acreate(username=username, password=make_password(password))`. `make_password`
+hashes on the event loop, blocking it for the hash's CPU time.
+
+`aobjects` does not refuse a swapped-out model; attach it to the model in use.
 
 ## Concurrency and transactions
 

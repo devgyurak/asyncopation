@@ -22,7 +22,19 @@ from asyncopation.engine.evaluate import evaluate_list
 from asyncopation.engine.read import evaluate_count, evaluate_exists, evaluate_first, evaluate_get
 from asyncopation.errors import SyncEvaluationError
 
-__all__ = ["AsyncQuerySet", "aq"]
+__all__ = [
+    "AQ_MANAGER_HOOK",
+    "AsyncQuerySet",
+    "aq",
+    "call_on_manager_queryset",
+    "manager_queryset",
+    "refuse_blocked",
+    "wrap_result",
+]
+
+# The method a manager-level object (`AsyncObjects`, ADR-0009 Decision 7) defines on its type to
+# hand `aq()` its bound manager; `query/objects.py` imports this module, not the other way round.
+AQ_MANAGER_HOOK = "_asyncopation_aq_manager"
 
 # Django's own coroutine methods (alist-like evaluators, aget, acreate, ...): ours replace them one by
 # one; until then they must not reach `sync_to_async`. The scan is over the class, so a Django
@@ -208,23 +220,30 @@ class AsyncQuerySet:
             # Not proxied: protocol lookups (copy, pickle) and an instance without its slot yet
             # must not recurse into the QuerySet.
             raise AttributeError(name)
-        if name in _PENDING_ADVICE:
-            raise SyncEvaluationError(
-                f"QuerySet.{name}() would run a blocking database query on the event loop; "
-                f"{_PENDING_ADVICE[name]}"
-            )
-        if name in _SYNC_EVALUATORS:
-            raise _evaluation_error(f"QuerySet.{name}()", _SYNC_EVALUATORS[name])
-        if name in _UNSUPPORTED:
-            raise NotImplementedError(
-                f"AsyncQuerySet.{name}() is not supported: it returns an unwrapped RawQuerySet"
-            )
-        if name in _DJANGO_COROUTINES:
-            raise NotImplementedError(f"AsyncQuerySet.{name}() is not implemented yet")
+        refuse_blocked(name)
         attribute = getattr(self._queryset, name)
         if callable(attribute) and not isinstance(attribute, type):
             return _proxy(attribute, self)
         return attribute
+
+
+def refuse_blocked(name: str) -> None:
+    """Raise for a name of the blocking tables (ADR-0006 Decision 2), also used by ``aobjects``
+    (ADR-0009 Decision 3): sync evaluators, Django's coroutines that are not implemented and
+    ``raw``."""
+    if name in _PENDING_ADVICE:
+        raise SyncEvaluationError(
+            f"QuerySet.{name}() would run a blocking database query on the event loop; "
+            f"{_PENDING_ADVICE[name]}"
+        )
+    if name in _SYNC_EVALUATORS:
+        raise _evaluation_error(f"QuerySet.{name}()", _SYNC_EVALUATORS[name])
+    if name in _UNSUPPORTED:
+        raise NotImplementedError(
+            f"AsyncQuerySet.{name}() is not supported: it returns an unwrapped RawQuerySet"
+        )
+    if name in _DJANGO_COROUTINES:
+        raise NotImplementedError(f"AsyncQuerySet.{name}() is not implemented yet")
 
 
 # The functions Django defines on QuerySet: a method (a bound method's function, or the class
@@ -240,15 +259,31 @@ def _proxy(method: Any, owner: AsyncQuerySet) -> Any:
 
     @functools.wraps(method)
     def call(*args: Any, **kwargs: Any) -> Any:
-        # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
-        # it would hand the wrapper back as if it were a QuerySet.
-        result = method(
-            *(_unwrap(value) for value in args),
-            **{key: _unwrap(value) for key, value in kwargs.items()},
-        )
-        return _wrap(result, owner, *args, *kwargs.values(), own_method=own)
+        return _call(method, owner, own, args, kwargs)
 
     return call
+
+
+def _call(method: Any, owner: AsyncQuerySet, own: bool, args: Any, kwargs: dict[str, Any]) -> Any:
+    # Django never receives a wrapper: ``none().union(aq_qs)`` returns the argument itself, and
+    # it would hand the wrapper back as if it were a QuerySet.
+    result = method(
+        *(_unwrap(value) for value in args),
+        **{key: _unwrap(value) for key, value in kwargs.items()},
+    )
+    return _wrap(result, owner, *args, *kwargs.values(), own_method=own)
+
+
+def call_on_manager_queryset(manager: Any, name: str, args: Any, kwargs: dict[str, Any]) -> Any:
+    """``aq(manager).<name>(*args, **kwargs)`` without building a proxy function: the call a
+    manager-level copied QuerySet method makes (ADR-0009 Decision 4). The name has passed
+    :func:`refuse_blocked` already."""
+    wrapper = aq(manager)
+    attribute = getattr(wrapper._queryset, name)
+    if not callable(attribute) or isinstance(attribute, type):
+        return getattr(wrapper, name)(*args, **kwargs)
+    own = getattr(attribute, "__func__", None) in _DJANGO_FUNCTIONS
+    return _call(attribute, wrapper, own, args, kwargs)
 
 
 def _unwrap(value: Any) -> Any:
@@ -307,20 +342,37 @@ def aq(obj: Any) -> AsyncQuerySet:
     if isinstance(obj, AsyncQuerySet):
         return obj
     if isinstance(obj, Manager):
-        queryset = obj.get_queryset()
-        _require_queryset(queryset)
-        if dq.cached_result(queryset) is not None:
-            return AsyncQuerySet(queryset, fresh=True, prefetched=True)
-        if dq.queryset_fetch_mode(queryset) is FETCH_RAISE:
-            return AsyncQuerySet(_raise_clone(queryset), fresh=True)
-        dq.set_fetch_mode(queryset, FETCH_RAISE)
-        return AsyncQuerySet(queryset, fresh=True)
+        return manager_queryset(obj.get_queryset())
+    # The manager-level `aobjects` object (ADR-0009 Decision 7), found on its type: its instance
+    # `__getattr__` proxies a manager and must not be asked.
+    bound_manager = getattr(type(obj), AQ_MANAGER_HOOK, None)
+    if bound_manager is not None:
+        return aq(bound_manager(obj))
     from_source = not isinstance(obj, QuerySet) and hasattr(obj, "get_queryset")
     queryset = obj.get_queryset() if from_source else obj
     _require_queryset(queryset)
     if dq.cached_result(queryset) is not None:
         return AsyncQuerySet(queryset)
     return AsyncQuerySet(_raise_clone(queryset))
+
+
+def manager_queryset(queryset: Any) -> AsyncQuerySet:
+    """Wrap a real ``Manager``'s own fresh ``get_queryset()`` result (or Django's ``all()``, which
+    returns it unchained): ``FETCH_RAISE`` is set in place (ADR-0006 Decision 4); a QuerySet that is
+    already ``FETCH_RAISE`` may be shared and is cloned; a filled cache is wrapped as it is."""
+    _require_queryset(queryset)
+    if dq.cached_result(queryset) is not None:
+        return AsyncQuerySet(queryset, fresh=True, prefetched=True)
+    if dq.queryset_fetch_mode(queryset) is FETCH_RAISE:
+        return AsyncQuerySet(_raise_clone(queryset), fresh=True)
+    dq.set_fetch_mode(queryset, FETCH_RAISE)
+    return AsyncQuerySet(queryset, fresh=True)
+
+
+def wrap_result(value: Any) -> Any:
+    """Re-wrap what a user-defined method returned (ADR-0006 Decision 4): a QuerySet is cloned into
+    ``FETCH_RAISE`` unless its cache is filled; anything else is returned as it is."""
+    return _wrap(value, own_method=False)
 
 
 def _require_queryset(value: Any) -> None:

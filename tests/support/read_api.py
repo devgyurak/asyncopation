@@ -282,6 +282,50 @@ async def compare_chained_aobjects(model: Any, op: str, **filters: Any) -> Pair:
     return Pair(sync, async_)
 
 
+async def compare_manager_method(model: Any, method: str, op: str, *args: Any) -> Pair:
+    """`model.objects.<method>(*args)` against `model.aobjects.<method>(*args)`, both read by `op`
+    (a manager-only method or an `all()` override goes through the manager on both sides)."""
+    sync = await sync_reading(
+        lambda: _sync_call(lambda: getattr(model.objects, method)(*args), op, (), {})
+    )
+    async_ = await async_reading(lambda: getattr(getattr(model.aobjects, method)(*args), op)())
+    return Pair(sync, async_)
+
+
+async def aobjects_statements_of_two_alists(model: Any) -> int:
+    """Executor statements of `alist()` called twice on one bound `model.aobjects`."""
+    bound = model.aobjects
+    with recorded_statements() as log:
+        await bound.alist()
+        await bound.alist()
+    return len(log)
+
+
+@dataclass(frozen=True)
+class GatheredOnOne:
+    """`alist()` and `acount()` of one bound object gathered: their readings and statements."""
+
+    readings: tuple[Reading, Reading]
+    statements: int
+
+
+async def gathered_on_one_bound_object(model: Any) -> GatheredOnOne:
+    bound = model.aobjects
+    with recorded_statements() as log:
+        rows, count = await asyncio.gather(bound.alist(), bound.acount())
+    readings = (Reading(snapshot_result(rows), None), Reading(snapshot_result(count), None))
+    return GatheredOnOne(readings, len(log))
+
+
+async def sync_list_and_count(model: Any) -> tuple[Reading, Reading]:
+    """The sync `list()` and `count()` of `model._default_manager.get_queryset()`."""
+    build = model._default_manager.get_queryset
+    return (
+        await sync_reading(lambda: _sync_call(build, "alist", (), {})),
+        await sync_reading(lambda: _sync_call(build, "acount", (), {})),
+    )
+
+
 @dataclass(frozen=True)
 class ConnectionAttempts:
     """What one read did: calls into Django's sync connect paths, and statements it executed (a

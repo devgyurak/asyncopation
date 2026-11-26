@@ -16,10 +16,11 @@ from typing import TYPE_CHECKING, Any
 from asyncopation.errors import ConcurrentQueryError, SyncEvaluationError
 
 if TYPE_CHECKING:
-    from asyncopation.query import AsyncQuerySet, aq
+    from asyncopation.query import AsyncObjects, AsyncQuerySet, aq
 
 __version__ = "0.0.0"
 __all__ = [
+    "AsyncObjects",
     "AsyncQuerySet",
     "ConcurrentQueryError",
     "SyncEvaluationError",
@@ -34,7 +35,7 @@ if not TYPE_CHECKING:  # a module-level __getattr__ would make every missing nam
 
     def __getattr__(name: str) -> Any:
         """Load the Django-facing facade only when it is used (PEP 562)."""
-        if name in ("aq", "AsyncQuerySet"):
+        if name in ("aq", "AsyncObjects", "AsyncQuerySet"):
             from asyncopation import query
 
             return getattr(query, name)

@@ -74,3 +74,12 @@ def _tag_with_peer() -> tuple[Any, str]:
 async def seeded_tag_with_peer() -> tuple[Any, str]:
     """A seeded tag and the name of a second tag sharing one of its books (read from the seed)."""
     return await in_sync(_tag_with_peer)
+
+
+def _book_pk() -> int:
+    return Book.objects.order_by("pk").values_list("pk", flat=True)[0]
+
+
+async def seeded_book_pk() -> int:
+    """The primary key of the first seeded book."""
+    return await in_sync(_book_pk)

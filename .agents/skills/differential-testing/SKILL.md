@@ -38,6 +38,10 @@ Asyncopation must give identical snapshots on every backend.
   `only()` or `defer()` over Book fields and `author__*` paths of the chosen select_related) and
   `build_queryset(spec)` (order: select_related, annotate, only/defer, order_by, slice);
   `annotated_spec()`, `filtered_spec()` and `deferred_spec()` build example-based specs.
+  `QuerySetSpec` also has `distinct`, `extra`, `projection` and `none`, drawn only by
+  `read_queryset_specs()` (the count / first / exists / get properties); `get_queryset_specs()`
+  is the same without slicing (`aget` on a sliced QuerySet is always a `TypeError`);
+  `queryset_specs()` keeps its original shape for the `alist` and snapshot properties.
   Invalid deferrals (defer() of a select_related-traversed FK, or only() that never reaches one)
   make Django raise `FieldError` at compile time; the generator builds one in 20 when select_related is
   not empty, `is_valid_deferral()` classifies a spec, and the random differential test expects

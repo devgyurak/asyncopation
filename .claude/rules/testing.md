@@ -21,6 +21,10 @@ async def test_aget_returns_same_instance_as_sync(readonly_db, differential):
 - Markers `# given`, `# when`, `# then` in that order, each at most once. `# given` may be
   omitted only when nothing happens before `# when`. Use `# when / then` for `pytest.raises`.
   Optional trailing text is allowed: `# given: an author without books`.
+  Explanatory comment lines may follow a marker, up to the first statement of the body (the
+  comment block directly above that statement belongs to the function), but a marker on the
+  `def` line (`async def test_x():  # given`) is not read as one. `tests/support/**` is exempt
+  from the lint; other folders named `support` (`tests/unit/support`) are not.
 - At least one assertion after `# then` (`assert`, `pytest.raises`, or an `assert_*` helper).
 - One behaviour per test. Name: `test_<subject>_<condition>_<expected>`.
 

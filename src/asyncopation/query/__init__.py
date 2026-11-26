@@ -5,6 +5,7 @@ composition and only adds async evaluation (ADR-0006); execution is delegated to
 ``asyncopation.engine``.
 """
 
+from asyncopation.query.objects import AsyncObjects
 from asyncopation.query.queryset import AsyncQuerySet, aq
 
-__all__ = ["AsyncQuerySet", "aq"]
+__all__ = ["AsyncObjects", "AsyncQuerySet", "aq"]

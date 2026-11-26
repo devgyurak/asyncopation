@@ -7,6 +7,7 @@
 - Amended: 2026-11-25 (#5, PR #61) - Decision 6 (`ConcurrentQueryError` is public API); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #61 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Amended: 2026-11-25 (#6, PR #65) - Decisions 1, 2, 4 and 6 (`SyncEvaluationError` is public API in `asyncopation.errors`, re-exported at the root; `aq` / `AsyncQuerySet` load lazily from the root; blocked `a*` names are the coroutine methods and async generators Django defines on `QuerySet`; a slice with a step is a sync evaluator; `raw()` raises `NotImplementedError`; the `iterator()` error points to `alist()`; `aq()` keeps a pre-filled result cache by not cloning; `FETCH_RAISE` is set in place only on a real `Manager`'s own fresh QuerySet, every other QuerySet or duck-typed `get_queryset()` result is cloned even if it already is `FETCH_RAISE`, and the clone and `all()` of a manager wrapper keep the pending sticky filter), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f; the 2026-11-25 Decision 6 note on an already-FETCH_RAISE QuerySet is superseded by the 2026-11-26 amendment on the next line)
 - Amended: 2026-11-26 (#6, PR #65) - Decisions 2, 4 and 6 (the sync-evaluator list is the full `_SYNC_EVALUATORS` table and `__reduce__` raises `SyncEvaluationError`; wrapper arguments are unwrapped before Django sees them, nested ones are not; a result of a proxied method or operator that is an operand is cloned, and so is every result of a user-defined method, unless its result cache is filled; operators, `all()` and slicing skip the clone only when the method is Django's own; a result whose cache is filled is shared whatever its fetch mode (an unfilled operand or user-method result is still cloned, `FETCH_RAISE` or not), as Django returns it, whether or not it is an operand, and the wrapper it gets is ordinary, so its own `all()` re-queries; `all()` shares only a cache that was filled when the manager was wrapped; copies keep the sticky filter but not the cache; reflected operators: `QuerySet | aq(...)` returns a plain QuerySet, keep the wrapper on the left; `aq()` wraps as it is only a QuerySet whose result cache is filled, which corrects the 2026-11-25 Decision 6 note that an already-`FETCH_RAISE` QuerySet is wrapped uncloned; slicing a filled-cache QuerySet returns a plain list that the wrapper passes through, and a slice with a step is refused unconditionally, a deliberate divergence), new Validation items; approved by: maintainer (@devgyurak), 2026-11-26 in the PR #65 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording at 867ac9f)
+- Amended: 2026-11-25 (#6, PR #67) - Decisions 2 and 3 (`aget` / `afirst` / `acount` / `aexists` / `async for` semantics; `AsyncObjects` exported lazily from the root; deviation: for a `select_for_update()` QuerySet `aget` asks the database router once where Django's `get()` asks it twice, described under Decision 2); approved by: maintainer (@devgyurak), to be confirmed in the PR #67 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording)
 
 ## Context
 Plan §3 adds `aobjects` next to `objects` and §4.6 introduces `aq(qs)` for related managers. It
@@ -68,12 +69,24 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
    a list, a `Q`) is not, its behaviour is undefined (no error is defined for it), and it is
    unsupported; pass the QuerySet (`.queryset`) there. Slicing a QuerySet with a filled cache
    returns a plain list, not a QuerySet, and the wrapper returns it as it is.*
+   *Amended 2026-11-25 (#6, PR #67): `aget`, `afirst`, `acount` and `aexists` are implemented and
+   follow Django 6.1's `get`, `first`, `count` and `exists` (the `MAX_GET_RESULTS` bound, the
+   `select_for_update` limit decision read from the compile-only wrapper's `features`, Django's
+   error messages, and the result-cache shortcut of `count` / `exists` / `first`). `async for`
+   evaluates like `alist()`: it fills the wrapped QuerySet's result cache and then yields from it,
+   as Django's `__aiter__` does; chunked iteration is `aiterator()`, still `NotImplementedError`.
+   For a `select_for_update()` QuerySet `aget` asks the database router once (the alias is
+   resolved once and reused by the evaluation), where Django's `get()` asks it for `features` and
+   again when it evaluates; the router answers the same alias both times, so this is an
+   intentional difference (a router that answered differently on the two calls would make Django's
+   `get()` use two aliases, which `aget` cannot: one routing decision serves the whole call).*
 3. **`aobjects`** is a plain descriptor, `asyncopation.AsyncObjects`, that is **not** a Django
    `Manager` and defines no `contribute_to_class`. `Model.aobjects` returns
    `aq(owner._default_manager.get_queryset())` using the accessed `owner` (abstract and
    multi-table inheritance); instance access raises like `Manager`. Models opt in by declaring
    `aobjects = AsyncObjects()`; third-party/swappable models (`auth.User`, `ContentType`) use
-   `aq(Model.objects)` or `AsyncObjects.attach(Model)`. `Model` is never monkeypatched.
+   `aq(Model.objects)` or `AsyncObjects.attach(Model)`. `Model` is never monkeypatched. *Amended
+   2026-11-25 (#6, PR #67): `AsyncObjects` is exported from the package root lazily, like `aq`.*
 4. **Fetch mode.** Both `aobjects` and `aq()` apply `FETCH_RAISE` (any other sync fetch mode would
    do sync I/O on attribute access). *Amended 2026-11-25 (#6, PR #65): `aq()` sets it in place on
    the fresh `get_queryset()` result of a Manager (a clone would consume the pending sticky filter

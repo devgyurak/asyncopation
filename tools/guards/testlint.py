@@ -1,7 +1,8 @@
 """Test-style guard: Given/When/Then structure and zero control flow in test modules.
 
-Applies to ``tests/**/test_*.py``. ``tests/support/**`` and ``conftest.py`` are exempt: that is
-where loops, branches and other helper logic belong.
+Applies to ``tests/**/test_*.py``. ``tests/support/**`` (the helper package, not other folders
+that happen to be named ``support``, such as ``tests/unit/support``) and ``conftest.py`` are
+exempt: that is where loops, branches and other helper logic belong.
 
 Codes
     T101  control flow / comprehension in a test module
@@ -39,7 +40,7 @@ def applies_to(path: str) -> bool:
     p = PurePosixPath(path)
     return (
         p.parts[:1] == ("tests",)
-        and "support" not in p.parts
+        and p.parts[:2] != ("tests", "support")
         and p.suffix == ".py"
         and (p.name.startswith("test_") or p.stem.endswith("_test"))
     )
@@ -50,6 +51,7 @@ def check(path: str, source: str) -> list[Violation]:
     if isinstance(tree, Violation):
         return [tree]
     markers = _markers(source)
+    comment_lines = _comment_lines(source)
     violations = [
         Violation(
             path, node.lineno, "T101",
@@ -59,7 +61,9 @@ def check(path: str, source: str) -> list[Violation]:
         for node in ast.walk(tree)
         if type(node) in _BANNED and isinstance(node, ast.stmt | ast.expr)
     ]  # fmt: skip
-    violations += [v for fn in _test_functions(tree) for v in _check_gwt(path, fn, markers)]
+    violations += [
+        v for fn in _test_functions(tree) for v in _check_gwt(path, fn, markers, comment_lines)
+    ]
     violations += [
         Violation(path, node.lineno, "T301", "sleeping in tests is forbidden - await a condition")
         for node in ast.walk(tree)
@@ -77,6 +81,15 @@ def _markers(source: str) -> dict[int, str]:
     return found
 
 
+def _comment_lines(source: str) -> set[int]:
+    """The lines that hold nothing but a comment."""
+    return {
+        tok.start[0]
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline)
+        if tok.type == tokenize.COMMENT and tok.line.strip().startswith("#")
+    }
+
+
 def _test_functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
     funcs: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
     for node in tree.body:
@@ -88,10 +101,18 @@ def _test_functions(tree: ast.Module) -> list[ast.FunctionDef | ast.AsyncFunctio
 
 
 def _check_gwt(
-    path: str, fn: ast.FunctionDef | ast.AsyncFunctionDef, markers: dict[int, str]
+    path: str,
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    markers: dict[int, str],
+    comment_lines: set[int],
 ) -> list[Violation]:
     start, end = fn.body[0].lineno, fn.end_lineno or fn.lineno
-    own = sorted((line, kind) for line, kind in markers.items() if start - 1 <= line <= end)
+    # The comment block directly above the body's first line belongs to the function: a marker may
+    # be followed by explanatory comment lines before the first statement.
+    first = start
+    while first - 1 in comment_lines:
+        first -= 1
+    own = sorted((line, kind) for line, kind in markers.items() if first <= line <= end)
     kinds = [k for _, k in own]
     out: list[Violation] = []
 

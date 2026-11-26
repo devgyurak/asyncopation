@@ -6,6 +6,7 @@
 - Amended: 2026-11-24 (#3, PR #45) - Decision 1 (a scope exited from another Context raises `ScopeContextError` and leaves the entry untouched), Decision 3 (`autocommit` in a `ContextVar`, wider set of raising methods, driver-free `compose_sql` override and its exact-type contract and error deviations), Decision 6 (the exception narrowed to the `swapped` context manager, dynamic-import and `BaseWrapper` construction rules, guard threat model and known limits), Decision 7 (the `ContextVar` is transient), the internal API table, Consequences (the follow-up wording), new Validation items; approved by: maintainer (@devgyurak), 2026-11-25 in the PR #45 review; architect verdict: AMEND OK WITH CHANGES (architect review 2026-11-24, changes applied)
 - Amended: 2026-11-25 (#5, PR #52) - Decision 6 (a fourth `_django.connections` operation: the read-only `configured_databases()` over `connections.settings`, importable by `connection/lifecycle.py`); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #52 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
 - Amended: 2026-11-25 (#49, PR #62) - the table introduction and the ledger sentence of the "Django internals" section, the `asgiref.local` row of the internal API table and the Validation drift item (asgiref semantics now pinned directly on `Local`, version recorded in a ledger `[[dependency]]` row, `asgiref>=3.13` requirement); approved by: maintainer (@devgyurak), 2026-11-25 in the PR #62 review; architect verdict: APPROVE WITH CHANGES (architect review 2026-11-25, changes applied)
+- Amended: 2026-11-25 (#6, PR #67) - Decision 4 (implemented: `get_aggregation` is a core over `Compile` / `Execute` / `Convert`; the conversion runs outside `compile_scope`, as the Validation item on materialization requires; Decision 2 is unchanged) and Validation (the "zero sync connections" item: an aggregation row is converted outside the scope and tested through `alist` and the aggregation core); approved by: maintainer (@devgyurak), to be confirmed in the PR #67 review; architect verdict: APPROVE (architect review 2026-11-26 of the final wording)
 - Architect review: raised by the architect review of ADR-0002/0004 (2026-11-24); spike results added 2026-11-24 and re-reviewed (approve with changes, incorporated)
 
 ## Context
@@ -116,6 +117,11 @@ A-scoped, concretely:
 4. I/O-bearing Django steps are ported as ADR-0007 cores, not reached through the wrapper:
    `Query.get_aggregation` (compile outer query, `Execute`, convert), `QuerySet.exists` /
    `has_results`, and `SQLUpdateCompiler.pre_sql_setup` + `execute_sql` related updates (Phase 5).
+   *Amended 2026-11-25 (#6, PR #67): `get_aggregation` is ported in `_django/aggregation.py`, split at
+   the I/O seam (`prepare_aggregation` / `finish_aggregation`), and driven by `engine/cores.py`; the
+   runner wraps every synchronous stretch of a core in `compile_scope`, except the `Convert`
+   request that carries the row through the converters (user `from_db_value` code), which runs
+   outside any scope (ADR-0007 Decision 1).*
 5. MySQL / MariaDB: compose the compile-only wrapper from `mysql.features`, `mysql.operations`,
    `mysql.compiler` and ported `DatabaseWrapper` attributes; mysqlclient is not a runtime
    dependency of Asyncopation. With the stock `ENGINE = django.db.backends.mysql` Django itself
@@ -318,6 +324,7 @@ for that is tracked in the Phase 6 issue "Docs: MySQL setup notes".
   and one outside; cancellation around compile.
 - differential, zero sync connections: `acount()` on `qs[:3]`, `distinct()`, `annotate()`,
   `union()`; `aexists()`; materialization after the scope has exited.
+  *Amended 2026-11-25 (#6, PR #67): the conversion of an aggregation row (`acount`, aggregates) also runs after the scope has exited; a field whose `from_db_value` reads `connections[alias]` is tested through `alist` and through the aggregation core.*
 - Phase 5: `pre_sql_setup` core against MySQL related / multi-table updates; `bulk_create`,
   `bulk_update` prepare phases inside a scope.
 - *Amended 2026-11-24 (#3, PR #45): new Validation items (they tighten the list above):* a scope exited from another Context inside a running loop raises `ScopeContextError` and leaves that Context's swap and autocommit untouched (`GeneratorExit` is not counted as a failure); concurrent threads and tasks read their own `autocommit` (the four-thread race test); `compose_sql` equals Django's live output for the exact types on the `binary` and `python` implementations (`make test-compose-python`) and every other type raises `TypeError`; the guard rejects `BaseWrapper(...)` and a `BaseWrapper` subclass without `CompileOnlyMixin` first, and a unit test checks the MRO of every Asyncopation wrapper class.

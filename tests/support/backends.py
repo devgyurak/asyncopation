@@ -22,8 +22,12 @@ TRIVIAL_BEFORE_ASYNCMY = pytest.mark.skipif(
 # Until then the registry has no engine for those backends, so the first open raises
 # `ImproperlyConfigured` ("not supported yet"); tests that capture errors into a differential
 # outcome see that as a mismatch, an `AssertionError`. Anything else (a driver import error, a
-# TypeError in the wrapper) is a real failure and is not xfailed. The suites have been run on
-# MySQL and MariaDB (with `mysqlclient` built locally for the sync side), where these tests xfail.
+# TypeError in the wrapper) is a real failure and is not xfailed.
+# Only for tests that open a driver: a test whose error is raised before any driver opens (an
+# unconfigured alias, an argument error of `aget` / `afirst`) passes on MySQL/MariaDB, would XPASS
+# under this strict marker and so lives in a module without it (`test_read_api_before_io.py`).
+# The suites have been run on MySQL and MariaDB (with `mysqlclient` built locally for the sync
+# side), where these tests xfail.
 XFAIL_UNTIL_ASYNCMY = pytest.mark.xfail(
     VENDOR != "postgresql",
     raises=(AssertionError, ImproperlyConfigured),

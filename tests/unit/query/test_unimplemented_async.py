@@ -28,8 +28,8 @@ def test_unimplemented_names_cover_the_planned_methods():
     # when
     names = unimplemented_async_names()
     # then
-    assert {"acreate", "aget", "afirst", "acount", "aexists", "aaggregate"} <= set(names)
-    assert "alist" not in names
+    assert {"acreate", "aaggregate", "alast"} <= set(names)
+    assert {"alist", "aget", "afirst", "acount", "aexists"}.isdisjoint(names)
 
 
 def test_aiterator_raises_not_implemented_without_a_thread_hop(no_sql, no_thread_hop):

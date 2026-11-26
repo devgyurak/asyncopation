@@ -7,7 +7,7 @@ from typing import Any
 from asyncopation.connection.executor import Executor
 from asyncopation.engine.compiled import CompiledQuery, ResultKind
 
-__all__ = ["execute_multi"]
+__all__ = ["execute_multi", "execute_single"]
 
 
 async def execute_multi(compiled: CompiledQuery, executor: Executor) -> list[tuple[Any, ...]]:
@@ -23,3 +23,18 @@ async def execute_multi(compiled: CompiledQuery, executor: Executor) -> list[tup
         count = compiled.col_count
         return [row[:count] for row in rows]
     return rows
+
+
+async def execute_single(compiled: CompiledQuery, executor: Executor) -> tuple[Any, ...] | None:
+    """The first row of a SINGLE query cut to ``col_count`` (``None`` for no row or EMPTY).
+
+    As Django's ``execute_sql(SINGLE)``: the row is ``fetchone()`` trimmed to the compiler's
+    ``col_count``; an empty result is returned as it came.
+    """
+    if compiled.kind is ResultKind.EMPTY:
+        return None
+    rows = await executor.fetch_all(compiled.sql, compiled.params)
+    row = rows[0] if rows else None
+    if row:
+        return row[: compiled.col_count]
+    return row

@@ -115,23 +115,23 @@ async def core_create_order(request: HttpRequest) -> HttpResponse:
 
 
 # ------------------------------------------------------------------ Asyncopation
-# Written against the planned public API (plan §3, §4.5). Starts working once Phase 1
-# adds the `aobjects` manager to the catalog models.
+# The Asyncopation variant of each scenario, through the `aobjects` descriptor of the catalog models.
+# books-with-authors needs `afetch` (#15) and orders need `acreate` / `async_atomic` (#19, #20).
 async def aopt_book(request: HttpRequest, pk: int) -> JsonResponse:
-    return JsonResponse(_book(await Book.aobjects.aget(pk=pk)))  # ty: ignore[missing-attribute]
+    return JsonResponse(_book(await Book.aobjects.aget(pk=pk)))
 
 
 async def aopt_dashboard(request: HttpRequest) -> JsonResponse:
     author, count, tag = await asyncio.gather(
-        Author.aobjects.order_by("pk").afirst(),  # ty: ignore[missing-attribute]
-        Book.aobjects.acount(),  # ty: ignore[missing-attribute]
-        Tag.aobjects.afirst(),  # ty: ignore[missing-attribute]
+        Author.aobjects.order_by("pk").afirst(),
+        Book.aobjects.acount(),
+        Tag.aobjects.afirst(),
     )
     return JsonResponse({"author": author.name, "books": count, "tag": tag.name})
 
 
 async def aopt_books_with_authors(request: HttpRequest) -> JsonResponse:
-    books = await Book.aobjects.all()[:PAGE].alist()  # ty: ignore[missing-attribute]
+    books = await Book.aobjects.all()[:PAGE].alist()
     await books[0].afetch("author")  # FETCH_PEERS: one query loads the author for all peers
     return JsonResponse({"items": [_book(b) | {"author": b.author.name} for b in books]})
 
@@ -142,5 +142,5 @@ async def aopt_create_order(request: HttpRequest) -> HttpResponse:
 
     payload = json.loads(request.body)
     async with async_atomic():
-        order = await Order.aobjects.acreate(book_id=payload["book"], quantity=payload["quantity"])  # ty: ignore[missing-attribute]
+        order = await Order.aobjects.acreate(book_id=payload["book"], quantity=payload["quantity"])
     return JsonResponse({"id": order.pk}, status=201)

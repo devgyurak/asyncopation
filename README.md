@@ -1,6 +1,6 @@
 # Asyncopation
 
-> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs).alist()` reads data on PostgreSQL; the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
+> **Status: pre-alpha.** The PostgreSQL lifecycle (`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, the driver registry) and `asyncopation.testing` are usable, and `aq(qs)` / `aobjects` read data on PostgreSQL (`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`); the rest of the query API is the design target, not yet implemented. See the [plan](docs/design/plan.md).
 
 Truly asynchronous execution for the Django ORM. Django still builds the SQL; Asyncopation
 executes it on native async drivers (psycopg3 for PostgreSQL, asyncmy for MySQL/MariaDB)
@@ -75,6 +75,8 @@ asynchronous end to end: Django builds the SQL, a native async driver runs it.
 from asyncopation import aq
 
 books = await aq(Book.objects.filter(published=True).order_by("title")).alist()
+book = await Book.aobjects.aget(pk=1)  # with `aobjects = AsyncObjects()` on the model
+how_many = await Book.aobjects.filter(published=True).acount()
 titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 ```
 
@@ -82,21 +84,23 @@ titles = await aq(Book.objects.values_list("title", flat=True)).alist()
 already filled, which `alist()` only reads: a prefetched related manager, or a stored one that a user-defined method returns), so `alist()` fills the wrapper's own cache and never
 yours: a QuerySet kept in a class attribute does not return stale rows to later requests. This holds for combinations too (`aq(Book.objects.none()) | qs`, `.union(qs)`, where Django returns `qs` itself): the result is a clone, and a user-defined chaining method must return a new QuerySet. A wrapper nested inside an argument (`Prefetch(queryset=aq(...))`, a list, a `Q`) is not unwrapped and is unsupported: pass its `.queryset`. Keep the wrapper on the left of `|`, `&` and `^`: `QuerySet | aq(...)` runs Django's operator, which never defers to the wrapper, and returns a plain QuerySet that does not get `FETCH_RAISE` from `aq()`. Wrapping a QuerySet whose cache is already filled (a prefetched related manager, a QuerySet evaluated synchronously) keeps that cache's instances in their original fetch mode, which is not `FETCH_RAISE`. A
 Manager's own fresh QuerySet is used directly (`Manager.get_queryset()` is assumed to return a
-fresh QuerySet, as Django's and related managers do). `aq()` applies `FETCH_RAISE`: touching an
+fresh QuerySet, as Django's and related managers do). `aq()` and `aobjects` apply `FETCH_RAISE`: touching an
 unloaded relation or a deferred field raises
 `FieldFetchBlocked` instead of querying synchronously. Synchronous evaluators (`list(aq(qs))`,
 `aq(qs).get()`, `len(...)`, `aq(qs).iterator()`, a slice with a step such as `aq(qs)[::2]`) raise
-`asyncopation.SyncEvaluationError`, and `a*` methods that are not implemented yet (`aget`, `afirst`,
-`acount`, `aexists`, `aiterator`, `async for`, ...) raise `NotImplementedError`, as does `raw()`
-(it would return an unwrapped `RawQuerySet`). A `QuerySet` that cannot match (`.none()`,
-`pk__in=[]`) runs no statement, but `alist()` still opens the alias's pool first (ADR-0004). Only
-`alist()` exists so far, on PostgreSQL, without `prefetch_related`; the rest of the read API and
-MySQL/MariaDB follow.
+`asyncopation.SyncEvaluationError`, and `a*` methods that are not implemented yet (`acreate`,
+`aiterator`, ...) raise `NotImplementedError`, as does `raw()` (it would return an unwrapped
+`RawQuerySet`). A `QuerySet` that cannot match (`.none()`, `pk__in=[]`) runs no statement, but the
+read API still opens the alias's pool first (ADR-0004).
+The read API on PostgreSQL is `alist()`, `aget()`, `afirst()`, `acount()`, `aexists()` and `async for`
+(no `prefetch_related` yet; MySQL/MariaDB follow). A model that declares `aobjects = AsyncObjects()`
+(a third-party one gets it with `AsyncObjects.attach(Model)`) is read through it, as in
+`await Book.aobjects.filter(...).alist()`.
 
 ## Concurrency and transactions
 
-Only `alist()` exists so far, and `async_atomic` (#19) is not available: what follows is the ownership
-model they will build on (ADR-0001). Outside a transaction every statement will borrow its own
+`async_atomic` (#19) is not available yet: what follows is the ownership
+model it will build on (ADR-0001). Outside a transaction every statement will borrow its own
 pooled connection, so statements run under `asyncio.gather` execute in parallel. Inside an
 `async_atomic` block one connection will be pinned to the task that opened it: using it from
 another task (a `gather` or `TaskGroup` child, a task created inside the block), re-entrantly

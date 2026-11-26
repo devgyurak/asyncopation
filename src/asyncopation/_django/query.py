@@ -5,12 +5,18 @@ upgrade breaks in one place. Nothing in this module runs I/O: the compiler is on
 state that ``as_sql()`` has already computed.
 """
 
+# Ported from django/db/models/query.py::QuerySet.get, QuerySet.first @ 6.1.3
+# Changes: the part of get() / first() before the evaluation, without `connections[...]` (get_clone,
+# first_queryset); see engine/read.py for the rest.
+
 from __future__ import annotations
 
 from enum import Enum
 from typing import Any
 
+from django.db import NotSupportedError
 from django.db.models.query import (
+    MAX_GET_RESULTS,  # ty: ignore[missing-module-member] - missing from django-types
     FlatValuesListIterable,
     ModelIterable,
     NamedValuesListIterable,
@@ -19,31 +25,39 @@ from django.db.models.query import (
     _get_from_db,  # ty: ignore[missing-module-member] - missing from django-types
     get_related_populators,  # ty: ignore[missing-module-member] - missing from django-types
 )
+from django.db.models.sql.compiler import SQLAggregateCompiler
 from django.db.models.utils import create_namedtuple_class  # ty: ignore[missing-module-member] - missing from django-types
 from django.utils.connection import ConnectionDoesNotExist
 
 __all__ = [
+    "MAX_GET_RESULTS",
     "ConnectionDoesNotExist",
     "IterableKind",
     "annotation_col_map",
     "cached_result",
+    "clone_query",
     "col_count",
     "compile_copy",
     "copy_filter_sticky",
+    "first_queryset",
     "from_db_callable",
+    "get_clone",
     "has_extra_select",
     "has_prefetch",
     "iterable_kind",
     "klass_info",
     "known_related_objects",
+    "limit_results",
     "namedtuple_class",
     "queryset_fetch_mode",
     "queryset_fields",
     "related_populators",
     "select",
+    "select_for_update",
     "set_cached_result",
     "set_fetch_mode",
     "set_peers",
+    "supports_select_for_update_with_limit",
     "values_names",
 ]
 
@@ -110,10 +124,16 @@ def compile_copy(queryset: Any) -> Any:
     QuerySet must not see each other's. ``Query.clone()`` shares the ``selected`` dict between the
     copies, and compiling adds the ``__orderbycol<N>`` entries to it: it is copied here, or the
     clone's combined queries (which lack those annotations) would no longer match it."""
-    query = queryset.query.clone()
-    if query.selected:
-        query.selected = dict(query.selected)
-    return query
+    return clone_query(queryset.query)
+
+
+def clone_query(query: Any) -> Any:
+    """``query.clone()`` with its own ``selected`` dict (``Query.clone()`` shares it with the original,
+    and compiling or ``exists()`` / ``get_aggregation`` add entries to it)."""
+    clone = query.clone()
+    if clone.selected:
+        clone.selected = dict(clone.selected)
+    return clone
 
 
 def queryset_fields(queryset: Any) -> Any:
@@ -157,6 +177,10 @@ def col_count(compiler: Any) -> int:
 
 
 def has_extra_select(compiler: Any) -> bool:
+    # Set by `pre_sql_setup()`, which every compiler runs except SQLAggregateCompiler (the outer query
+    # of a subquery count: its `as_sql` selects the aggregates only). Django reads it for MULTI only.
+    if isinstance(compiler, SQLAggregateCompiler):
+        return False
     return bool(compiler.has_extra_select)
 
 
@@ -170,3 +194,40 @@ def related_populators(klass_info_: Any, select_: Any, db: str, fetch_mode: Any)
 
 def set_peers(instance: Any, peers: list[Any]) -> None:
     instance._state.peers = peers
+
+
+def get_clone(queryset: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    """The QuerySet ``QuerySet.get`` evaluates, before the limit (Django 6.1, up to ``num = len(clone)``)."""
+    query = queryset.query
+    if query.combinator and (args or kwargs):
+        raise NotSupportedError(
+            f"Calling QuerySet.get(...) with filters after {query.combinator}() is not supported."
+        )
+    # `all()` is `self._chain()` (Django 6.1), which is what `get()` calls here
+    clone = queryset.all() if query.combinator else queryset.filter(*args, **kwargs)
+    if query.can_filter() and not query.distinct_fields:
+        clone = clone.order_by()
+    return clone
+
+
+def supports_select_for_update_with_limit(wrapper: Any) -> bool:
+    """``connections[alias].features.supports_select_for_update_with_limit`` of the compile-only
+    ``wrapper`` (it carries the real server's features once the alias is open)."""
+    return bool(wrapper.features.supports_select_for_update_with_limit)
+
+
+def select_for_update(queryset: Any) -> bool:
+    return bool(queryset.query.select_for_update)
+
+
+def limit_results(queryset: Any, high: int) -> None:
+    """``clone.query.set_limits(high=high)``: ``get()`` mutates its own clone."""
+    queryset.query.set_limits(high=high)
+
+
+def first_queryset(queryset: Any) -> Any:
+    """The QuerySet ``QuerySet.first`` slices: ordered by ``pk`` when it has no ordering."""
+    if queryset.ordered or not queryset.query.default_ordering:
+        return queryset
+    queryset._check_ordering_first_last_queryset_aggregation(method="first")
+    return queryset.order_by("pk")

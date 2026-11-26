@@ -8,15 +8,16 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
-from django.db.models import QuerySet
+from django.db.models import Count, QuerySet
 
-from harness.catalog.models import Author, Book
+from harness.catalog.models import Author, Book, Order
 from harness.settings import VENDOR
 from tests.support.aio import wait_until
 from tests.support.alist_probe import recorded_statements
 from tests.support.differential import (
     DifferentialResult,
     Outcome,
+    error_name,
     run_differential,
     run_sync,
 )
@@ -343,6 +344,104 @@ async def alist_of_all_of_all_of_a_prefetched_manager() -> PrefetchedAllAllOutco
     with recorded_statements() as log:
         await aq(author.books).all().all().alist()
     return PrefetchedAllAllOutcome(len(log), sync_log)
+
+
+@dataclass(frozen=True)
+class PrefetchedReadOutcome:
+    statements: int
+    sync_statements: int
+    async_result: Any
+    sync_result: Any
+
+
+def _prefetched_manager(subject: str) -> Any:
+    """The prefetched related manager of `subject`: `books` (an author with at least two books, so
+    the order across rows is checked), `orders` (a book with two orders; Order has no default
+    ordering) or `empty` (a book without orders)."""
+    if subject == "books":
+        author: Any = (
+            Author.objects.prefetch_related("books")
+            .annotate(n_books=Count("books"))
+            .filter(n_books__gte=2)
+            .order_by("pk")
+            .first()
+        )
+        assert author is not None
+        return author.books
+    book: Any = Book.objects.prefetch_related("orders").order_by("pk").first()
+    assert book is not None
+    expected = {"orders": 2, "empty": 0}[subject]
+    cached = len(book.orders.all())
+    assert cached == expected, f"the {subject} subject has {cached} cached rows, not {expected}"
+    return book.orders
+
+
+def _add_two_orders() -> None:
+    book = Book.objects.order_by("pk").first()
+    Order.objects.bulk_create([Order(book=book, quantity=1), Order(book=book, quantity=2)])
+
+
+def _read_runs(manager: Any, wrapper: Any, pk: int) -> dict[str, tuple[Any, Any]]:
+    """name -> (Django's call, the Asyncopation coroutine function) over one manager."""
+    return {
+        "acount": (lambda: manager.count(), lambda: wrapper.acount()),
+        "aexists": (lambda: manager.exists(), lambda: wrapper.aexists()),
+        "aget": (lambda: manager.get(pk=pk).pk, lambda: _pk_of(wrapper.aget(pk=pk))),
+        "aget-missing": (lambda: manager.get(pk=0), lambda: wrapper.aget(pk=0)),
+        "afirst": (lambda: _pk_or_none(manager.first()), lambda: _first_pk(wrapper)),
+        "async for": (lambda: [row.pk for row in manager.all()], lambda: _pks_of(wrapper)),
+    }
+
+
+def _sync_prefetched_read(subject: str, name: str) -> tuple[int, Any]:
+    manager = _prefetched_manager(subject)
+    cached = list(manager.all())
+    sync_call = _read_runs(manager, None, cached[0].pk if cached else 0)[name][0]
+    result: list[Any] = []
+
+    def run() -> None:
+        try:
+            result.append(("ok", sync_call()))
+        except Exception as error:
+            result.append(("error", error_name(error)))
+
+    return _statements_of(run), result[0]
+
+
+async def read_of_a_prefetched_manager(subject: str, name: str) -> PrefetchedReadOutcome:
+    """`aq(<prefetched manager>).<read>` against the same read on Django's related manager: the
+    number of statements and the result (or the exception name)."""
+    from asyncopation import aq
+
+    if subject == "orders":
+        await in_sync(_add_two_orders)
+    sync_statements, sync_result = await in_sync(lambda: _sync_prefetched_read(subject, name))
+    manager = await in_sync(lambda: _prefetched_manager(subject))
+    cached = await in_sync(lambda: list(manager.all()))
+    wrapper = aq(manager)
+    run = _read_runs(manager, wrapper, cached[0].pk if cached else 0)[name][1]
+    with recorded_statements() as log:
+        try:
+            result = ("ok", await run())
+        except Exception as error:
+            result = ("error", error_name(error))
+    return PrefetchedReadOutcome(len(log), sync_statements, result, sync_result)
+
+
+def _pk_or_none(row: Any) -> int | None:
+    return None if row is None else row.pk
+
+
+async def _pk_of(awaitable: Any) -> int:
+    return (await awaitable).pk
+
+
+async def _first_pk(wrapper: Any) -> int | None:
+    return _pk_or_none(await wrapper.afirst())
+
+
+async def _pks_of(wrapper: Any) -> list[int]:
+    return [row.pk async for row in wrapper]
 
 
 def _statements_of(run: Callable[[], Any]) -> int:

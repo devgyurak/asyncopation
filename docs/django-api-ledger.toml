@@ -248,9 +248,10 @@ names = [
     "NamedValuesListIterable",
     "_get_from_db",
     "get_related_populators",
+    "MAX_GET_RESULTS",
 ]
-used_by = ["src/asyncopation/_django/query.py"]
-reason = "The iterable classes classify `QuerySet._iterable_class` by exact identity (an unknown or subclassed iterable is refused); `_get_from_db` binds the fetch mode to `Model.from_db` (deprecated-override shim) and `get_related_populators` builds the `select_related` populators, both used by the ported materializer (ADR-0002)"
+used_by = ["src/asyncopation/_django/query.py", "src/asyncopation/engine/read.py"]
+reason = "`MAX_GET_RESULTS` bounds the `get()` query (`aget`); the iterable classes classify `QuerySet._iterable_class` by exact identity (an unknown or subclassed iterable is refused); `_get_from_db` binds the fetch mode to `Model.from_db` (deprecated-override shim) and `get_related_populators` builds the `select_related` populators, both used by the ported materializer (ADR-0002)"
 verified_against = "6.1.3"
 signatures = { _get_from_db = "(model_cls, fetch_mode)", get_related_populators = "(klass_info, select, db, fetch_mode)" }
 
@@ -282,6 +283,131 @@ used_by = ["src/asyncopation/engine/materialize.py"]
 reason = "Ported: the code after `execute_sql` in each iterable; rows come from the execute stage and go through `compiler.results_iter(results=[rows])` (ADR-0002 Decision 4)"
 verified_against = "6.1.3"
 ported = true
+
+[[internal]]
+module = "django.db.models.expressions"
+names = ["Ref"]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "Used by the ported Query.get_aggregation to make aggregates refer to each other and to inner-query columns"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.models.sql.subqueries"
+names = ["AggregateQuery"]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "The outer query of a subquery aggregation (sliced / distinct / already aggregated QuerySets), built by the ported Query.get_aggregation"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.models.sql.compiler"
+names = ["SQLAggregateCompiler"]
+used_by = ["src/asyncopation/_django/query.py"]
+reason = "The compiler of the outer query of a subquery aggregation: it never runs `pre_sql_setup()`, so it has no `has_extra_select` (`has_extra_select()` checks for it by class instead of guessing with a default)"
+verified_against = "6.1.3"
+
+[[internal]]
+module = "django.db.models.sql.query"
+names = ["Query.get_aggregation", "Query.get_count", "Query.has_results"]
+used_by = ["src/asyncopation/_django/aggregation.py", "src/asyncopation/engine/cores.py"]
+reason = "Ported: get_aggregation without its execute_sql(SINGLE) (the engine's sans-I/O core yields Compile / Execute / Convert around it); get_count and has_results as cores (ADR-0008 Decision 4); `Query.exists` is called, not ported"
+verified_against = "6.1.3"
+ported = true
+
+[[internal]]
+module = "django.db.models.query"
+names = ["QuerySet.get", "QuerySet.first", "QuerySet.count", "QuerySet.exists"]
+used_by = ["src/asyncopation/engine/read.py", "src/asyncopation/_django/query.py"]
+reason = "Ported: aget / afirst / acount / aexists follow these methods (get(): MAX_GET_RESULTS limit, `select_for_update` limit decision and the DoesNotExist / MultipleObjectsReturned messages; first(): pk ordering; count / exists: the result-cache shortcut)"
+verified_against = "6.1.3"
+ported = true
+
+[[attribute]]
+owner = "django.db.models.sql.query.Query"
+names = [
+    "where",
+    "distinct",
+    "select",
+    "select_related",
+    "extra",
+    "model",
+    "combinator",
+    "distinct_fields",
+    "select_for_update",
+    "can_filter",
+    "set_limits",
+    "default_ordering",
+    "group_by",
+    "_gen_cols",
+    "annotation_select_mask",
+    "check_alias",
+    "append_annotation_mask",
+    "set_annotation_mask",
+    "orderby_issubset_groupby",
+    "clear_ordering",
+    "clear_limits",
+    "add_annotation",
+    "default_cols",
+    "is_sliced",
+    "subquery",
+    "annotations",
+    "get_initial_alias",
+    "exists",
+]
+used_by = ["src/asyncopation/_django/query.py", "src/asyncopation/_django/aggregation.py"]
+reason = "Read by `get()` / `first()` logic (`_django.query`) and by the ported get_aggregation (`_django.aggregation`); the ported body is pinned by the `ported` entry, these are the attributes it touches directly"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.sql.where.WhereNode"
+names = ["split_having_qualify"]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "Called by the ported get_aggregation to see whether the WHERE clause filters on aggregates or window functions"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.sql.compiler.SQLCompiler"
+names = ["get_converters", "apply_converters", "has_composite_fields", "composite_fields_to_tuples"]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "The conversion of the aggregation row after execution, as get_aggregation does it (converters / composite fields; no I/O)"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.expressions.BaseExpression"
+names = [
+    "get_refs",
+    "replace_expressions",
+    "empty_result_set_value",
+    "contains_aggregate",
+    "contains_subquery",
+    "contains_over_clause",
+    "set_returning",
+    "get_group_by_cols",
+]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "Expression introspection by the ported get_aggregation (which aggregates refer to what, what an empty set yields, which expressions force grouping); `contains_subquery`, `contains_over_clause` and `set_returning` are read with `getattr(..., default)` because not every expression defines them"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.fields.Field"
+names = ["get_col"]
+used_by = ["src/asyncopation/_django/aggregation.py"]
+reason = "The ported get_aggregation selects the primary key column of the inner query (`pk.get_col(alias)`) when the inner query would select nothing or must group by the pk"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.backends.base.features.BaseDatabaseFeatures"
+names = ["supports_select_for_update_with_limit"]
+used_by = ["src/asyncopation/_django/query.py"]
+reason = "`aget` bounds a `select_for_update()` query only when the backend supports FOR UPDATE with LIMIT, as `QuerySet.get` reads `connections[alias].features`; read from the compile-only wrapper through `supports_select_for_update_with_limit()`"
+verified_against = "6.1.3"
+
+[[attribute]]
+owner = "django.db.models.query.QuerySet"
+names = ["_check_ordering_first_last_queryset_aggregation"]
+used_by = ["src/asyncopation/_django/query.py"]
+reason = "Called by `first_queryset` exactly where QuerySet.first() calls it: refuses first() on an unordered aggregating QuerySet"
+verified_against = "6.1.3"
+signatures = { _check_ordering_first_last_queryset_aggregation = "(self, method)" }
 
 [[attribute]]
 owner = "django.db.models.query.QuerySet"
@@ -315,8 +441,12 @@ signatures = { as_sql = "(self, with_limits=True, with_col_aliases=False)", resu
 [[attribute]]
 owner = "django.db.models.sql.query.Query"
 names = ["get_compiler", "clone"]
-used_by = ["src/asyncopation/engine/compiled.py", "src/asyncopation/_django/query.py"]
-reason = "`get_compiler` builds the compiler inside `compile_scope`, with the alias the evaluation resolved once (`using=`), as the iterables do with `queryset.db`; the compile stage runs it on a `clone()` of the QuerySet's Query, because `as_sql()` mutates the Query and two evaluations of one QuerySet can overlap (PR #65)"
+used_by = [
+    "src/asyncopation/engine/compiled.py",
+    "src/asyncopation/_django/query.py",
+    "src/asyncopation/_django/aggregation.py",
+]
+reason = "`get_compiler` builds the compiler inside `compile_scope`, with the alias the evaluation resolved once (`using=`), as the iterables do with `queryset.db`; the compile stage runs it on a `clone()` of the QuerySet's Query, because `as_sql()` mutates the Query and two evaluations of one QuerySet can overlap (PR #65), and `Query.get_count()` / the ported get_aggregation clone before mutating (PR #67); `elide_empty=` is passed by the aggregation cores (the signature pins the parameter)"
 verified_against = "6.1.3"
 signatures = { get_compiler = "(self, using=None, connection=None, elide_empty=True)", clone = "(self)" }
 
@@ -367,7 +497,7 @@ verified_against = "6.1.3"
 [[attribute]]
 owner = "django.db.models.sql.query.Query"
 names = ["selected", "extra_select", "values_select", "annotation_select"]
-used_by = ["src/asyncopation/_django/query.py"]
+used_by = ["src/asyncopation/_django/query.py", "src/asyncopation/_django/aggregation.py"]
 reason = "Column names of `values()` / `values_list(named=True)` rows, as ValuesIterable and NamedValuesListIterable compute them; `selected` is also copied before compiling, because `Query.clone()` shares that dict and `as_sql()` of a combined query adds `__orderbycol<N>` entries to it"
 verified_against = "6.1.3"
 

@@ -279,7 +279,7 @@ Tracking: each phase is a GitHub milestone and each roadmap item an issue -
 - [x] Executors and connection ownership: `BorrowedExecutor` / `PinnedExecutor`, `ConcurrentQueryError`, broken-transaction state, `close()` waiting for pins and streams (#5, ADR-0001; `async_atomic` -> #19, pool sizing -> #8, hooks -> #4)
 - [x] hstore/citext type registration in the PostgreSQL driver when `django.contrib.postgres` is installed (#43, ADR-0003 Decision 2); `harness.pgcatalog`
 - [x] Pin the asgiref version and `Local(thread_critical=True)` semantics `compile_scope` relies on in the drift suite (ledger `[[dependency]]` row, `asgiref>=3.13`; #49, ADR-0008)
-- [ ] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`, currently a strict xfail)
+- [x] First differential test passing (`tests/integration/test_harness_selfcheck.py::test_asyncopation_list_matches_sync`) on PostgreSQL, with `aget` / `afirst` / `acount` / `aexists` / `async for`, the `aobjects` descriptor and the sans-I/O runner with the `get_aggregation` / `has_results` cores (#6, PR #67; MySQL/MariaDB with the MySQL wrapper, #6 PR C / #7)
 - [ ] Reproduce the same flow on asyncmy
 
 ---

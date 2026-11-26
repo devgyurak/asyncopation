@@ -92,12 +92,58 @@ def test_gwt_problems_are_reported(source, expected):
     assert codes == expected
 
 
+def test_given_marker_above_an_explanatory_comment_block_counts():
+    # given
+    source = (
+        "def test_x():\n    # given: a value\n    # (explained over two lines)\n    a = 1\n"
+        "    # when\n    b = a\n    # then\n    assert b\n"
+    )
+    # when
+    codes = lint_test_module(source)
+    # then
+    assert codes == []
+
+
+def test_given_marker_separated_from_the_body_by_a_blank_line_is_not_in_the_function():
+    # given
+    source = (
+        "def test_x():\n    # given\n\n    a = 1\n    # when\n    b = a\n    # then\n    assert b\n"
+    )
+    # when
+    codes = lint_test_module(source)
+    # then
+    assert codes == ["T205"]
+
+
+def test_a_marker_above_the_def_line_is_not_in_the_function_even_with_a_trailing_comment():
+    # given
+    source = (
+        "# given\ndef test_x():  # a trailing note\n    a = 1\n    # when\n    b = a\n"
+        "    # then\n    assert b\n"
+    )
+    # when
+    codes = lint_test_module(source)
+    # then
+    assert codes == ["T205"]
+
+
+def test_a_marker_trailing_the_def_line_is_not_in_the_function():
+    # given
+    source = "def test_x():  # given\n    a = 1\n    # when\n    b = a\n    # then\n    assert b\n"
+    # when
+    codes = lint_test_module(source)
+    # then
+    assert codes == ["T205"]
+
+
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
         ("tests/unit/test_query.py", True),
         ("tests/integration/sub/test_x.py", True),
+        ("tests/unit/support/test_strategies.py", True),
         ("tests/support/differential.py", False),
+        ("tests/support/sub/test_helpers.py", False),
         ("tests/conftest.py", False),
         ("tools/guards/testlint.py", False),
     ],

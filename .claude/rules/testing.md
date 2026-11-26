@@ -58,8 +58,8 @@ dependency drift checks: those are the canary's signal. Markers must be register
 `tests/unit/django_drift/test_pin_marker.py`, which collects in a subprocess (bounded by a timeout);
 update `PIN_TESTS` in `tests/support/pin_marker.py` when a test gains or loses the marker. The same
 test module pins the two CI drift steps (ids `django-drift` in `django-main` and `integration-drift`
-in `integration` of `.github/workflows/ci.yml`): their `run:` text and `env` are compared exactly
-with `DRIFT_STEPS` in `tests/support/pin_marker.py`, so a change to either step is made together
+in `integration` of `.github/workflows/ci.yml`): each whole step (except `name`), its job's keys and
+the canary's step order are compared exactly with `DRIFT_STEPS` in `tests/support/pin_marker.py`, so a change to either step is made together
 with that constant.
 
 ## Database isolation

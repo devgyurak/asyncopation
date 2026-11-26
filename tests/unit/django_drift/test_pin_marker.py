@@ -4,13 +4,16 @@ import pytest
 
 from tests.support.pin_marker import (
     ASGIREF_VERSION_TEST,
+    CANARY_STEP,
     CI_WORKFLOW,
     DRIFT_DIR,
+    INTEGRATION_STEP,
     PIN_TESTS,
     collected_test_names,
     drift_step,
     drift_step_problems,
     find_step,
+    is_single_problem,
     write_workflow,
 )
 
@@ -54,11 +57,16 @@ def test_the_ci_drift_steps_are_the_expected_ones():
     assert problems == []
 
 
-def test_the_canary_drift_step_is_found_by_its_id_in_ci():
+@pytest.mark.parametrize(
+    ("step", "expected"),
+    [(CANARY, CANARY_STEP), (INTEGRATION, INTEGRATION_STEP)],
+    ids=["canary", "integration"],
+)
+def test_a_drift_step_is_found_by_its_id_in_ci_without_its_name(step, expected):
     # when
-    step = find_step(CI_WORKFLOW, *CANARY)
+    found = find_step(CI_WORKFLOW, *step)
     # then
-    assert step["run"] == CANARY_RUN
+    assert found | {"name": None} == expected | {"name": None}
 
 
 def test_a_workflow_with_the_expected_drift_steps_has_no_problems(tmp_path):
@@ -93,20 +101,104 @@ def test_a_workflow_with_the_expected_drift_steps_has_no_problems(tmp_path):
 )
 def test_a_canary_drift_command_other_than_the_expected_one_is_a_problem(tmp_path, run):
     # given
-    workflow = write_workflow(tmp_path / "ci.yml", {CANARY[0]: [drift_step(*CANARY, run=run)]})
+    workflow = write_workflow(tmp_path / "ci.yml", drift={CANARY[0]: drift_step(*CANARY, run=run)})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert is_single_problem(problems, "jobs.django-main.django-drift: run is ")
+
+
+@pytest.mark.parametrize("step", [CANARY, INTEGRATION], ids=["canary", "integration"])
+def test_a_changed_drift_step_name_is_not_a_problem(tmp_path, step):
+    # given
+    renamed = drift_step(*step, name="another name")
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", drift={step[0]: renamed}))
+    # then
+    assert problems == []
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("if", "${{ false }}"),
+        ("continue-on-error", True),
+        ("working-directory", "docs"),
+        ("shell", "bash -c 'true'"),
+        ("with", {"x": "1"}),
+        ("timeout-minutes", 1),
+        ("uses", "actions/checkout@v5"),
+    ],
+)
+@pytest.mark.parametrize("step", [CANARY, INTEGRATION], ids=["canary", "integration"])
+def test_a_drift_step_with_an_extra_key_is_a_problem(tmp_path, step, key, value):
+    # given
+    extended = drift_step(*step, **{key: value})
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", drift={step[0]: extended}))
+    # then
+    assert is_single_problem(problems, f"jobs.{step[0]}.{step[1]}: {key} is ")
+
+
+@pytest.mark.parametrize("key", ["env", "run"])
+def test_a_drift_step_without_a_key_is_a_problem(tmp_path, key):
+    # given
+    stripped = drift_step(*CANARY, drop=(key,))
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", drift={CANARY[0]: stripped}))
+    # then
+    assert is_single_problem(problems, f"jobs.django-main.django-drift: {key} is '<missing>'")
+
+
+@pytest.mark.parametrize(
+    ("job", "key", "value"),
+    [
+        ("integration", "if", "${{ false }}"),
+        ("integration", "defaults", {"run": {"shell": "true {0}"}}),
+        ("integration", "continue-on-error", True),
+        ("integration", "strategy", {"matrix": {"db": ["postgresql"]}}),
+        ("integration", "env", {"ASYNCOPATION_REQUIRE_MYSQLDB": "0"}),
+        ("django-main", "if", "${{ false }}"),
+        ("django-main", "defaults", {"run": {"shell": "true {0}"}}),
+        ("django-main", "continue-on-error", False),
+        ("django-main", "needs", "other"),
+        ("django-main", "env", {"ASYNCOPATION_REQUIRE_MYSQLDB": "0"}),
+    ],
+)
+def test_a_changed_drift_job_key_is_a_problem(tmp_path, job, key, value):
+    # given
+    workflow = write_workflow(tmp_path / "ci.yml", jobs={job: {key: value}})
+    # when
+    problems = drift_step_problems(workflow)
+    # then
+    assert is_single_problem(problems, f"jobs.{job}: {key} is ")
+
+
+def test_a_workflow_level_defaults_is_a_problem(tmp_path):
+    # given
+    workflow = write_workflow(tmp_path / "ci.yml", top={"defaults": {"run": {"shell": "true"}}})
     # when
     problems = drift_step_problems(workflow)
     # then
     assert len(problems) == 1
 
 
-def test_a_canary_run_text_with_surrounding_whitespace_is_not_a_problem(tmp_path):
+def test_a_canary_drift_step_not_right_after_the_django_main_install_is_a_problem(tmp_path):
     # given
-    step = drift_step(*CANARY, run=f"{CANARY_RUN}\n")
+    steps = {"django-main": [{"run": "uv sync"}, drift_step(*CANARY)]}
     # when
-    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", {CANARY[0]: [step]}))
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
     # then
-    assert problems == []
+    assert is_single_problem(problems, "jobs.django-main: the step before the drift step is")
+
+
+def test_a_canary_drift_step_as_the_first_step_is_a_problem(tmp_path):
+    # given
+    steps = {"django-main": [drift_step(*CANARY)]}
+    # when
+    problems = drift_step_problems(write_workflow(tmp_path / "ci.yml", steps))
+    # then
+    assert len(problems) == 1
 
 
 @pytest.mark.parametrize(
@@ -123,28 +215,28 @@ def test_a_canary_run_text_with_surrounding_whitespace_is_not_a_problem(tmp_path
 def test_a_drift_step_with_a_changed_env_is_a_problem(tmp_path, step, env):
     # given
     changed = drift_step(*step, env=env)
-    workflow = write_workflow(tmp_path / "ci.yml", {step[0]: [changed]})
+    workflow = write_workflow(tmp_path / "ci.yml", drift={step[0]: changed})
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert len(problems) == 1
+    assert is_single_problem(problems, f"jobs.{step[0]}.{step[1]}: env is ")
 
 
 def test_an_integration_drift_command_other_than_the_expected_one_is_a_problem(tmp_path):
     # given
     step = drift_step(*INTEGRATION, run=f"uv run pytest {DRIFT_DIR}")
-    workflow = write_workflow(tmp_path / "ci.yml", {INTEGRATION[0]: [step]})
+    workflow = write_workflow(tmp_path / "ci.yml", drift={INTEGRATION[0]: step})
     # when
     problems = drift_step_problems(workflow)
     # then
-    assert len(problems) == 1
+    assert is_single_problem(problems, "jobs.integration.integration-drift: run is ")
 
 
 @pytest.mark.parametrize("step", [CANARY, INTEGRATION], ids=["canary", "integration"])
 def test_a_workflow_without_the_drift_step_id_is_rejected(tmp_path, step):
     # given
     renamed = drift_step(*step, id="other")
-    workflow = write_workflow(tmp_path / "ci.yml", {step[0]: [renamed]})
+    workflow = write_workflow(tmp_path / "ci.yml", drift={step[0]: renamed})
     # when / then
     with pytest.raises(
         RuntimeError, match=r"exactly one step with id '.*' in jobs\.[\w-]+ of ci\.yml, found 0"

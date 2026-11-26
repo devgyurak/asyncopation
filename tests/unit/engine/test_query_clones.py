@@ -234,7 +234,7 @@ def test_first_queryset_of_a_queryset_without_default_ordering_is_returned_uncha
     assert same is shared
 
 
-def test_first_queryset_of_an_queryset_without_default_ordering_keeps_its_fetch_mode():
+def test_first_queryset_of_a_queryset_without_default_ordering_keeps_its_fetch_mode():
     # given
     shared = filled_in_a_user_fetch_mode(Book.objects.order_by())
     # when

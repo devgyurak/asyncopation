@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=ef7305903602 -->
+<!-- i18n: source=README.md source-sha256=f60c5c571c76 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). `asyncopation.observe()`는 모든 쿼리를 동기 옵저버에 알린다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -101,8 +101,9 @@ PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexist
 취소될 때(스트림은 닫힐 때) `query_finished` 이벤트가 전달된다. 이벤트에는 `alias`, `kind`(`query`,
 BEGIN/COMMIT/ROLLBACK이면 `transaction`), `sql`, `params`, `many`, `rowcount`, `error`, `queue_time`,
 `query_time`, `total_time`(초)이 담긴다. 파라미터는 `params=True`로 등록한 옵저버에만 포함되며,
-`settings.DEBUG`가 참인 동안에는 모든 옵저버에 포함된다. 예외를 던진 옵저버는 로그만 남기고 쿼리를
-실패시키지 않는다. 옵저버는 모든 쿼리마다 이벤트 루프 위에서 인라인으로 실행되므로 블로킹해서는 안 된다(파일
+`settings.DEBUG`가 참인 동안에는 모든 옵저버에 포함된다. `Exception`을 던진 옵저버는 로그만
+남기고 쿼리를 실패시키지 않는다. `BaseException`(취소, `KeyboardInterrupt`, `pytest.fail`)은 다른
+옵저버들이 이벤트를 받은 뒤에 전파된다. 옵저버는 모든 쿼리마다 이벤트 루프 위에서 인라인으로 실행되므로 블로킹해서는 안 된다(파일
 I/O나 네트워크 I/O 금지). async 소비자는 옵저버가 될 수 없다(크기 제한 큐 옵저버가 뒤따른다). 프로세스 전체
 옵저버는 `asyncopation.connection.add_observer(fn)` / `remove_observer(fn)`을 쓴다.
 

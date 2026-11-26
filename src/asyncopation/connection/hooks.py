@@ -35,7 +35,7 @@ import asyncio
 import contextvars
 import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from time import perf_counter
 from types import TracebackType
@@ -320,15 +320,16 @@ class Outcome:
     With observers, an exception leaving ``_run`` may come from an observer instead of the
     connection; only what the driver itself raised may break a transaction, and a call an observer
     stopped before the driver changed no transaction state. ``reached`` is set right before the
-    driver call, ``failure`` to the exception the driver call (or a stream's open or close)
-    raised. A failed chunk read is not recorded here: the pinned stream reports it itself (no
-    observer runs while a chunk is read)."""
+    driver call; ``failures`` collects every exception a driver call (or a stream's open or close)
+    raised - all of them, since an interceptor may retry and a later attempt's error must not
+    hide an earlier cancellation. A failed chunk read is not recorded here: the pinned stream
+    reports it itself (no hook runs while a chunk is read)."""
 
-    __slots__ = ("failure", "reached")
+    __slots__ = ("failures", "reached")
 
     def __init__(self) -> None:
         self.reached = False
-        self.failure: BaseException | None = None
+        self.failures: list[BaseException] = []
 
 
 def _finish_after(call: _Call, original: BaseException, error: BaseException | None) -> None:
@@ -470,7 +471,7 @@ async def _observed_statement(
         result = await getattr(connection, kind)(*args)
     except BaseException as exc:
         if outcome is not None:
-            outcome.failure = exc
+            outcome.failures.append(exc)
         _finish_after(call, exc, exc)
         raise
     call.finish(_rowcount(kind, result), None)
@@ -552,7 +553,7 @@ class _ObservedStream:
             chunks = self._chunks = _CountingChunks(await manager.__aenter__())
         except BaseException as exc:
             if outcome is not None:
-                outcome.failure = exc
+                outcome.failures.append(exc)
             _finish_after(call, exc, exc)
             raise
         return chunks
@@ -570,7 +571,7 @@ class _ObservedStream:
             suppress = await self._manager.__aexit__(exc_type, exc, tb)
         except BaseException as failure:
             if self._outcome is not None:
-                self._outcome.failure = failure
+                self._outcome.failures.append(failure)
             _finish_after(call, failure, _stream_error(chunks, exc, failure))
             raise
         try:
@@ -661,6 +662,8 @@ class _Chain:
         self._done = False
 
     async def __call__(self, sql: str, params: Any, many: bool, context: dict[str, Any]) -> Any:
+        if not isinstance(context, Mapping):
+            raise TypeError(f"an interceptor's context must be a mapping, got {context!r}")
         method = context.get("method")
         if method not in INTERCEPTABLE:
             raise TypeError(
@@ -688,7 +691,7 @@ class _Chain:
             return await getattr(self._connection, method)(sql, params)
         except BaseException as exc:
             if outcome is not None:
-                outcome.failure = exc
+                outcome.failures.append(exc)
             raise
 
     def close(self) -> None:

@@ -9,14 +9,18 @@ import pytest
 from asyncopation import ConcurrentQueryError
 from asyncopation.drivers.base import ExecResult
 from tests.support.executors.ops import CONTROLS, kinds_of
-from tests.support.hooks.events import BOTH
+from tests.support.hooks.events import BOTH, STARTED, Raising, error_messages
 from tests.support.hooks.intercepting import (
     intercepted_call,
+    intercepted_with_observer,
     statement_after_the_query,
     task_left_behind,
 )
 from tests.support.hooks.interceptors import (
     SUPPLIED_ROWCOUNT,
+    AnyCall,
+    Catching,
+    ContextReplacing,
     GatheringTwice,
     Given,
     InAnotherTask,
@@ -38,6 +42,7 @@ from tests.support.hooks.interceptors import (
 )
 from tests.support.hooks.scenarios import ARGS
 
+LOGGER = "asyncopation.connection"
 PINNED = pytest.mark.parametrize("pinned", [False, True], ids=["borrowed", "pinned"])
 OPS = pytest.mark.parametrize("op", ["fetch_all", "execute", "execute_many"])
 
@@ -190,16 +195,31 @@ async def test_a_rewritten_statement_returns_the_driver_result(execenv, op, pinn
     assert observed.result is queued
 
 
+@PINNED
+async def test_an_execute_many_changed_to_execute_runs_execute_on_the_driver(execenv, pinned):
+    # given
+    queued = ExecResult(rowcount=1)
+    execenv.default.queue(queued)
+    # when
+    observed = await intercepted_call(
+        "execute_many", Switching("execute", False, (9,)), pinned=pinned
+    )
+    # then
+    assert execenv.default.statements == [("execute", ARGS["execute_many"][0], (9,))]
+    assert observed.result is queued
+
+
 # --------------------------------------------------------------------------- not interceptable
 @PINNED
-async def test_a_stream_never_calls_an_interceptor(execenv, pinned):
+async def test_a_stream_never_calls_an_interceptor(execenv, caplog, pinned):
     # given
-    interceptor = PassThrough()
+    interceptor = AnyCall()
     # when
     observed = await intercepted_call("stream", interceptor, pinned=pinned)
     # then
     assert observed.error is None
     assert interceptor.calls == []
+    assert error_messages(caplog, LOGGER) == []
 
 
 @PINNED
@@ -211,14 +231,27 @@ async def test_a_stream_under_an_interceptor_is_still_observed(execenv, pinned):
 
 
 @pytest.mark.parametrize("op", CONTROLS)
-async def test_transaction_control_never_calls_an_interceptor(execenv, op):
+async def test_transaction_control_never_calls_an_interceptor(execenv, caplog, op):
     # given
-    interceptor = PassThrough()
+    interceptor = AnyCall()
     # when
     observed = await intercepted_call(op, interceptor, pinned=True)
     # then
     assert observed.error is None
     assert interceptor.calls == []
+    assert error_messages(caplog, LOGGER) == []
+
+
+@OPS
+@PINNED
+async def test_an_intercepted_and_observed_statement_logs_no_error(execenv, caplog, op, pinned):
+    # given
+    interceptor = AnyCall()
+    # when
+    observed = await intercepted_call(op, interceptor, pinned=pinned)
+    # then
+    assert (observed.error, len(interceptor.calls)) == (None, 1)
+    assert error_messages(caplog, LOGGER) == []
 
 
 @pytest.mark.parametrize("op", CONTROLS)
@@ -412,7 +445,7 @@ async def test_an_execute_task_left_behind_by_an_interceptor_fails_once_the_quer
     result, error = await task_left_behind(LeavingATask(supplied), pinned=pinned)
     # then
     assert result is supplied
-    assert isinstance(error, RuntimeError)  # ConcurrentQueryError is one too
+    assert type(error) is RuntimeError  # the query is over (not ConcurrentQueryError)
     assert execenv.default.statements == []
 
 
@@ -421,7 +454,7 @@ async def test_calling_a_stored_execute_after_the_query_raises_runtime_error(exe
     # when
     error = await statement_after_the_query(StoringExecute(), pinned=pinned)
     # then
-    assert isinstance(error, RuntimeError)
+    assert type(error) is RuntimeError
     assert "after its query was over" in str(error)
     assert kinds_of(execenv.default) == ["fetch_all"]
 
@@ -437,6 +470,82 @@ async def test_an_interceptor_may_call_execute_again_after_it_failed(execenv, pi
     # then
     assert (observed.result, observed.error, interceptor.first_error) == ([(5,)], None, first_error)
     assert kinds_of(execenv.default) == ["fetch_all"] * 2
+
+
+@PINNED
+async def test_a_retried_statement_is_observed_as_one_successful_query(execenv, pinned):
+    # given
+    execenv.default.queue(ValueError("first attempt failed"), [(5,)])
+    # when
+    observed = await intercepted_call("fetch_all", Retrying(), pinned=pinned)
+    # then
+    assert observed.names == BOTH
+    assert (observed.finished.error, observed.finished.rowcount) == (None, 1)
+
+
+@PINNED
+async def test_a_context_that_is_not_a_mapping_raises_type_error(execenv, pinned):
+    # when
+    observed = await intercepted_call("fetch_all", ContextReplacing(None), pinned=pinned)
+    # then
+    assert isinstance(observed.error, TypeError)
+    assert (execenv.default.statements, execenv.default.statement_calls) == ([], 0)
+
+
+# --------------------------------------------------------------------------- swallowed driver errors
+@PINNED
+async def test_a_swallowed_driver_error_is_observed_as_a_successful_query(execenv, pinned):
+    # given
+    execenv.default.queue(ValueError("driver failure"))
+    supplied = supplied_result("fetch_all")
+    # when
+    observed = await intercepted_call("fetch_all", Catching(supplied), pinned=pinned)
+    # then
+    assert observed.result is supplied
+    assert (observed.finished.error, observed.finished.rowcount) == (None, len(supplied))
+
+
+# --------------------------------------------------------------------------- around the chain
+async def test_an_interceptor_is_not_called_when_the_borrow_fails(execenv):
+    # given
+    execenv.default.borrow_error = TimeoutError("no connection in time")
+    interceptor = PassThrough()
+    # when
+    observed = await intercepted_call("fetch_all", interceptor, pinned=False)
+    # then
+    assert observed.error is execenv.default.borrow_error
+    assert interceptor.calls == []
+
+
+async def test_a_suppressed_borrowed_query_still_borrows_a_connection(execenv):
+    # when
+    await intercepted_call("fetch_all", Suppressing(supplied_result("fetch_all")), pinned=False)
+    # then
+    assert execenv.default.borrows == 1
+
+
+@pytest.mark.parametrize(
+    "error_type",
+    [
+        pytest.param(KeyboardInterrupt, id="keyboard-interrupt"),
+        pytest.param(asyncio.CancelledError, id="cancelled"),
+    ],
+)
+@PINNED
+async def test_a_started_observer_raising_a_base_exception_stops_the_call_before_any_interceptor(
+    execenv, error_type, pinned
+):
+    # given
+    error = error_type()
+    interceptor = PassThrough()
+    # when
+    observed = await intercepted_with_observer(
+        "fetch_all", interceptor, Raising(STARTED, error), pinned=pinned
+    )
+    # then
+    assert observed.error is error
+    assert interceptor.calls == []
+    assert execenv.default.statements == []
 
 
 # --------------------------------------------------------------------------- exceptions propagate

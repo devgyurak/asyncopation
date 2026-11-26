@@ -10,6 +10,7 @@ import pytest
 from asyncopation.connection import hooks
 from tests.support.hooks.events import BOTH, STARTED, started_event
 from tests.support.hooks.queue_observer import (
+    consumer_woken_by_a_query,
     deliver_in_another_loop,
     filled,
     queue_after_global_fetch,
@@ -41,15 +42,6 @@ async def test_a_queue_observer_with_an_invalid_maxsize_raises_value_error(maxsi
     # when / then
     with pytest.raises(ValueError, match="maxsize"):
         hooks.QueueObserver(maxsize)
-
-
-async def test_a_queue_observer_is_accepted_by_observe():
-    # given
-    queue = hooks.QueueObserver()
-    # when
-    manager = hooks.observe(queue)
-    # then
-    assert manager is not None
 
 
 async def test_a_new_queue_observer_is_empty_and_has_dropped_nothing():
@@ -166,3 +158,20 @@ def test_the_queue_observer_is_a_synchronous_callable():
     is_coroutine_function = inspect.iscoroutinefunction(hooks.QueueObserver.__call__)
     # then
     assert is_coroutine_function is False
+
+
+async def test_a_default_queue_observer_drops_the_1001st_event():
+    # given
+    queue = hooks.QueueObserver()
+    # when
+    filled(queue, 1001)
+    # then
+    assert (queue.qsize(), queue.dropped) == (1000, 1)
+
+
+async def test_a_consumer_waiting_in_get_before_a_query_is_woken_by_its_events(execenv):
+    # when
+    waiting, event = await consumer_woken_by_a_query()
+    # then
+    assert waiting is True
+    assert (event.name, event.sql) == (STARTED, "SELECT 1")

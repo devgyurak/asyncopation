@@ -15,9 +15,6 @@ from typing import Any, NamedTuple
 from asyncopation.drivers.base import ExecResult
 from tests.support.hooks.events import hooks
 
-INTERCEPTABLE_OPS = ["fetch_all", "execute", "execute_many"]
-NOT_INTERCEPTABLE_OPS = ["stream"]
-
 
 class Given(NamedTuple):
     """What one interceptor call was given."""
@@ -41,6 +38,18 @@ class PassThrough:
     @property
     def sqls(self) -> list[str]:
         return [given.sql for given in self.calls]
+
+
+class AnyCall:
+    """Accepts any arguments and records every call (so a call with an unexpected shape is
+    recorded too, instead of failing on a signature mismatch)."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def __call__(self, *args: Any) -> Any:
+        self.calls.append(args)
+        return await args[0](*args[1:])
 
 
 class TaggedInterceptor:
@@ -132,6 +141,16 @@ class Switching:
 
     async def __call__(self, execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
         return await execute(sql, self.params, self.many, {**context, "method": self.method})
+
+
+class ContextReplacing:
+    """Calls `execute` with `context` replaced by `value` (e.g. `None`)."""
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    async def __call__(self, execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        return await execute(sql, params, many, self.value)
 
 
 class ManyFlipping:
@@ -255,6 +274,26 @@ class Catching:
         return self.supplied
 
 
+class CatchingTwice:
+    """Calls `execute`, and once more when it raised; whatever either attempt raised (a
+    cancellation included) is kept in `caught`, and `supplied` is returned when both failed."""
+
+    def __init__(self, supplied: Any) -> None:
+        self.supplied = supplied
+        self.caught: list[BaseException] = []
+
+    async def __call__(self, execute: Any, sql: str, params: Any, many: bool, context: Any) -> Any:
+        try:
+            return await execute(sql, params, many, context)
+        except BaseException as exc:
+            self.caught.append(exc)
+        try:
+            return await execute(sql, params, many, context)
+        except BaseException as exc:
+            self.caught.append(exc)
+        return self.supplied
+
+
 class Waiting:
     """Waits forever, before calling `execute` or after it returned; `entered` is set when it
     starts waiting (the test cancels the task there)."""
@@ -315,6 +354,16 @@ SUPPLIED_ROWCOUNT = {"fetch_all": 3, "execute": 5, "execute_many": 4}
 
 
 # --------------------------------------------------------------------------- registration
+def registrations_of(fn: Any) -> list[str]:
+    """How `fn` is registered for a call starting now (`hooks.active()`), in order:
+    `"observer"` / `"interceptor"` per registration."""
+    return [
+        "interceptor" if subscription.interceptor else "observer"
+        for subscription in hooks().active()
+        if subscription.fn is fn
+    ]
+
+
 @contextmanager
 def interceptor_registered(fn: Any) -> Generator[None]:
     """`add_interceptor(fn)` for the block; removed afterwards whatever happens."""

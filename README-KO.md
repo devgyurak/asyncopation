@@ -1,4 +1,4 @@
-<!-- i18n: source=README.md source-sha256=06d96b50ef25 -->
+<!-- i18n: source=README.md source-sha256=1246402602c9 -->
 # Asyncopation
 
 > **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). `asyncopation.observe()`는 모든 쿼리를 동기 옵저버에 알리고, `asyncopation.intercept()`는 구문을 async 체인으로 감싼다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
@@ -97,7 +97,7 @@ PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexist
 
 `asyncopation.observe(fn)`은 블록이 끝날 때까지 현재 태스크(와 그 태스크가 시작한 `gather` 자식 같은
 태스크)가 실행하는 모든 구문, 스트림, 트랜잭션 제어 호출마다 동기 함수 `fn(event)`를 호출한다
-(ADR-0005; 블록보다 오래 사는 태스크는 블록이 끝나면 더 이상 보고하지 않는다). 호출마다 드라이버 호출 직전에 `query_started` 이벤트가, 호출이 반환되거나 실패하거나
+(ADR-0005; 블록보다 오래 사는 태스크는 블록이 끝나면 더 이상 보고하지 않는다). 호출마다 드라이버 호출 직전(인터셉터 체인이 있으면 그 직전)에 `query_started` 이벤트가, 호출이 반환되거나 실패하거나
 취소될 때(스트림은 닫힐 때) `query_finished` 이벤트가 전달된다. 이벤트에는 `alias`, `kind`(`query`,
 BEGIN/COMMIT/ROLLBACK이면 `transaction`), `sql`, `params`, `many`, `rowcount`, `error`, `queue_time`,
 `query_time`, `total_time`(초)이 담긴다. 파라미터는 `params=True`로 등록한 옵저버에만 포함되며,
@@ -130,7 +130,8 @@ sql, params, many, context)`이며, `context`는 `{"alias", "method", "pinned"}`
 `ExecResult`를 반환하면 쿼리를 대체한다(테스트 더블). 스트림과 트랜잭션 제어는 가로챌 수 없다.
 대체된 쿼리도 옵저버에는 원래 SQL과 함께 보인다. 커넥션은 체인이 실행되기 전에 획득되므로, await하는
 인터셉터는 그동안 커넥션을 붙잡고 있다. 인터셉터 자신의 오류는 호출자에게 전파된다. 트랜잭션 안에서는
-드라이버 호출 자체가 실패하지 않은 한 트랜잭션을 깨뜨리지 않는다. 프로세스 전체 인터셉터는
+드라이버 호출 자체가 실패하지 않은 한 트랜잭션을 깨뜨리지 않는다. 스스로 쿼리를 실행하는 인터셉터는
+다시 가로채지므로(재귀에 주의) 트랜잭션 밖에서는 첫 커넥션을 붙잡은 채 두 번째 풀 커넥션을 빌린다. 프로세스 전체 인터셉터는
 `asyncopation.connection.add_interceptor(fn)` / `remove_interceptor(fn)`을 쓴다.
 
 ```python

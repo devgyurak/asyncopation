@@ -5,11 +5,13 @@ when an interceptor swallows it, and even with no observer registered."""
 import asyncio
 
 import pytest
+from django.db import IntegrityError, InterfaceError
 from django.db.transaction import TransactionManagementError
 
 from tests.support.executors.fakes import LostConnection
 from tests.support.hooks.intercepting import (
     HELD_IN_TRANSACTION,
+    cancel_held_call_swallowed_by_interceptor,
     cancel_held_call_under_interceptor,
     cancel_waiting_interceptor_in_transaction,
     intercepted_in_transaction,
@@ -18,6 +20,7 @@ from tests.support.hooks.intercepting import (
 )
 from tests.support.hooks.interceptors import (
     Catching,
+    CatchingTwice,
     PassThrough,
     RaisingAfter,
     RaisingBefore,
@@ -210,6 +213,57 @@ async def test_a_successful_retry_after_a_breaking_driver_error_still_breaks_the
     )
     # then
     assert outcome.broken is True
+    assert isinstance(outcome.next_error, TransactionManagementError)
+
+
+ORDINARY_RETRY_ERRORS = pytest.mark.parametrize(
+    "retry_error_type",
+    [
+        pytest.param(ValueError, id="ordinary-error"),
+        pytest.param(InterfaceError, id="interface-error-not-a-disconnect"),
+    ],
+)
+
+
+@ORDINARY_RETRY_ERRORS
+async def test_a_breaking_driver_failure_then_a_non_breaking_one_on_retry_still_breaks_the_transaction(
+    execenv, retry_error_type
+):
+    # given: attempt 1 is cancelled (swallowed by the interceptor), the retry fails ordinarily
+    execenv.default.during = failing_once(execenv.default, asyncio.CancelledError())
+    retry_error = retry_error_type("retry failed")
+    # when
+    outcome = await intercepted_in_transaction(
+        execenv, Retrying(catch=BaseException), queued=retry_error, follow_up=True
+    )
+    # then
+    assert (outcome.error, outcome.broken) == (retry_error, True)
+    assert isinstance(outcome.next_error, TransactionManagementError)
+
+
+async def test_an_ordinary_driver_failure_then_a_swallowed_cancellation_breaks_the_transaction(
+    execenv,
+):
+    # given
+    execenv.default.queue(IntegrityError("duplicate key"), asyncio.CancelledError())
+    supplied = supplied_result("fetch_all")
+    interceptor = CatchingTwice(supplied)
+    # when
+    outcome = await intercepted_in_transaction(execenv, interceptor, follow_up=True)
+    # then
+    assert (outcome.result, outcome.error, outcome.broken) == (supplied, None, True)
+    assert isinstance(outcome.next_error, TransactionManagementError)
+
+
+async def test_a_real_cancellation_swallowed_by_an_interceptor_still_breaks_the_transaction(
+    execenv,
+):
+    # given
+    supplied = supplied_result("fetch_all")
+    # when
+    outcome = await cancel_held_call_swallowed_by_interceptor(execenv, Catching(supplied))
+    # then
+    assert (outcome.result, outcome.error, outcome.broken) == (supplied, None, True)
     assert isinstance(outcome.next_error, TransactionManagementError)
 
 

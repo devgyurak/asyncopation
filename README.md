@@ -113,7 +113,7 @@ not swallow it). Run concurrent work outside the transaction.
 `asyncopation.observe(fn)` calls a synchronous `fn(event)` for every statement, stream and
 transaction-control call the current task (and the tasks it starts, such as `gather` children)
 runs until the block exits (ADR-0005; a task that outlives the block stops reporting to it then). Each call gives a `query_started` event right before the
-driver call and a `query_finished` event when it returns, fails or is cancelled (a stream: when it
+driver call (before the interceptor chain, when there is one) and a `query_finished` event when it returns, fails or is cancelled (a stream: when it
 closes), with `alias`, `kind` (`query`, or `transaction` for BEGIN/COMMIT/ROLLBACK), `sql`,
 `params`, `many`, `rowcount`, `error`, `queue_time`, `query_time` and `total_time` (seconds).
 Parameters are only included for an observer registered with `params=True`, or for all while
@@ -149,7 +149,9 @@ params, many, context)`, where `context` is `{"alias", "method", "pinned"}`. Cal
 control are not interceptable. Observers still see a replaced query, with the original SQL. The
 connection is acquired before the chain runs, so an interceptor that awaits holds it. An
 interceptor's own error propagates to the caller; inside a transaction it does not break the
-transaction unless the driver call itself failed. Process-wide interceptors use
+transaction unless the driver call itself failed. An interceptor that runs a query itself is
+intercepted again (guard against recursion) and, outside a transaction, borrows a second pooled
+connection while holding the first. Process-wide interceptors use
 `asyncopation.connection.add_interceptor(fn)` / `remove_interceptor(fn)`.
 
 ```python

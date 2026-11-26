@@ -221,7 +221,7 @@ global, then scoped; two empty-tuple checks) and, only if there are any, the tim
 pooled connection. `_run(connection, subscribers, alias, queued_at, kind, *args)` returns the
 driver's own awaitable or stream context manager when the snapshot is empty (no extra coroutine
 frame); otherwise `hooks.observed_call` emits a `QueryEvent` `query_started` right before the driver
-call (the connection is already acquired, so a pool timeout emits nothing) and `query_finished`
+call, or before the interceptor chain when there is one (the connection is already acquired, so a pool timeout emits nothing) and `query_finished`
 when it returns, fails or is cancelled, to the same snapshot - for a stream when it closes, with the
 rows read as `rowcount` (a plain counting iterator, not an async generator), also when a finalizer
 closes it in another task. `EVENT_KINDS` maps each connection call to `query` (statements, streams,

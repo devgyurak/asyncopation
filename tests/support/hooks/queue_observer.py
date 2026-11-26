@@ -70,3 +70,17 @@ def filled(queue: Any, count: int) -> list[Any]:
     """Call `queue(event)` with `count` distinct started events (SELECT 0, SELECT 1, ...); returns
     what each call returned."""
     return [queue(started_event(sql=f"SELECT {n}")) for n in range(count)]
+
+
+async def consumer_woken_by_a_query() -> tuple[bool, Any]:
+    """A consumer task waits in `queue.get()` before any query runs; then one `fetch_all` runs
+    under `observe(queue)`: `(the consumer was still waiting, the event it got)`."""
+    from tests.support.executors.ops import yield_once
+
+    queue = hooks().QueueObserver()
+    consumer = asyncio.create_task(queue.get())
+    await yield_once()
+    waiting = not consumer.done()
+    with hooks().observe(queue):
+        await unobserved_fetch("SELECT 1")
+    return waiting, await consumer

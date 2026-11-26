@@ -375,10 +375,9 @@ class PinnedExecutor:
 
     def _driver_failed(self, exc: BaseException, outcome: hooks.Outcome | None) -> None:
         """``exc`` left a call: unobserved, it is the driver's own; observed (ADR-0005), only what
-        the driver itself raised counts (``outcome.failure``) - an exception an observer raised
-        never reached the connection and breaks nothing."""
-        failure = exc if outcome is None else outcome.failure
-        if failure is not None:
+        the driver itself raised counts (``outcome.failures``) - an exception an observer or
+        interceptor raised never reached the connection and breaks nothing."""
+        for failure in (exc,) if outcome is None else outcome.failures:
             self._statement_failed(failure)
 
     def _statement_failed(self, exc: BaseException) -> None:
@@ -404,9 +403,10 @@ class PinnedExecutor:
             self._driver_failed(exc, outcome)
             raise
         else:
-            if outcome is not None and outcome.failure is not None:
-                # An interceptor swallowed the driver's failure: the connection still saw it.
-                self._statement_failed(outcome.failure)
+            if outcome is not None:
+                # An interceptor swallowed a driver failure: the connection still saw it.
+                for failure in outcome.failures:
+                    self._statement_failed(failure)
             return result
         finally:
             self._busy = False

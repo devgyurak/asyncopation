@@ -66,7 +66,7 @@ class SlowStartedObserver:
             self.clock.advance(self.seconds)
 
 
-async def _with_held_borrow(env: ExecEnv, clock: FakeClock, run: Callable[[], Any]) -> Any:
+async def with_held_borrow(env: ExecEnv, clock: FakeClock, run: Callable[[], Any]) -> Any:
     """Run `run()` in a task (it copies the caller's context) whose borrow waits `QUEUE` seconds."""
     hold = env.default.hold_borrows()
     task = asyncio.create_task(run())
@@ -94,7 +94,7 @@ async def timed_call(
         if pinned:
             result = await run()
         else:
-            result = await _with_held_borrow(env, clock, run)
+            result = await with_held_borrow(env, clock, run)
     return Observed(recorder, result)
 
 
@@ -115,5 +115,5 @@ async def timed_stream(env: ExecEnv, clock: FakeClock, *, pinned: bool) -> Obser
         if pinned:
             result = await run()
         else:
-            result = await _with_held_borrow(env, clock, run)
+            result = await with_held_borrow(env, clock, run)
     return Observed(recorder, result)

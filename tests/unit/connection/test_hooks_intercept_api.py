@@ -6,7 +6,12 @@ import pytest
 import asyncopation
 import asyncopation.connection as connection
 from asyncopation.connection import hooks
-from tests.support.hooks.interceptors import PassThrough, Registrable, interceptor_registered
+from tests.support.hooks.interceptors import (
+    PassThrough,
+    Registrable,
+    interceptor_registered,
+    registrations_of,
+)
 from tests.support.hooks.scenarios import registered
 
 
@@ -83,13 +88,21 @@ def test_remove_interceptor_does_not_remove_an_observer():
 def test_remove_interceptor_leaves_an_observer_of_the_same_callable_registered():
     # given
     fn = Registrable()
-    hooks.add_observer(fn)
-    hooks.add_interceptor(fn)
-    # when
-    hooks.remove_interceptor(fn)
-    # then
-    hooks.remove_observer(fn)  # still registered: no ValueError
-    assert hooks._global == ()
+    with registered(fn), interceptor_registered(fn):
+        # when
+        hooks.remove_interceptor(fn)
+        # then
+        assert registrations_of(fn) == ["observer"]
+
+
+def test_remove_observer_leaves_an_interceptor_of_the_same_callable_registered():
+    # given
+    fn = Registrable()
+    with registered(fn), interceptor_registered(fn):
+        # when
+        hooks.remove_observer(fn)
+        # then
+        assert registrations_of(fn) == ["interceptor"]
 
 
 @pytest.mark.parametrize("name", ["intercept", "add_interceptor", "remove_interceptor"])

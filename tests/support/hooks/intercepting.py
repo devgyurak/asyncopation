@@ -14,7 +14,7 @@ from typing import Any
 from tests.support.executors.fakes import ExecEnv, LostConnection
 from tests.support.executors.ops import call, in_gather_child, kinds_of, raised_by
 from tests.support.executors.scenarios import ALIAS, executor_module, executor_of
-from tests.support.hooks.clock import QUERY, FakeClock, _with_held_borrow
+from tests.support.hooks.clock import QUERY, FakeClock, with_held_borrow
 from tests.support.hooks.events import Recorder, Tagged, hooks
 from tests.support.hooks.interceptors import (
     Advancing,
@@ -45,6 +45,21 @@ async def intercepted_call(op: str, interceptor: Any, *, pinned: bool) -> Observ
     with hooks().observe(recorder), hooks().intercept(interceptor):
         result, error = await outcome_of(run())
     return Observed(recorder, result, error)
+
+
+async def intercepted_with_observer(
+    op: str, interceptor: Any, observer: Any, *, pinned: bool
+) -> Observed:
+    """`op` under `observe(observer)` and `intercept(interceptor)` (in that order); the recorder
+    of the result is empty."""
+
+    async def run() -> Any:
+        async with executor_of(pinned) as executor:
+            return await call(executor, op)
+
+    with hooks().observe(observer), hooks().intercept(interceptor):
+        result, error = await outcome_of(run())
+    return Observed(Recorder(), result, error)
 
 
 async def only_intercepted_call(op: str, interceptor: Any, *, pinned: bool) -> Observed:
@@ -237,6 +252,43 @@ async def cancel_waiting_interceptor_in_transaction(env: ExecEnv, *, after: bool
     return InTransaction(None, seen["error"], seen["broken"], seen["rollback_error"], seen["kinds"])
 
 
+async def cancel_held_call_swallowed_by_interceptor(
+    env: ExecEnv, interceptor: Any
+) -> InTransaction:
+    """In a transaction, a `fetch_all` held in the driver whose task is really cancelled there;
+    `interceptor` swallows the cancellation and returns a result of its own. The worker then runs
+    one more statement (`next_error`)."""
+    seen = Seen()
+    installed = asyncio.Event()
+
+    async def worker() -> None:
+        async with executor_module().pin(ALIAS) as executor:
+            await executor.begin()
+            hold = env.default.hold_statements()
+            seen["hold"] = hold
+            installed.set()
+            with hooks().intercept(interceptor):
+                seen["result"], seen["error"] = await outcome_of(
+                    executor.fetch_all("SELECT 1", None)
+                )
+            seen["broken"] = executor.broken
+            seen["next_error"] = await raised_by(executor.fetch_all("SELECT 2", None))
+
+    task = seen.task = asyncio.create_task(worker())
+    await installed.wait()
+    await seen["hold"].wait_entered()
+    task.cancel()
+    await asyncio.wait([task])
+    return InTransaction(
+        seen["result"],
+        seen["error"],
+        seen["broken"],
+        None,
+        kinds_of(env.default),
+        seen["next_error"],
+    )
+
+
 HELD_IN_TRANSACTION = ("fetch_all", "stream-open", "stream-read", "stream-close", "savepoint")
 """Where the driver holds the call that gets cancelled: a statement, a stream's open, its first
 chunk read, its close, or a transaction-control call."""
@@ -327,5 +379,5 @@ async def timed_intercepted(
         if pinned:
             result = await run()
         else:
-            result = await _with_held_borrow(env, clock, run)
+            result = await with_held_borrow(env, clock, run)
     return Observed(recorder, result)

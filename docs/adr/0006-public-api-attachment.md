@@ -142,11 +142,12 @@ non-recursive `fetch()` (its silent null for unloaded associations is a counter-
 *Amended 2026-11-25 (#6, PR #65), Decision 6: `asyncopation.SyncEvaluationError(RuntimeError)` is
 public API; like `ConcurrentQueryError` it lives in the import-free `asyncopation.errors` and is
 re-exported at the root, while `aq` and `AsyncQuerySet` are exported lazily (PEP 562) so
-`import asyncopation` loads neither Django nor a driver. The names that raise `NotImplementedError` are the coroutine
-methods and async generators Django defines on `QuerySet` (found by scanning the class, so a Django
-upgrade that adds one is blocked too) minus those implemented. `aq()` wraps a QuerySet that already
-has a result cache, or is already `FETCH_RAISE`, without cloning it; evaluation methods fill the
-wrapped QuerySet's result cache as Django's `alist` does, and a chain re-wraps through `aq()`.*
+`import asyncopation` loads neither Django nor a driver. The names that raise `NotImplementedError`
+are the coroutine methods and async generators Django defines on `QuerySet` (found by scanning the
+class, so a Django upgrade that adds one is blocked too) minus those implemented. `aq()` wraps a
+QuerySet that already has a result cache, or is already `FETCH_RAISE`, without cloning it;
+evaluation methods fill the wrapped QuerySet's result cache as Django's `alist` does, and a chain
+re-wraps through `aq()`.*
 
 *Amended 2026-11-26 (#6, PR #65), Decision 6: `aq()` does not wrap a QuerySet that is already
 `FETCH_RAISE` without cloning it (the 11-25 note above said so): only a QuerySet whose result cache

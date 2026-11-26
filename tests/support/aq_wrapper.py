@@ -453,3 +453,7 @@ OVERRIDE_CASES = [
     pytest.param("__getitem__", lambda wrapper: wrapper[:1], id="slice"),
     pytest.param("filter", lambda wrapper: wrapper.filter(pk=1), id="filter"),
 ]
+
+
+# how a wrapper reaches each overridable method, for tests that do not need the method name
+REACH_CASES = [pytest.param(case.values[1], id=case.id) for case in OVERRIDE_CASES]

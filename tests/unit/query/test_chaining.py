@@ -12,6 +12,7 @@ from tests.support.aq_wrapper import (
     COMBINATIONS,
     OVERRIDE_CASES,
     PREFETCHED_COMBINATIONS,
+    REACH_CASES,
     combination_operands,
     counting_queryset,
     filled_by_alist_wrapper,
@@ -134,10 +135,8 @@ def test_an_overriding_method_that_returns_a_cached_stored_queryset_shares_it(me
     assert returned.queryset is stored
 
 
-@pytest.mark.parametrize(("method", "reach"), OVERRIDE_CASES)
-def test_django_own_method_on_a_fetch_raise_queryset_is_wrapped_without_another_clone(
-    method, reach
-):
+@pytest.mark.parametrize("reach", REACH_CASES)
+def test_django_own_method_on_a_fetch_raise_queryset_is_wrapped_without_another_clone(reach):
     # given
     queryset, calls = counting_queryset()
     wrapper = aq(queryset)

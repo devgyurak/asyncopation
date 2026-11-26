@@ -2,10 +2,11 @@
 
 Status: Phase 1 in progress. The driver layer and the registry/lifecycle (`setup()` / `close()`,
 `LifespanApp`, the server-info probe; #5) are implemented for PostgreSQL (psycopg3) together with
-the recording driver, and so are the executors (borrowed/pinned connection ownership, #5) and the first read path
-(`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6); the
+the recording driver, and so are the executors (borrowed/pinned connection ownership, #5), the first read path
+(`aq(qs)` / `aobjects`: `alist`, `aget`, `afirst`, `acount`, `aexists`, `async for`; #6) and the
+query observers (`observe`, `add_observer`; #4, ADR-0005); the
 MySQL/asyncmy driver and transactions (`async_atomic`) are still contracts only.
-ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0006 and 0007 carry implementation
+ADR-0001..0007 are Accepted (ADR-0001, 0002, 0003, 0004, 0005, 0006 and 0007 carry implementation
 amendments); ADR-0008 is Accepted (scoped `compile_scope` swap). ADR-0009 (manager-level
 `aobjects`, Accepted) partially supersedes ADR-0006 Decision 3; its implementation is #72, so the `aobjects`
 behaviour described below is still ADR-0006's until then.
@@ -202,10 +203,39 @@ and pin exit closes the streams still open. It passes `begin` / `commit` / `roll
 calls through with no policy (#19). `current_executor(alias)` returns the contextvar's pinned executor
 (even a closed one, so a child's use raises; the owner task gets a borrowed executor again once its
 own block ended) or the alias's borrowed executor. Every call to a connection - statements,
-streams and transaction control - passes one internal function, `_run` (the ADR-0005 hook point,
-#4; `EVENT_KINDS` maps each call to its `query` / `transaction` kind). `ConcurrentQueryError` lives in
+streams and transaction control - passes one internal function, `_run`, the ADR-0005 hook point.
+`ConcurrentQueryError` lives in
 `asyncopation.errors`, a module that imports nothing (import-linter contract), and is re-exported at
 the package root.
+
+## Instrumentation hooks
+
+Query observers ([ADR-0005](adr/0005-instrumentation-hooks.md), `asyncopation.connection.hooks`,
+#4): `with asyncopation.observe(fn, params=False):` registers a synchronous `fn(event)` for the
+current task and the tasks it starts (an immutable tuple in a contextvar; exiting removes the
+registration by identity and marks it exited, so a block exited in another Context or out of
+order stops reporting, and a task started inside the block reports only until it exits);
+`asyncopation.connection.add_observer` / `remove_observer` register process-wide (an immutable
+module-level tuple). When a call starts, the executor snapshots the subscribers (`hooks.active()`:
+global, then scoped; two empty-tuple checks) and, only if there are any, the time it asked for a
+pooled connection. `_run(connection, subscribers, alias, queued_at, kind, *args)` returns the
+driver's own awaitable or stream context manager when the snapshot is empty (no extra coroutine
+frame); otherwise `hooks.observed_call` emits a `QueryEvent` `query_started` right before the driver
+call (the connection is already acquired, so a pool timeout emits nothing) and `query_finished`
+when it returns, fails or is cancelled, to the same snapshot - for a stream when it closes, with the
+rows read as `rowcount` (a plain counting iterator, not an async generator), also when a finalizer
+closes it in another task. `EVENT_KINDS` maps each connection call to `query` (statements, streams,
+savepoints) or `transaction` (BEGIN / COMMIT / ROLLBACK); transaction control carries a descriptive
+`sql`. Observers add no `await` and schedule nothing; one that raises an `Exception` is logged on
+`asyncopation.connection` and the query goes on, while a `BaseException` propagates once every
+observer got the event. The pinned executor passes a per-call `hooks.Outcome` (whether the call
+reached the driver, what the driver raised), so only a failure of the driver itself breaks a
+transaction (a cancellation leaving the block of an open pinned stream counts, whatever raised it:
+it is thrown into the driver's stream, which discards the connection), and a control call an
+observer stopped before the driver changes no transaction state. `params` is in an event only for observers
+registered with `params=True`, or for all while `settings.DEBUG` is true. `bench/hooks_micro.py`
+(the `hooks.*` cases of `make bench-micro`) times the executors on a `RecordingDriver` with 0 and 1
+observers.
 
 ## Lifecycle
 

@@ -24,6 +24,8 @@ from tests.support.lifecycle_scripts import (
         pytest.param("import asyncopation.connection.asgi", id="asgi"),
         pytest.param("import asyncopation.connection.executor", id="executor"),
         pytest.param("import asyncopation.connection.lifecycle", id="lifecycle"),
+        pytest.param("import asyncopation.connection.hooks", id="hooks"),
+        pytest.param("import asyncopation; asyncopation.observe", id="lazy-observe"),
         pytest.param("import asyncopation; asyncopation.setup; asyncopation.close", id="lazy-api"),
         pytest.param(
             "import asyncopation.connection as c; c.setup; c.close; c.configure", id="reexports"
@@ -109,3 +111,37 @@ def test_accessing_a_lazy_export_loads_the_query_facade(name):
     )
     # then
     assert (ran.returncode, ran.stdout) == (0, "True")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        pytest.param("import asyncopation", id="package"),
+        pytest.param("from asyncopation import ConcurrentQueryError", id="error-import"),
+    ],
+)
+def test_the_hooks_module_is_not_loaded_until_observe_is_accessed(statement):
+    # when
+    ran = run_isolated(module_loaded_script(statement, "asyncopation.connection.hooks"))
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "False")
+
+
+def test_accessing_observe_on_the_package_loads_the_hooks_module():
+    # when
+    ran = run_isolated(
+        module_loaded_script(
+            "import asyncopation; asyncopation.observe", "asyncopation.connection.hooks"
+        )
+    )
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "True")
+
+
+def test_observe_is_listed_in_the_package_all_without_loading_the_hooks_module():
+    # when
+    ran = run_isolated(
+        asyncopation_modules_script("import asyncopation; assert 'observe' in asyncopation.__all__")
+    )
+    # then
+    assert (ran.returncode, ran.stdout) == (0, "['asyncopation', 'asyncopation.errors']")

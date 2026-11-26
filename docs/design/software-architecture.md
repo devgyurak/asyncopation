@@ -156,7 +156,9 @@ inject server info into compile-only wrapper)  ->  serve  ->  close (lifespan sh
 - **Interceptors** (may rewrite or suppress): an `execute_wrappers` chain in Django's shape,
   `wrapper(execute, sql, params, many, context)`, so existing Django instrumentation idioms carry
   over. `SuppressWithResult` (EF Core) makes test doubles possible.
-- Both are registered on the registry (layer 1) and fired by the executor; layer 6 only consumes.
+- Both are held by `asyncopation.connection.hooks` (a process-wide tuple and a contextvar; the
+  ADR-0005 amendment of #4 moved them off the registry) and fired at the executors' `_run`; layer
+  6 only consumes.
 
 ### 3.6 Ported orchestration as sans-I/O cores (G5)
 

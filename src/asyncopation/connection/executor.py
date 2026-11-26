@@ -13,7 +13,9 @@ unit for its whole lifetime (ADR-0001 Decision 3 amendment), a borrowed statemen
 its own lifetime; ``close(timeout)`` therefore waits for open pins and streams.
 
 Every call to a connection - statements, streams and transaction control - goes through
-``_run``: the single place where the ADR-0005 hooks run (#4).
+``_run``: the single place where the ADR-0005 hooks run (``connection.hooks``, #4). An executor
+snapshots the subscribers when a call starts (``hooks.active()``, two empty-tuple checks) and, only
+when there are any, the time it asked for a pooled connection (``queue_time``).
 
 The owner is a task, so the pinned executor is stored in a contextvar *mapping* (alias -> executor)
 that is replaced, never mutated: a child task copies the context, sees the executor and is
@@ -29,11 +31,13 @@ import logging
 import weakref
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from time import perf_counter
 from types import MappingProxyType, TracebackType
 from typing import Any, Protocol
 
 from asyncopation._django.transaction import TransactionManagementError
-from asyncopation.connection import registry
+from asyncopation.connection import hooks, registry
+from asyncopation.connection.hooks import Subscribers
 from asyncopation.connection.lifecycle import ensure_driver
 from asyncopation.drivers.base import AsyncDbConnection, AsyncDriver, ExecResult, Params
 from asyncopation.errors import ConcurrentQueryError
@@ -43,7 +47,13 @@ logger = logging.getLogger("asyncopation.connection")
 type Row = tuple[Any, ...]
 type Chunks = AbstractAsyncContextManager[AsyncIterator[list[Row]]]
 
-__all__ = ["BorrowedExecutor", "Executor", "PinnedExecutor", "current_executor", "pin"]
+__all__ = [
+    "BorrowedExecutor",
+    "Executor",
+    "PinnedExecutor",
+    "current_executor",
+    "pin",
+]
 
 OWNER_MESSAGE = (
     "queries inside async_atomic must run in the task that opened it; "
@@ -90,26 +100,25 @@ class Executor(Protocol):
 
 
 # -- the choke point -------------------------------------------------------------------------
-EVENT_KINDS = {
-    "fetch_all": "query",
-    "execute": "query",
-    "execute_many": "query",
-    "stream": "query",
-    "savepoint": "query",  # ADR-0005 Decision 2: SAVEPOINT statements count as queries
-    "release_savepoint": "query",
-    "rollback_to_savepoint": "query",
-    "begin": "transaction",  # connection-level BEGIN / COMMIT / ROLLBACK
-    "commit": "transaction",
-    "rollback": "transaction",
-}
-"""The ADR-0005 event kind of every connection call that passes ``_run`` (hooks arrive with #4)."""
-
-
-def _run(connection: AsyncDbConnection, kind: str, *args: Any) -> Any:
+def _run(
+    connection: AsyncDbConnection,
+    subscribers: Subscribers,
+    alias: str,
+    queued_at: float | None,
+    kind: str,
+    *args: Any,
+    outcome: hooks.Outcome | None = None,
+) -> Any:
     """The one place every call to a connection passes - statements, streams and transaction
-    control (ADR-0005 hooks run here, #4; ``EVENT_KINDS`` gives the event kind). Returns an
-    awaitable, or the context manager of a stream."""
-    return getattr(connection, kind)(*args)
+    control. Returns an awaitable, or the context manager of a stream: the driver's own when
+    nobody observes (no extra coroutine frame), else the observed form (ADR-0005,
+    ``hooks.observed_call``; ``hooks.EVENT_KINDS`` gives the event kind). ``subscribers`` is the
+    snapshot taken when the call started; ``queued_at`` is when the executor asked for a pooled
+    connection (``None`` on a pinned one); ``outcome`` (pinned, observed calls) records whether
+    the call reached the driver and what the driver raised."""
+    if not subscribers:
+        return getattr(connection, kind)(*args)
+    return hooks.observed_call(connection, subscribers, alias, queued_at, kind, args, outcome)
 
 
 class _Unit:
@@ -148,8 +157,10 @@ class BorrowedExecutor:
         driver = await ensure_driver(alias)
         registry.statement_started(alias)  # no await since ensure_driver returned
         try:
+            subscribers = hooks.active()
+            queued_at = perf_counter() if subscribers else None
             async with driver.connection() as connection:
-                return await _run(connection, kind, sql, params)
+                return await _run(connection, subscribers, alias, queued_at, kind, sql, params)
         finally:
             registry.statement_finished(alias)
 
@@ -171,9 +182,13 @@ class BorrowedExecutor:
         driver = await ensure_driver(alias)
         registry.statement_started(alias)
         try:
+            subscribers = hooks.active()
+            queued_at = perf_counter() if subscribers else None
             async with (
                 driver.connection() as connection,
-                _run(connection, "stream", sql, params, chunk) as chunks,
+                _run(
+                    connection, subscribers, alias, queued_at, "stream", sql, params, chunk
+                ) as chunks,
             ):
                 yield chunks
         finally:
@@ -192,6 +207,7 @@ class _PinnedStream:
     def __init__(self, executor: PinnedExecutor, sql: str, params: Params, chunk: int) -> None:
         self._executor = executor
         self._statement = (sql, params, chunk)
+        self._outcome: hooks.Outcome | None = None  # set when observed
         self._manager: Chunks | None = None
         self._chunks: AsyncIterator[list[Row]] | None = None
         self._finished: asyncio.Future[None] | None = None  # set once a close has begun
@@ -205,13 +221,25 @@ class _PinnedStream:
         executor._busy = True
         try:
             sql, params, chunk = self._statement
-            manager = _run(connection, "stream", sql, params, chunk)
+            subscribers = hooks.active()  # the finished event goes to the same snapshot
+            outcome = self._outcome = hooks.Outcome() if subscribers else None
+            manager = _run(
+                connection,
+                subscribers,
+                executor.alias,
+                None,
+                "stream",
+                sql,
+                params,
+                chunk,
+                outcome=outcome,
+            )
             self._chunks = await manager.__aenter__()
             self._manager = manager
         except BaseException as exc:
             self.closed = True  # a stream that failed to open is not entered again
             executor._busy = False
-            executor._statement_failed(exc)
+            executor._driver_failed(exc, self._outcome)
             raise
         executor._streams.add(self)
         return self
@@ -232,7 +260,7 @@ class _PinnedStream:
             return await self._chunks.__anext__()
         except StopAsyncIteration:
             raise
-        except BaseException as exc:
+        except BaseException as exc:  # a chunk read: always the driver's (no observer runs here)
             executor._statement_failed(exc)
             raise
 
@@ -269,10 +297,12 @@ class _PinnedStream:
             assert self._manager is not None
             return await self._manager.__aexit__(exc_type, exc, tb)
         except BaseException as failure:
-            executor._statement_failed(failure)
+            executor._driver_failed(failure, self._outcome)
             raise
         finally:
-            if isinstance(exc, asyncio.CancelledError):  # the body's cancellation, not its errors
+            # The body's cancellation, not its errors: it was thrown into the driver's stream,
+            # whatever raised it (an observer of another call included).
+            if isinstance(exc, asyncio.CancelledError):
                 executor._statement_failed(exc)
             executor._closing.discard(self)
             executor._busy = False
@@ -343,6 +373,14 @@ class PinnedExecutor:
         assert self._connection is not None
         return self._connection
 
+    def _driver_failed(self, exc: BaseException, outcome: hooks.Outcome | None) -> None:
+        """``exc`` left a call: unobserved, it is the driver's own; observed (ADR-0005), only what
+        the driver itself raised counts (``outcome.failure``) - an exception an observer raised
+        never reached the connection and breaks nothing."""
+        failure = exc if outcome is None else outcome.failure
+        if failure is not None:
+            self._statement_failed(failure)
+
     def _statement_failed(self, exc: BaseException) -> None:
         """A cancellation (or a lost connection) inside a transaction ends it: the driver closes
         the connection (driver contract, ADR-0003), so later statements must not run."""
@@ -356,10 +394,14 @@ class PinnedExecutor:
     async def _statement(self, kind: str, sql: str, params: Any) -> Any:
         connection = self._check()
         self._busy = True
+        subscribers = hooks.active()
+        outcome = hooks.Outcome() if subscribers else None
         try:
-            return await _run(connection, kind, sql, params)
+            return await _run(
+                connection, subscribers, self._alias, None, kind, sql, params, outcome=outcome
+            )
         except BaseException as exc:
-            self._statement_failed(exc)
+            self._driver_failed(exc, outcome)
             raise
         finally:
             self._busy = False
@@ -380,27 +422,36 @@ class PinnedExecutor:
         return _PinnedStream(self, sql, params, chunk)
 
     # -- transaction control (passthroughs, no policy) ------------------------------------
-    async def _control(self, name: str, *args: str, ends_transaction: bool = False) -> None:
+    async def _control(
+        self,
+        name: str,
+        *args: str,
+        begins_transaction: bool = False,
+        ends_transaction: bool = False,
+    ) -> None:
         connection = self._check()
         self._busy = True
+        previous = self._in_transaction
+        if begins_transaction:  # a cancelled BEGIN may have left the connection discarded
+            self._in_transaction = True
+        subscribers = hooks.active()
+        outcome = hooks.Outcome() if subscribers else None
+        reached = True
         try:
-            await _run(connection, name, *args)
+            await _run(connection, subscribers, self._alias, None, name, *args, outcome=outcome)
         except BaseException as exc:
-            self._statement_failed(exc)
+            reached = outcome is None or outcome.reached  # an observer may stop it before
+            self._driver_failed(exc, outcome)
+            if begins_transaction and (isinstance(exc, Exception) or not reached):
+                self._in_transaction = previous
             raise
         finally:
             self._busy = False
-            if ends_transaction:  # even a failed COMMIT / ROLLBACK ended the transaction
+            if ends_transaction and reached:  # even a failed COMMIT / ROLLBACK ended it
                 self._in_transaction = False
 
     async def begin(self) -> None:
-        previous = self._in_transaction
-        self._in_transaction = True  # a cancelled BEGIN may have left the connection discarded
-        try:
-            await self._control("begin")
-        except Exception:
-            self._in_transaction = previous
-            raise
+        await self._control("begin", begins_transaction=True)
 
     async def commit(self) -> None:
         await self._control("commit", ends_transaction=True)

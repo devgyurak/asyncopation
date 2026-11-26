@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
@@ -12,6 +12,7 @@ from tests.support.executors.fakes import (
     finish_executor_test,
     install_executor_environment,
 )
+from tests.support.hooks.events import global_observers_left
 from tests.support.lifecycle.checks import dispose_environment, drain_in_flight
 from tests.support.lifecycle.fakes import FakeEnv, install_fake_environment
 from tests.support.lifecycle.loops import (
@@ -157,3 +158,12 @@ async def held_close(execenv: ExecEnv) -> AsyncIterator[ClosingScenario]:
     await scenario.begin()
     yield scenario
     await scenario.cleanup()
+
+
+@pytest.fixture(autouse=True)
+def no_global_observer_left() -> Iterator[None]:
+    """A test must remove every global observer it added (ADR-0005); leftovers are cleared and
+    fail the test, so they cannot leak into later tests."""
+    yield
+    left = global_observers_left()
+    assert left == (), f"global observers left registered by the test: {left}"

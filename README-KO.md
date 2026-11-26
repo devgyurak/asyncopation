@@ -1,7 +1,7 @@
-<!-- i18n: source=README.md source-sha256=e95c3af9fe51 -->
+<!-- i18n: source=README.md source-sha256=f60c5c571c76 -->
 # Asyncopation
 
-> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
+> **상태: pre-alpha.** PostgreSQL 라이프사이클(`INSTALLED_APPS`, `setup()` / `close()`, `LifespanApp`, 드라이버 레지스트리)과 `asyncopation.testing`을 사용할 수 있고, PostgreSQL에서는 `aq(qs)`와 `aobjects`로 데이터를 읽을 수 있다(`alist` / `aget` / `afirst` / `acount` / `aexists` / `async for`). `asyncopation.observe()`는 모든 쿼리를 동기 옵저버에 알린다. 나머지 쿼리 API는 설계 목표이며 아직 구현되지 않았다. [계획](docs/design/plan-KO.md) 참고.
 
 Django ORM을 위한 진짜 비동기 실행 계층. SQL은 여전히 Django가 만들고, Asyncopation은
 `sync_to_async`로 스레드를 오가는 대신 네이티브 async 드라이버(PostgreSQL은 psycopg3,
@@ -92,6 +92,35 @@ PostgreSQL의 읽기 API는 `alist()`, `aget()`, `afirst()`, `acount()`, `aexist
 중일 때 다시 쓰거나, 블록이 끝난 뒤에 쓰면 `asyncopation.ConcurrentQueryError`가 발생한다
 (`DatabaseError`가 아니라 `RuntimeError`이므로 재시도 루프가 삼키지 않는다). 동시에 실행할 작업은
 트랜잭션 밖에서 하라.
+
+## 쿼리 관찰하기
+
+`asyncopation.observe(fn)`은 블록이 끝날 때까지 현재 태스크(와 그 태스크가 시작한 `gather` 자식 같은
+태스크)가 실행하는 모든 구문, 스트림, 트랜잭션 제어 호출마다 동기 함수 `fn(event)`를 호출한다
+(ADR-0005; 블록보다 오래 사는 태스크는 블록이 끝나면 더 이상 보고하지 않는다). 호출마다 드라이버 호출 직전에 `query_started` 이벤트가, 호출이 반환되거나 실패하거나
+취소될 때(스트림은 닫힐 때) `query_finished` 이벤트가 전달된다. 이벤트에는 `alias`, `kind`(`query`,
+BEGIN/COMMIT/ROLLBACK이면 `transaction`), `sql`, `params`, `many`, `rowcount`, `error`, `queue_time`,
+`query_time`, `total_time`(초)이 담긴다. 파라미터는 `params=True`로 등록한 옵저버에만 포함되며,
+`settings.DEBUG`가 참인 동안에는 모든 옵저버에 포함된다. `Exception`을 던진 옵저버는 로그만
+남기고 쿼리를 실패시키지 않는다. `BaseException`(취소, `KeyboardInterrupt`, `pytest.fail`)은 다른
+옵저버들이 이벤트를 받은 뒤에 전파된다. 옵저버는 모든 쿼리마다 이벤트 루프 위에서 인라인으로 실행되므로 블로킹해서는 안 된다(파일
+I/O나 네트워크 I/O 금지). async 소비자는 옵저버가 될 수 없다(크기 제한 큐 옵저버가 뒤따른다). 프로세스 전체
+옵저버는 `asyncopation.connection.add_observer(fn)` / `remove_observer(fn)`을 쓴다.
+
+```python
+import asyncopation
+
+slow = []
+
+
+def record_slow(event):
+    if event.name == "query_finished" and event.total_time > 0.1:
+        slow.append((event.sql, event.total_time, event.error))
+
+
+with asyncopation.observe(record_slow):
+    books = await Book.aobjects.filter(published=True).alist()
+```
 
 ## 데이터베이스 없이 상위 레이어 테스트하기
 

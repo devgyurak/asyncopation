@@ -5,7 +5,8 @@
 - Deciders: maintainer (@devgyurak) - options B + C and the return type chosen 2026-11-26 on #69;
   acceptance of this ADR to be confirmed in the PR review
 - Architect review: APPROVE WITH CHANGES (architect review 2026-11-26, 12 required changes
-  applied; re-review 2026-11-26: APPROVE WITH CHANGES, 4 remaining changes applied)
+  applied; re-review 2026-11-26: APPROVE WITH CHANGES, 4 remaining changes applied; final check
+  2026-11-26 at 7eac090: APPROVE)
 - Supersedes in part: [ADR-0006](0006-public-api-attachment.md) Decision 3 (the `aobjects` shape),
   the first half of its Consequences bullet on manager-only methods and its last Validation item
   (the `AsyncQuerySet` return type); ADR-0006 Decisions 1, 2, 4, 5 and 6 stay in force
